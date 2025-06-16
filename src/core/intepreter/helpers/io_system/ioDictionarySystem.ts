@@ -12,6 +12,9 @@ export class IODictionarySystem implements IOSystem {
     }
 
     importFile(path: string): string {
+        if (!this.existingCalendarData.has(path)) {
+            throw new Error(`File not found: ${path}`);
+        }
         return this.existingCalendarData.get(path);
     }
 

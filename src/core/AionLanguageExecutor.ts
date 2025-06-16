@@ -8,6 +8,7 @@ import { AionParser } from "./antlr/generated/AionParser";
 import { TimeValidationNormal } from "./helpers/time_validation";
 import chalk from "chalk";
 import {AionRuntimeLoggingMessage} from "./helpers/AionRuntimeLoggingMessage";
+import { notFound } from "./exceptions/notFound";
 
 /**
  * T
@@ -31,15 +32,20 @@ export class AionLanguageExecutor {
 
     public start(aionFilePath: string): Array<AionRuntimeLoggingMessage> {
         
-        const code = this.ioSystem.importFile(aionFilePath);
-        const parserWrapper = new AionParserWrapper();
-        let tree = parserWrapper.parse(code, aionFilePath);
-        if (parserWrapper.hasErrors()) {
-            console.log(parserWrapper.getErrors()[0]);
-            return;
+        try {
+            const code = this.ioSystem.importFile(aionFilePath);
+            const parserWrapper = new AionParserWrapper();
+            let tree = parserWrapper.parse(code, aionFilePath);
+            if (parserWrapper.hasErrors()) {
+                console.log(parserWrapper.getErrors()[0]);
+                return;
+            }
+            this.interpreter.visitProgram(tree);
+        } catch (error) {
+            notFound(aionFilePath);
+            return Array.of();
         }
-        this.interpreter.visitProgram(tree);
-
+        
         return Array.of();
     }
 }
