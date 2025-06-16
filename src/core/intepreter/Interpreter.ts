@@ -3,9 +3,11 @@ import { AionVisitor } from "../../core/antlr/generated/AionVisitor";
 import * as AionParser from "../../core/antlr/generated/AionParser";
 import {
   IcsEvent,
+  IcsTodo,
   IcsCalendar,
   generateIcsCalendar,
   convertIcsCalendar,
+  IcsDateObject,
 } from "@timurcravtov/ts-ics";
 import { getProdId } from "./helpers/getProdId";
 import { createIcsEvent } from "./helpers/createIcsStructures";
@@ -25,6 +27,7 @@ export class Interpreter
   private ioSystem: IOSystem;
   private timeValidator: TimeValidation;
   private calendars: Map<string, IcsEvent[]> = new Map();
+  private todos: IcsTodo[] = [];
   private variables: Map<string, any> = new Map();
   private currentCalendar: string = "main";
 
@@ -51,10 +54,11 @@ export class Interpreter
 
     const events = this.calendars.get(this.currentCalendar) || [];
 
-    const calendar: IcsCalendar = {
+    const calendar: any = {
       prodId: getProdId(),
       version: "2.0",
       events,
+      todos: this.todos,
     };
 
     const icsString = generateIcsCalendar(calendar);
@@ -214,21 +218,31 @@ export class Interpreter
 
   visitTask_decl(ctx: AionParser.Task_declContext): void {
     const name = ctx.STRING().text.replace(/"/g, "");
+
     const dateCtx = ctx.date();
     const timeCtx = ctx.task_time_spec().time()[0];
-    const [h, m] = timeCtx.text.split(":").map(Number);
+
     const [d, mo, y = new Date().getFullYear()] = dateCtx.text
       .split(".")
       .map(Number);
+    const [h, m] = timeCtx.text.split(":").map(Number);
 
-    const start = new Date(y, mo - 1, d, h, m);
-    const end = new Date(start.getTime() + 30 * 60 * 1000);
+    const dueDate = new Date(y, mo - 1, d, h, m);
 
-    const event = createIcsEvent(name, start, end);
+    const toIcsDate = (date: Date): IcsDateObject => ({
+      date,
+      type: "DATE-TIME" as const,
+    });
 
-    const list = this.calendars.get(this.currentCalendar) || [];
-    list.push(event);
-    this.calendars.set(this.currentCalendar, list);
+    const task: IcsTodo = {
+      summary: name,
+      uid: `task-${Date.now()}@aion`,
+      due: toIcsDate(dueDate),
+      stamp: toIcsDate(new Date()),
+      status: "TENTATIVE",
+    };
+
+    this.todos.push(task);
   }
 
   visitPomodoro_decl(ctx: AionParser.Pomodoro_declContext): void {
