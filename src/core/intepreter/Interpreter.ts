@@ -175,6 +175,9 @@ export class Interpreter
       );
       console.log(event_created.toString());
     } else if (ctx.task_decl()) {
+
+      const task = this.visitTask_decl(ctx.task_decl());
+
       this.visitTask_decl(ctx.task_decl());
     } else if (ctx.pomodoro_decl()) {
       this.visitPomodoro_decl(ctx.pomodoro_decl());
@@ -191,32 +194,57 @@ export class Interpreter
     }
   }
 
-  visitEvent_decl(ctx: AionParser.Event_declContext): IcsEvent {
-    const name = ctx.STRING().text.replace(/"/g, "");
-    let start: Date;
-    let end: Date;
-
-    const timeSpec = ctx.event_time_spec();
-    const dateCtx = ctx.date();
-
-    if (timeSpec && dateCtx) {
-      const times = timeSpec.time();
-      if (times.length >= 2) {
-        console.log("here");
-        start = this.toDateTime(dateCtx, times[0]);
-        end = this.toDateTime(dateCtx, times[1]);
-      } else {
-        start = this.toDateTime(dateCtx, times[0]);
-        end = new Date(start.getTime() + 60 * 60 * 1000);
-      }
-    } else {
-      start = new Date();
-      end = new Date(start.getTime() + 60 * 60 * 1000);
+ visitEvent_decl(ctx: AionParser.Event_declContext): IcsEvent {
+  const name = ctx.STRING().text.replace(/"/g, "");
+  let start: Date;
+  let end: Date;
+  
+  const timeSpec = ctx.event_time_spec();
+  const dateCtx = ctx.date();
+  
+  if (timeSpec && dateCtx) {
+    // Extract start time components
+    const startHour = parseInt(timeSpec.time().at(0).NUMBER().at(0)?.text || "0");
+    const startMinute = parseInt(timeSpec.time().at(0).NUMBER().at(1)?.text || "0");
+    const durationHours = parseInt(timeSpec.duration().NUMBER().at(0)?.text || "1");
+    
+    console.log("Start hour:", startHour);
+    console.log("Start minute:", startMinute);
+    console.log("Duration hours:", durationHours);
+    
+    // Parse the date
+    const dateText = dateCtx.text.trim();
+    const parsedDate = this.timeValidator.validateDate(dateText);
+    
+    if (!parsedDate) {
+      throw new Error(`Invalid date format: ${dateText}`);
     }
-    return createIcsEvent(name, start, end);
+    
+    // Create start datetime
+    start = new Date(
+      parsedDate.getFullYear(),
+      parsedDate.getMonth(),
+      parsedDate.getDate(),
+      startHour,
+      startMinute
+    );
+    
+    // Create end datetime by adding duration
+    end = new Date(start.getTime() + (durationHours * 60 * 60 * 1000));
+    
+    console.log("Created start time:", start);
+    console.log("Created end time:", end);
+    
+  } else {
+    // Fallback to current time
+    start = new Date();
+    end = new Date(start.getTime() + 60 * 60 * 1000);
   }
+  
+  return createIcsEvent(name, start, end);
+}
 
-  visitTask_decl(ctx: AionParser.Task_declContext): void {
+  visitTask_decl(ctx: AionParser.Task_declContext): IcsTodo {
     const name = ctx.STRING().text.replace(/"/g, "");
 
     const dateCtx = ctx.date();
@@ -243,6 +271,7 @@ export class Interpreter
     };
 
     this.todos.push(task);
+    return task;
   }
 
   visitPomodoro_decl(ctx: AionParser.Pomodoro_declContext): void {

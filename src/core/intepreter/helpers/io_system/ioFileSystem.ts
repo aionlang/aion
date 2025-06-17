@@ -15,7 +15,6 @@ export class IOFileSystem implements IOSystem {
             fs.writeFileSync(fileName, fileContents, "utf-8");
             return true;
         } catch (error) {
-            throw new Error(`Error writing file ${fileName}: ${error}`);
             return false; 
         }
     }
