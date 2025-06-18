@@ -1,0 +1,34 @@
+// Calendar from scratch
+// Basic events and tasks
+new event "Morning Jog" on 06.20 at 07:00 for 45m;
+new task "Buy groceries" on 06.20 at 18:00;
+
+// Repeating event
+new event "Evening Reading" daily at 20:30 for 1h;
+
+// Pomodoro session (not exported automatically)
+pmd = pomodoro "Deep Work" on 06.21 at 10:00 repeat 3 times with 5m pause;
+
+// Start of custom week number (optional)
+start_week_number = weeknumber(2025.06.17);
+
+// Custom date iteration
+each day from 2025.06.22 to 2025.06.28 step 2 {
+    new event "Study Session" on 06.22 at 16:00 for 2h;
+}
+
+// Manual flexible event
+meeting = event "Team Sync" on 06.23 at 09:00 for 1h;
+
+// Include another calendar event (dummy for syntax test)
+include birthday_party in imported_cal;
+
+// Merge and filter
+merge personal, work into everything;
+filter everything where category != "work" into personal_only;
+filter everything where category == "meeting" into meetings_only;
+
+// Export
+export default as "orar.ics";
+export personal_only as "personal_only.ics";
+export meetings_only;
