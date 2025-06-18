@@ -9,6 +9,9 @@ import {
   convertIcsCalendar,
   IcsDateObject,
   extendByRecurrenceRule,
+  IcsWeekDay,
+  IcsRecurrenceRule,
+  IcsWeekdayNumber,
 } from "@timurcravtov/ts-ics";
 import { getProdId } from "./helpers/getProdId";
 import { createIcsEvent } from "./helpers/createIcsStructures";
@@ -195,35 +198,39 @@ export class Interpreter
     }
   }
 
- visitEvent_decl(ctx: AionParser.Event_declContext): IcsEvent {
+visitEvent_decl(ctx: AionParser.Event_declContext): IcsEvent {
   const name = ctx.STRING().text.replace(/"/g, "");
   let start: Date;
   let end: Date;
-  
+  console.log("jere")
   const timeSpec = ctx.event_time_spec();
   const dateCtx = ctx.date();
   const recurr = ctx.recurrence_expr();
-
+  
+  console.log(timeSpec.children)
+  console.log(timeSpec.text)
+  console.log(dateCtx.text)
 
   if (timeSpec && dateCtx) {
-    // Extract start time components
     const startHour = parseInt(timeSpec.time().at(0).NUMBER().at(0)?.text || "0");
     const startMinute = parseInt(timeSpec.time().at(0).NUMBER().at(1)?.text || "0");
-    const durationHours = parseInt(timeSpec.duration().NUMBER().at(0)?.text || "1");
-    
-    console.log("Start hour:", startHour);
-    console.log("Start minute:", startMinute);
-    console.log("Duration hours:", durationHours);
-    
-    // Parse the date
+    const durationHours = parseInt(timeSpec.duration()?.NUMBER().at(0)?.text || null);
+    const endHour = parseInt(timeSpec?.time()?.at(1)?.NUMBER()?.at(0)?.text || "0");
+    const endMinute = parseInt(timeSpec?.time()?.at(1)?.NUMBER()?.at(1)?.text || "0");
+    // console.log("Start hour:", startHour);
+    // console.log("Start minute:", startMinute);
+    // console.log("Duration hours:", durationHours);
+    // console.log("End hour:", endHour);
+    // console.log("End minute:", endMinute);
+
+
     const dateText = dateCtx.text.trim();
     const parsedDate = this.timeValidator.validateDate(dateText);
-    
+
     if (!parsedDate) {
       throw new Error(`Invalid date format: ${dateText}`);
     }
-    
-    // Create start datetime
+
     start = new Date(
       parsedDate.getFullYear(),
       parsedDate.getMonth(),
@@ -231,30 +238,99 @@ export class Interpreter
       startHour,
       startMinute
     );
-    
-    // Create end datetime by adding duration
-    end = new Date(start.getTime() + (durationHours * 60 * 60 * 1000));
-    
-    console.log("Created start time:", start);
-    console.log("Created end time:", end);
-    
+
+    end = Number.isNaN(durationHours) ? 
+      new Date(
+        parsedDate.getFullYear(),
+        parsedDate.getMonth(),
+        parsedDate.getDate(),
+        endHour,
+        endMinute
+      ) : 
+      new Date(start.getTime() + (durationHours * 60 * 60 * 1000));
+
+    // console.log("Created start time:", start);
+    // console.log("Created end time:", end);
   } else {
-    // Fallback to current time
     start = new Date();
     end = new Date(start.getTime() + 60 * 60 * 1000);
   }
-  
+
   let ev = createIcsEvent(name, start, end);
 
   if (recurr) {
-    // console.log("Recurrence expression found:", recurr.text);
-    ev.recurrenceRule = {
-    frequency: "DAILY",
-  };
-  }
-  const ruleString = "FREQ=DAILY;BYMINUTE=15,16,17,18,19;BYSECOND=0,20,40";
+    console.log("Recurrence expression found:", recurr.text);
 
+    let recurrEx = recurr.text.toLowerCase();
+    if (recurrEx.startsWith("daily")) {
+      ev.recurrenceRule = {
+        frequency: "DAILY",
+        interval: 1,
+      };
+    } else if (recurrEx.startsWith("weekly")) {
+      const recurrenceRule: IcsRecurrenceRule = {
+        frequency: "WEEKLY",
+        interval: 1,
+      };
 
+      const weekdayListCtx = recurr.weekday_list();
+      if (weekdayListCtx && weekdayListCtx.text) {
+        const days = weekdayListCtx.text
+          .toLowerCase()
+          .split(",")
+          .map((day) => day.trim())
+          .filter((day) => day.length > 0);
+
+        const dayMap: { [key: string]: IcsWeekDay } = {
+          mon: "MO",
+          monday: "MO",
+          tue: "TU",
+          tuesday: "TU",
+          wed: "WE",
+          wednesday: "WE",
+          thu: "TH",
+          thursday: "TH",
+          fri: "FR",
+          friday: "FR",
+          sat: "SA",
+          saturday: "SA",
+          sun: "SU",
+          sunday: "SU",
+        };
+
+        const byDay = days
+          .map((day) => {
+            const mappedDay = dayMap[day];
+            if (!mappedDay) {
+              throw new Error(`Invalid weekday: ${day}`);
+            }
+            return { day: mappedDay } as IcsWeekdayNumber; // Create IcsWeekdayNumber object
+          })
+          .filter(Boolean);
+
+        if (byDay.length > 0) {
+          recurrenceRule.byDay = byDay;
+          // console.log("ByDay set:", JSON.stringify(byDay));
+        }
+      }
+
+      const untilCtx = recurr.date();
+      if (untilCtx) {
+        const untilDate = this.parseDate(untilCtx.text);
+        recurrenceRule.until = { date: untilDate, type: "DATE-TIME" };
+      }
+
+      const countCtx = recurr.NUMBER();
+      if (countCtx) {
+        recurrenceRule.count = parseInt(countCtx.text);
+      }
+
+      ev.recurrenceRule = recurrenceRule;
+      // console.log("Recurrence rule set:", JSON.stringify(recurrenceRule));
+    }
+  } 
+
+  // console.log("Final IcsEvent:", JSON.stringify(ev, null, 2));
   return ev;
 }
 
