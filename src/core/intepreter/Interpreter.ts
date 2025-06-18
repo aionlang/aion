@@ -207,30 +207,31 @@ visitEvent_decl(ctx: AionParser.Event_declContext): IcsEvent {
   const dateCtx = ctx.date();
   const recurr = ctx.recurrence_expr();
   
-  console.log(timeSpec.children)
-  console.log(timeSpec.text)
-  console.log(dateCtx.text)
+  // console.log(timeSpec.children)
+  // console.log(timeSpec.text)
+  // console.log(dateCtx.text)
 
   if (timeSpec && dateCtx) {
     const startHour = parseInt(timeSpec.time().at(0).NUMBER().at(0)?.text || "0");
     const startMinute = parseInt(timeSpec.time().at(0).NUMBER().at(1)?.text || "0");
-    const durationHours = parseInt(timeSpec.duration()?.NUMBER().at(0)?.text || null);
+    const durationHours = parseInt(timeSpec.duration()?.NUMBER()?.at(0)?.text || null);
     const endHour = parseInt(timeSpec?.time()?.at(1)?.NUMBER()?.at(0)?.text || "0");
     const endMinute = parseInt(timeSpec?.time()?.at(1)?.NUMBER()?.at(1)?.text || "0");
-    // console.log("Start hour:", startHour);
-    // console.log("Start minute:", startMinute);
-    // console.log("Duration hours:", durationHours);
-    // console.log("End hour:", endHour);
-    // console.log("End minute:", endMinute);
+    console.log("Start hour:", startHour);
+    console.log("Start minute:", startMinute);
+    console.log("Duration hours:", durationHours);
+    console.log("End hour:", endHour);
+    console.log("End minute:", endMinute);
 
 
     const dateText = dateCtx.text.trim();
+    console.log("Date text:", dateText);
     const parsedDate = this.timeValidator.validateDate(dateText);
 
     if (!parsedDate) {
       throw new Error(`Invalid date format: ${dateText}`);
     }
-
+  
     start = new Date(
       parsedDate.getFullYear(),
       parsedDate.getMonth(),
@@ -259,8 +260,13 @@ visitEvent_decl(ctx: AionParser.Event_declContext): IcsEvent {
   let ev = createIcsEvent(name, start, end);
 
   if (recurr) {
-    console.log("Recurrence expression found:", recurr.text);
 
+
+  console.log("Recurring event - Start time:", start.toISOString());
+  console.log("Recurring event - End time:", end.toISOString());
+  console.log("Recurrence expression:", recurr.text);
+
+    console.log("Recurrence expression found:", recurr.text);
     let recurrEx = recurr.text.toLowerCase();
     if (recurrEx.startsWith("daily")) {
       ev.recurrenceRule = {

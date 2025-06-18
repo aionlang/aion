@@ -1,2 +1,9 @@
 new event "Sprint Planning Team #1" weekly on Mon at 8:00 for 1h;
+new event "Sprint Planning Team #2" weekly on Mon at 9:00 for 1h;
 
+new event "Daily meeting Team #1" daily at 10:00 for 1h;
+new event "Spring security prezentation" on 18.06.2025 at 12:00 for 1h;
+new event "Spring security prezentation 2" on 18.06.2025 from 13:00 to 14:30;
+
+new event "Sprint retrospective Team #1" weekly on Fri at 16:00 for 1h;
+new event "Sprint retrospective Team #1" weekly on Fri at 15:00 for 1h;
