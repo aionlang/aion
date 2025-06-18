@@ -8,6 +8,7 @@ import {
   generateIcsCalendar,
   convertIcsCalendar,
   IcsDateObject,
+  extendByRecurrenceRule,
 } from "@timurcravtov/ts-ics";
 import { getProdId } from "./helpers/getProdId";
 import { createIcsEvent } from "./helpers/createIcsStructures";
@@ -201,7 +202,9 @@ export class Interpreter
   
   const timeSpec = ctx.event_time_spec();
   const dateCtx = ctx.date();
-  
+  const recurr = ctx.recurrence_expr();
+
+
   if (timeSpec && dateCtx) {
     // Extract start time components
     const startHour = parseInt(timeSpec.time().at(0).NUMBER().at(0)?.text || "0");
@@ -241,7 +244,18 @@ export class Interpreter
     end = new Date(start.getTime() + 60 * 60 * 1000);
   }
   
-  return createIcsEvent(name, start, end);
+  let ev = createIcsEvent(name, start, end);
+
+  if (recurr) {
+    // console.log("Recurrence expression found:", recurr.text);
+    ev.recurrenceRule = {
+    frequency: "DAILY",
+  };
+  }
+  const ruleString = "FREQ=DAILY;BYMINUTE=15,16,17,18,19;BYSECOND=0,20,40";
+
+
+  return ev;
 }
 
   visitTask_decl(ctx: AionParser.Task_declContext): IcsTodo {
