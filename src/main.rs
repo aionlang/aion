@@ -9,6 +9,7 @@
 
 mod ast;
 mod compiler;
+mod errors;
 mod lexer;
 mod parser;
 mod stdlib;
@@ -21,14 +22,18 @@ use std::process::Command;
 use compiler::Compiler;
 use parser::Parser;
 use ast::UserModule;
+use errors::Phase;
 
 fn main() {
     // ── CLI argument handling ────────────────────────────────────
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        eprintln!("Usage: aion <source.aion> [-o output] [--emit-ir]");
-        std::process::exit(1);
+        errors::fatal_with_hint(
+            Phase::Compiler,
+            "No input file specified",
+            Some("Usage: aion <source.aion> [-o output] [--emit-ir]".into()),
+        );
     }
 
     let source_path = PathBuf::from(&args[1]);
@@ -47,11 +52,10 @@ fn main() {
 
     // ── Read source ─────────────────────────────────────────────
     let source = fs::read_to_string(&source_path).unwrap_or_else(|e| {
-        eprintln!("Could not read {}: {e}", source_path.display());
-        std::process::exit(1);
+        errors::fatal(Phase::Compiler, format!("Could not read {}: {e}", source_path.display()));
     });
 
-    println!("[aion] compiling {}", source_path.display());
+    errors::info(format!("compiling {}", source_path.display()));
 
     // ── Parse ───────────────────────────────────────────────────
     let mut parser = Parser::new(&source);
@@ -76,12 +80,14 @@ fn main() {
         // ── embedded Aion stdlib ────────────────────────────────
         if imp.is_std() {
             let src = stdlib::get(mod_name).unwrap_or_else(|| {
-                eprintln!("Unknown standard module 'std.{mod_name}'.");
-                eprintln!("Available: {}", stdlib::available().join(", "));
-                std::process::exit(1);
+                errors::fatal_with_hint(
+                    Phase::Compiler,
+                    format!("Unknown standard module 'std.{mod_name}'"),
+                    Some(format!("Available: {}", stdlib::available().join(", "))),
+                );
             });
 
-            println!("[aion] loading std.{mod_name} (embedded)");
+            errors::info(format!("loading std.{mod_name} (embedded)"));
 
             let mut mod_parser = Parser::new(src);
             let mod_program = mod_parser.parse_program();
@@ -100,19 +106,20 @@ fn main() {
         ];
 
         let mod_path = candidates.iter().find(|p| p.exists()).unwrap_or_else(|| {
-            eprintln!(
-                "Could not find module '{mod_name}'. Searched:\n  {}",
-                candidates.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("\n  ")
+            errors::fatal_with_hint(
+                Phase::Compiler,
+                format!("Could not find module '{mod_name}'"),
+                Some(format!("Searched:\n  {}",
+                    candidates.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("\n  ")
+                )),
             );
-            std::process::exit(1);
         });
 
         let mod_source = fs::read_to_string(mod_path).unwrap_or_else(|e| {
-            eprintln!("Could not read {}: {e}", mod_path.display());
-            std::process::exit(1);
+            errors::fatal(Phase::Compiler, format!("Could not read {}: {e}", mod_path.display()));
         });
 
-        println!("[aion] loading module '{mod_name}' from {}", mod_path.display());
+        errors::info(format!("loading module '{mod_name}' from {}", mod_path.display()));
 
         let mut mod_parser = Parser::new(&mod_source);
         let mod_program = mod_parser.parse_program();
@@ -144,17 +151,17 @@ fn main() {
     // ── Emit object file ────────────────────────────────────────
     let obj_path = output_path.with_extension(if cfg!(windows) { "obj" } else { "o" });
     compiler.write_object_file(&obj_path);
-    println!("[aion] wrote object → {}", obj_path.display());
+    errors::info(format!("wrote object → {}", obj_path.display()));
 
     // ── Build runtime & link ────────────────────────────────────
-    let rt_lib = Compiler::build_runtime(&imported_modules);
-    println!("[aion] built runtime → {}", rt_lib.display());
+    let rt_lib = compiler::runtime::build(&imported_modules);
+    errors::info(format!("built runtime → {}", rt_lib.display()));
 
-    Compiler::link(&obj_path, &rt_lib, &output_path);
-    println!("[aion] done → {}", output_path.display());
+    compiler::linker::link(&obj_path, &rt_lib, &output_path);
+    errors::success(format!("done → {}", output_path.display()));
 
     // ── Run the compiled binary ─────────────────────────────────
-    println!();
+    eprintln!();
     let run_path = if output_path.is_relative() {
         std::env::current_dir().unwrap().join(&output_path)
     } else {
@@ -163,8 +170,7 @@ fn main() {
     let status = Command::new(&run_path)
         .status()
         .unwrap_or_else(|e| {
-            eprintln!("Failed to run {}: {e}", run_path.display());
-            std::process::exit(1);
+            errors::fatal(Phase::Linker, format!("Failed to run {}: {e}", run_path.display()));
         });
 
     std::process::exit(status.code().unwrap_or(1));

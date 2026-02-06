@@ -22,6 +22,7 @@ impl Import {
     }
 
     /// Returns `true` for user-local imports (`import utils;`).
+    #[allow(dead_code)]
     pub fn is_user(&self) -> bool {
         !self.is_stdlib() && !self.is_std()
     }
@@ -48,6 +49,17 @@ pub enum Expr {
 
     /// An integer literal like `42`
     IntLiteral(i64),
+
+    /// Variable definition: `a: Int := 5` or `a: Int` or `a := 5`
+    VarDef {
+        name: String,
+        type_annotation: Option<String>,  // Some("Int") or None
+        value: Option<Box<Expr>>,         // Some(expr) or None
+    },
+    
+    /// Variable reference: just `a`
+    VarRef(String),
+
 }
 
 #[derive(Debug)]

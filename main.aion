@@ -1,8 +1,10 @@
-import aion.math;
-import std.io;
-import std.name;
-import utils;
-
 fn main() {
-    name.name()
+
+    a ::= 1
+    b: Float ::= 1.3
+    // this is a comment
+    an : error : for real 
+    print(a)    
+    print(b)    
+
 }

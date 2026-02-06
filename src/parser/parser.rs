@@ -14,6 +14,7 @@
 //! ```
 
 use crate::ast::{Expr, Function, Import, Program};
+use crate::errors::{self, Phase};
 use crate::lexer::lexer::Token;
 use logos::Logos;
 
@@ -74,11 +75,12 @@ impl Parser {
     /// Consume the next token and assert it matches `expected`.
     fn expect(&mut self, expected: Token, msg: &str) {
         let st = self.advance();
-        assert!(
-            st.token == expected,
-            "Expected {expected:?}, got {:?} — {msg}",
-            st.token
-        );
+        if st.token != expected {
+            errors::fatal(
+                Phase::Parser,
+                format!("{msg} (expected {expected:?}, got {:?})", st.token),
+            );
+        }
     }
 
     /// Return `true` if there are more tokens to consume.
@@ -159,7 +161,7 @@ impl Parser {
                 Some(_) => {
                     body.push(self.parse_statement());
                 }
-                None => panic!("Unexpected end of input inside function body"),
+                None => errors::fatal(Phase::Parser, "Unexpected end of input inside function body"),
             }
         }
 
@@ -173,10 +175,17 @@ impl Parser {
                 self.advance(); // consume 'print'
                 self.parse_print()
             }
+            Some(Token::Ident) => {
+                // Look ahead to distinguish variable def from other expressions
+                if self.peek_ahead_is_var_def() {
+                    self.parse_var_def()
+                } else {
+                    self.parse_expr()
+                }
+            }
             _ => self.parse_expr(),
         }
     }
-
     /// Parse `print(...)` — the `print` keyword has already been consumed.
     ///
     /// If the argument is a string literal we emit `PrintStr`, otherwise
@@ -197,6 +206,86 @@ impl Parser {
         expr
     }
 
+
+    fn peek_ahead_is_var_def(&self) -> bool {
+        if self.pos + 1 >= self.tokens.len() {
+            return false;
+        }
+        matches!(
+            self.tokens[self.pos + 1].token,
+            Token::Colon | Token::ColonEquals | Token::DoubleColonEquals
+        )
+    }
+
+    /// Parse an expression.
+    fn parse_var_def(&mut self) -> Expr {
+        let name = self.parse_ident_string();
+        
+        // Handle ::= (infer-and-assign shorthand)
+        if self.peek() == Some(&Token::DoubleColonEquals) {
+            self.advance(); // consume '::='
+            let init = self.parse_expr();
+            return Expr::VarDef {
+                name,
+                type_annotation: None,
+                value: Some(Box::new(init)),
+            };
+        }
+
+        let type_annotation = if self.peek() == Some(&Token::Colon) {
+            self.advance(); // consume ':'
+            
+            // Parse type name
+            let type_name = match self.peek() {
+                Some(Token::TypeInt) => {
+                    self.advance();
+                    "Int".to_string()
+                }
+                Some(Token::TypeFloat) => {
+                    self.advance();
+                    "Float".to_string()
+                }
+                Some(Token::Ident) => {
+                    // Allow custom type names for future expansion
+                    self.parse_ident_string()
+                }
+                _ => errors::fatal_with_hint(
+                    Phase::Parser,
+                    format!("Expected type name after ':', got {:?}", self.peek()),
+                    Some("Valid types: Int, Float".into()),
+                ),
+            };
+            
+            Some(type_name)
+        } else {
+            None
+        };
+        
+        let value = if self.peek() == Some(&Token::ColonEquals)
+            || self.peek() == Some(&Token::DoubleColonEquals)
+        {
+            self.advance(); // consume ':=' or '::='
+            Some(Box::new(self.parse_expr()))
+        } else {
+            None
+        };
+        
+        // Validate: must have either type or value (or both)
+        if type_annotation.is_none() && value.is_none() {
+            errors::fatal_with_hint(
+                Phase::Parser,
+                format!("Variable '{name}' must have a type annotation or initial value"),
+                Some(format!("Try: {name} : Int := 0  or  {name} ::= 0")),
+            );
+        }
+        
+        Expr::VarDef {
+            name,
+            type_annotation,
+            value,
+        }
+    }
+    
     /// Parse an expression.
     fn parse_expr(&mut self) -> Expr {
         let st = self.peek_spanned().expect("expected expression").clone();
@@ -215,12 +304,11 @@ impl Parser {
                 )
             }
             Token::Str => {
-                // A bare string literal as an expression (future use).
                 self.advance();
                 let content = st.lexeme[1..st.lexeme.len() - 1].to_string();
-                Expr::PrintStr(content) // placeholder — will revisit with StringLiteral expr
+                Expr::PrintStr(content)
             }
-            // Identifier — may be the start of `module.func(…)`.
+            // Identifier — could be variable reference or module call
             Token::Ident | Token::Print | Token::Fn | Token::Import => {
                 self.advance();
                 let name = st.lexeme.clone();
@@ -239,10 +327,15 @@ impl Parser {
                         args,
                     }
                 } else {
-                    panic!("Unexpected identifier '{name}' — not a known statement");
+                    // Just a variable reference
+                    Expr::VarRef(name)
                 }
             }
-            other => panic!("Unexpected token in expression: {other:?}"),
+            other => errors::fatal_with_hint(
+                Phase::Parser,
+                format!("Unexpected token in expression: {other:?}"),
+                Some("Expected a literal, identifier, or function call".into()),
+            ),
         }
     }
 
@@ -271,7 +364,10 @@ impl Parser {
         let st = self.advance();
         match st.token {
             Token::Ident | Token::Print | Token::Fn | Token::Import => st.lexeme,
-            other => panic!("Expected identifier, got {other:?}"),
+            other => errors::fatal(
+                Phase::Parser,
+                format!("Expected identifier, got {other:?}"),
+            ),
         }
     }
 }

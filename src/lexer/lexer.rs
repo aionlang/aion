@@ -52,7 +52,25 @@ pub enum Token {
     #[regex(r"[a-zA-Z_][a-zA-Z0-9_]*")]
     Ident,
 
-    // ── skip whitespace ─────────────────────────────────────────
+    // ── skip whitespace and comments ──────────────────────────────
     #[regex(r"[ \t\n\r\f]+", logos::skip)]
+    #[regex(r"//[^\n]*", logos::skip, allow_greedy = true)]
     Error,
+
+
+    #[token("::=")]
+    DoubleColonEquals,
+
+    #[token(":=")]
+    ColonEquals,
+        
+    #[token(":")]
+    Colon,
+        
+    #[token("Int")]
+    TypeInt,
+        
+    #[token("Float")]
+    TypeFloat,
+
 }
