@@ -1,0 +1,24 @@
+
+
+fn main() {
+    c = try {
+        divide(a, b)
+    } catch {
+        SomeError1, SomeError => { 
+
+        }
+        Error => { 
+            
+        }
+    }
+}
+
+fn divide(a: Int, b: Int) -> Int {
+    if (b == 0) {
+        throw InvalidArgument("message")
+    }
+
+    return a / b;
+
+}
+
