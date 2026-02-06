@@ -1,0 +1,15 @@
+fn hello() {
+    print("Hello, world!")
+}
+
+fn newline() {
+    print("")
+}
+
+fn banner() {
+    print("========================================")
+}
+
+fn separator() {
+    print("----------------------------------------")
+}

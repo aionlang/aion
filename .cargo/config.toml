@@ -1,0 +1,8 @@
+# Force dynamic linking against LLVM-C.dll instead of static libs.
+# The pre-built LLVM static libs use /MT (static CRT) which is
+# incompatible with Rust's /MD (dynamic CRT), causing crashes.
+# Linking against the shared LLVM-C.dll avoids this CRT mismatch.
+
+[target.x86_64-pc-windows-msvc.llvm-21]
+rustc-link-lib = ["dylib=LLVM-C"]
+rustc-link-search = ["C:\\llvm-dev\\clang+llvm-21.1.8-x86_64-pc-windows-msvc\\lib"]

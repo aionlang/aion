@@ -1,1 +1,26 @@
-/target
+# Rust build artifacts
+/target/
+
+# Compiled Aion output
+*.exe
+*.obj
+*.o
+*.a
+
+# Runtime build cache
+runtime/*.o
+runtime/*.a
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment overrides
+.env

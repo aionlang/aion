@@ -1,24 +1,10 @@
-
-
 fn main() {
-    c = try {
-        divide(a, b)
-    } catch {
-        SomeError1, SomeError => { 
 
-        }
-        Error => { 
-            
-        }
-    }
-}
-
-fn divide(a: Int, b: Int) -> Int {
-    if (b == 0) {
-        throw InvalidArgument("message")
-    }
-
-    return a / b;
+    a ::= 1
+    b: Float ::= 1.3
+    // this is a comment
+    an : error : for real 
+    print(a)    
+    print(b)    
 
 }
-

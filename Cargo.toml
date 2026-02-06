@@ -2,5 +2,17 @@
 name = "aion"
 version = "0.1.0"
 edition = "2024"
+description = "The Aion programming language compiler"
+license = "MIT"
+readme = "README.md"
+
+[[bin]]
+name = "aion"
+path = "src/main.rs"
 
 [dependencies]
+logos = "0.16.1"
+inkwell = { version = "0.8.0", features = ["llvm21-1"] }
+
+[build-dependencies]
+cc = "1.2"
