@@ -12,7 +12,7 @@
 //! args       = expr ("," expr)*
 //! ```
 
-use crate::ast::{Expr, Function, Import, Param, Program, BinOperator, AssignBinOperator};
+use crate::ast::{Expr, Function, Import, Param, Program, TypeDef, FieldDef, ConstructorDef, BinOperator, AssignBinOperator};
 use crate::errors::{self, Phase};
 use crate::lexer::lexer::Token;
 use logos::Logos;
@@ -94,6 +94,8 @@ impl Parser {
     pub fn parse_program(&mut self) -> Program {
         let mut imports = Vec::new();
         let mut functions = Vec::new();
+        let mut type_defs = Vec::new();
+        let mut impl_methods: Vec<(String, crate::ast::Function)> = Vec::new();
 
         // Parse leading imports.
         while self.has_more() {
@@ -106,12 +108,24 @@ impl Parser {
             }
         }
 
-        // Parse function definitions.
+        // Parse type definitions and function definitions.
         while self.has_more() {
             match self.peek() {
                 Some(Token::Fn) => {
                     self.advance(); // consume 'fn'
-                    functions.push(self.parse_function());
+                    // Check for impl method: fn Type::method(…)
+                    if self.pos + 1 < self.tokens.len()
+                        && self.tokens[self.pos + 1].token == Token::DoubleColon
+                    {
+                        let (type_name, func) = self.parse_impl_method();
+                        impl_methods.push((type_name, func));
+                    } else {
+                        functions.push(self.parse_function());
+                    }
+                }
+                Some(Token::Type) => {
+                    self.advance(); // consume 'type'
+                    type_defs.push(self.parse_type_def());
                 }
                 _ => {
                     // Skip any unrecognised top-level token.
@@ -120,7 +134,7 @@ impl Parser {
             }
         }
 
-        Program { imports, functions, user_modules: Vec::new() }
+        Program { imports, functions, type_defs, impl_methods, user_modules: Vec::new() }
     }
 
     /// Parse an import path: `aion.math;`
@@ -142,7 +156,119 @@ impl Parser {
         Import { path }
     }
 
-    
+    /// Parse a type definition.
+    ///
+    /// ```text
+    /// type Animal(it.name, it.age) {
+    ///     name: String?
+    ///     age: Int?
+    ///     fn speak() -> String { ... }
+    /// }
+    /// ```
+    ///
+    /// The optional `(it.field, …)` declares constructor parameters.
+    /// Inheritance-like syntax: `type Dog: Animal { … }`.
+    fn parse_type_def(&mut self) -> TypeDef {
+        let name = self.parse_ident_string();
+
+        // ── optional parent type: `type Dog: Animal` ─────────────
+        let parent = if self.peek() == Some(&Token::Colon) {
+            self.advance(); // consume ':'
+            Some(self.parse_ident_string())
+        } else {
+            None
+        };
+
+        // ── optional constructor params: `(it.name, it.age)` ─────
+        let constructor_params = if self.peek() == Some(&Token::LParen) {
+            self.advance(); // consume '('
+            let mut params = Vec::new();
+            while self.peek() != Some(&Token::RParen) {
+                // Expect `it.fieldName`
+                let prefix = self.parse_ident_string();
+                if prefix != "it" {
+                    errors::fatal_with_hint(
+                        Phase::Parser,
+                        format!("Expected 'it' in constructor parameter, got '{prefix}'"),
+                        Some("Constructor params use `it.fieldName` syntax".into()),
+                    );
+                }
+                self.expect(Token::Dot, "expected '.' after 'it' in constructor parameter");
+                let field_name = self.parse_ident_string();
+                params.push(field_name);
+
+                if self.peek() == Some(&Token::Comma) {
+                    self.advance(); // consume ','
+                }
+            }
+            self.advance(); // consume ')'
+            params
+        } else {
+            Vec::new()
+        };
+
+        // ── body: fields and methods ─────────────────────────────
+        self.expect(Token::LBrace, "expected '{' to open type body");
+
+        let mut fields = Vec::new();
+        let mut methods = Vec::new();
+        let mut constructor = None;
+
+        while self.peek() != Some(&Token::RBrace) {
+            match self.peek() {
+                Some(Token::Fn) => {
+                    self.advance(); // consume 'fn'
+                    methods.push(self.parse_function());
+                }
+                Some(Token::Constructor) => {
+                    self.advance(); // consume 'constructor'
+                    self.expect(Token::LParen, "expected '(' after 'constructor'");
+                    let params = self.parse_param_list();
+                    self.expect(Token::RParen, "expected ')' after constructor parameters");
+                    self.expect(Token::LBrace, "expected '{' to open constructor body");
+
+                    let mut body = Vec::new();
+                    while self.peek() != Some(&Token::RBrace) {
+                        body.push(self.parse_statement());
+                    }
+                    self.advance(); // consume '}'
+                    constructor = Some(ConstructorDef { params, body });
+                }
+                Some(Token::Ident) => {
+                    // Field definition: `name: Type` or `name: Type?`
+                    let field_name = self.parse_ident_string();
+                    self.expect(Token::Colon, &format!("expected ':' after field name '{field_name}'"));
+                    let type_name = self.parse_ident_string();
+                    let nullable = if self.peek() == Some(&Token::Question) {
+                        self.advance(); // consume '?'
+                        true
+                    } else {
+                        false
+                    };
+                    fields.push(FieldDef { name: field_name, type_name, nullable });
+                }
+                None => errors::fatal(Phase::Parser, "Unexpected end of input inside type body"),
+                _ => {
+                    self.advance(); // skip unrecognised
+                }
+            }
+        }
+        self.advance(); // consume '}'
+
+        TypeDef { name, parent, constructor_params, fields, methods, constructor }
+    }
+
+    /// Parse an impl method: `fn Type::method(…) { … }`
+    ///
+    /// The `fn` keyword has already been consumed.
+    /// Returns `(type_name, Function)`.
+    fn parse_impl_method(&mut self) -> (String, Function) {
+        let type_name = self.parse_ident_string();
+        self.expect(Token::DoubleColon, "expected '::' in impl method");
+        let func = self.parse_function();
+        (type_name, func)
+    }
+
     /// Parse a function definition.
     ///
     /// Block form:  `fn <name>() { … }`
@@ -193,9 +319,22 @@ impl Parser {
     /// Parse a single statement inside a function body.
     fn parse_statement(&mut self) -> Expr {
         match self.peek() {
+            Some(Token::Return) => {
+                self.advance(); // consume 'return'
+                // If the next token starts an expression, parse it.
+                let value = match self.peek() {
+                    Some(Token::RBrace) | None => None,
+                    _ => Some(Box::new(self.parse_expr())),
+                };
+                Expr::ReturnExpr { value }
+            }
             Some(Token::Ident) => {
+                // Check for field assignment: ident.ident = expr
+                if self.peek_ahead_is_field_assign() {
+                    self.parse_field_assign()
+                }
                 // Look ahead to distinguish variable def from other expressions
-                if self.peek_ahead_is_var_def() {
+                else if self.peek_ahead_is_var_def() {
                     self.parse_var_def()
                 } else if self.peek_ahead_is_assignment() {
                     self.parse_assignment()
@@ -216,6 +355,28 @@ impl Parser {
             self.tokens[self.pos + 1].token,
             Token::Colon | Token::ColonEquals | Token::DoubleColonEquals
         )
+    }
+
+    /// Check for `ident.ident =` pattern (field assignment).
+    fn peek_ahead_is_field_assign(&self) -> bool {
+        self.pos + 3 < self.tokens.len()
+            && self.tokens[self.pos + 1].token == Token::Dot
+            && self.tokens[self.pos + 2].token == Token::Ident
+            && self.tokens[self.pos + 3].token == Token::Equals
+    }
+
+    /// Parse a field assignment: `it.name = value`
+    fn parse_field_assign(&mut self) -> Expr {
+        let object_name = self.parse_ident_string();
+        self.expect(Token::Dot, "expected '.' in field assignment");
+        let field = self.parse_ident_string();
+        self.expect(Token::Equals, "expected '=' in field assignment");
+        let value = self.parse_expr();
+        Expr::FieldAssign {
+            object: Box::new(Expr::VarRef(object_name)),
+            field,
+            value: Box::new(value),
+        }
     }
 
     fn peek_ahead_is_assignment(&self) -> bool {
@@ -441,18 +602,28 @@ impl Parser {
                 self.advance();
                 let name = st.lexeme.clone();
 
-                // Is it a module call?  module.func(args…)
+                // Is it a dot-access?  module.func(args…) or field access a.name
                 if self.peek() == Some(&Token::Dot) {
                     self.advance(); // consume '.'
-                    let func = self.parse_ident_string();
-                    self.expect(Token::LParen, "expected '(' after module function name");
-                    let args = self.parse_arg_list();
-                    self.expect(Token::RParen, "expected ')' after arguments");
+                    let member = self.parse_ident_string();
 
-                    Expr::ModuleCall {
-                        module: name,
-                        func,
-                        args,
+                    if self.peek() == Some(&Token::LParen) {
+                        // module.func(args…) → ModuleCall
+                        self.advance(); // consume '('
+                        let args = self.parse_arg_list();
+                        self.expect(Token::RParen, "expected ')' after arguments");
+
+                        Expr::ModuleCall {
+                            module: name,
+                            func: member,
+                            args,
+                        }
+                    } else {
+                        // a.name → FieldAccess
+                        Expr::FieldAccess {
+                            object: Box::new(Expr::VarRef(name)),
+                            field: member,
+                        }
                     }
                 }
                 // Is it a function call?  func(args…)
@@ -504,7 +675,7 @@ impl Parser {
     fn parse_ident_string(&mut self) -> String {
         let st = self.advance();
         match st.token {
-            Token::Ident | Token::Fn | Token::Import => st.lexeme,
+            Token::Ident | Token::Fn | Token::Import | Token::Type | Token::Return | Token::Constructor => st.lexeme,
             other => errors::fatal(
                 Phase::Parser,
                 format!("Expected identifier, got {other:?}"),

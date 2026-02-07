@@ -7,7 +7,7 @@ use inkwell::types::BasicType;
 use inkwell::values::{PointerValue, FunctionValue};
 
 use crate::ast::{Function, Param, UserModule};
-use super::{Runtime, ModuleFns};
+use super::{Runtime, ModuleFns, TypeRegistry};
 use super::expr::compile_expr;
 
 /// The kind of function being compiled — determines naming and return type.
@@ -70,6 +70,7 @@ fn compile_fn_body<'ctx>(
     rt: &Runtime<'ctx>,
     module_fns: &ModuleFns<'ctx>,
     kind: &FnKind<'_>,
+    type_registry: &TypeRegistry<'ctx>,
 ) -> FunctionValue<'ctx> {
     // ── For arrow functions we first probe the single expression to
     //    decide whether it produces a value (and therefore the LLVM
@@ -103,7 +104,7 @@ fn compile_fn_body<'ctx>(
     };
 
     let fn_val = module.add_function(&fn_name, fn_type, None);
-    compile_fn_body_inner(context, module, builder, func, rt, module_fns, kind, fn_val);
+    compile_fn_body_inner(context, module, builder, func, rt, module_fns, kind, fn_val, type_registry);
     fn_val
 }
 
@@ -119,10 +120,11 @@ fn compile_fn_body_into<'ctx>(
     rt: &Runtime<'ctx>,
     module_fns: &ModuleFns<'ctx>,
     kind: &FnKind<'_>,
+    type_registry: &TypeRegistry<'ctx>,
 ) {
     let fn_val = module.get_function(&func.name)
         .expect("function must be forward-declared");
-    compile_fn_body_inner(context, module, builder, func, rt, module_fns, kind, fn_val);
+    compile_fn_body_inner(context, module, builder, func, rt, module_fns, kind, fn_val, type_registry);
 }
 
 /// Shared implementation: emits the body into an already-created LLVM function.
@@ -135,6 +137,7 @@ fn compile_fn_body_inner<'ctx>(
     module_fns: &ModuleFns<'ctx>,
     kind: &FnKind<'_>,
     fn_val: FunctionValue<'ctx>,
+    type_registry: &TypeRegistry<'ctx>,
 ) {
     let returns_value = matches!(kind, FnKind::TopLevel) && func.name == "main";
 
@@ -143,6 +146,9 @@ fn compile_fn_body_inner<'ctx>(
 
     let mut variables: HashMap<String, (PointerValue<'ctx>, inkwell::types::BasicTypeEnum<'ctx>)> =
         HashMap::new();
+
+    // Track which variables hold user-defined struct types (for field access).
+    let mut var_type_names: HashMap<String, String> = HashMap::new();
 
     // ── Bind function parameters as local variables. ─────────────
     for (i, param) in func.params.iter().enumerate() {
@@ -161,7 +167,7 @@ fn compile_fn_body_inner<'ctx>(
 
     // ── Arrow function: compile the single expression and maybe return it.
     if func.is_arrow && func.body.len() == 1 {
-        let val = compile_expr(context, builder, &func.body[0], rt, module_fns, &mut variables);
+        let val = compile_expr(context, builder, &func.body[0], rt, module_fns, &mut variables, type_registry, &mut var_type_names);
         let is_main = matches!(kind, FnKind::TopLevel) && func.name == "main";
         let has_return_type = func.return_type.is_some();
 
@@ -188,7 +194,7 @@ fn compile_fn_body_inner<'ctx>(
 
     // ── Block function: compile every statement. ─────────────────
     for expr in &func.body {
-        compile_expr(context, builder, expr, rt, module_fns, &mut variables);
+        compile_expr(context, builder, expr, rt, module_fns, &mut variables, type_registry, &mut var_type_names);
     }
 
     if returns_value {
@@ -210,6 +216,7 @@ pub fn compile_functions<'ctx>(
     functions: &[Function],
     rt: &Runtime<'ctx>,
     module_fns: &mut ModuleFns<'ctx>,
+    type_registry: &TypeRegistry<'ctx>,
 ) {
     // 1. Forward-declare every top-level function with the correct type.
     let mut top_fns: HashMap<String, FunctionValue<'ctx>> = HashMap::new();
@@ -234,7 +241,7 @@ pub fn compile_functions<'ctx>(
     // 2. Compile each body (the LLVM function already exists).
     for func in functions {
         compile_fn_body_into(
-            context, module, builder, func, rt, module_fns, &FnKind::TopLevel,
+            context, module, builder, func, rt, module_fns, &FnKind::TopLevel, type_registry,
         );
     }
 }
@@ -249,12 +256,13 @@ pub fn compile_user_module<'ctx>(
     user_mod: &UserModule,
     rt: &Runtime<'ctx>,
     module_fns: &ModuleFns<'ctx>,
+    type_registry: &TypeRegistry<'ctx>,
 ) -> HashMap<String, FunctionValue<'ctx>> {
     let mut fns = HashMap::new();
     let kind = FnKind::Module { module_name: &user_mod.name };
 
     for func in &user_mod.functions {
-        let fn_val = compile_fn_body(context, module, builder, func, rt, module_fns, &kind);
+        let fn_val = compile_fn_body(context, module, builder, func, rt, module_fns, &kind, type_registry);
         fns.insert(func.name.clone(), fn_val);
     }
 

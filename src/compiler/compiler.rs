@@ -53,17 +53,39 @@ impl<'ctx> Compiler<'ctx> {
             &program.imports,
         );
 
+        // Create LLVM struct types for all user-defined type definitions.
+        let type_registry = codegen::compile_type_defs(self.context, &program.type_defs);
+
+        // Compile explicit constructors into LLVM functions.
+        let ctor_fns = codegen::compile_constructors(
+            self.context, &self.module, &self.builder,
+            &program.type_defs, &type_registry, &rt, &module_fns,
+        );
+        if !ctor_fns.is_empty() {
+            module_fns.insert("__ctors".to_string(), ctor_fns);
+        }
+
+        // Compile methods (both inline type methods and impl methods).
+        let method_maps = codegen::compile_methods(
+            self.context, &self.module, &self.builder,
+            &program.type_defs, &program.impl_methods,
+            &type_registry, &rt, &module_fns,
+        );
+        for (type_name, methods) in method_maps {
+            module_fns.insert(format!("__methods_{type_name}"), methods);
+        }
+
         for user_mod in &program.user_modules {
             let fns = codegen::compile_user_module(
                 self.context, &self.module, &self.builder,
-                user_mod, &rt, &module_fns,
+                user_mod, &rt, &module_fns, &type_registry,
             );
             module_fns.insert(user_mod.name.clone(), fns);
         }
 
         codegen::compile_functions(
             self.context, &self.module, &self.builder,
-            &program.functions, &rt, &mut module_fns,
+            &program.functions, &rt, &mut module_fns, &type_registry,
         );
     }
 

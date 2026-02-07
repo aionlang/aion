@@ -87,6 +87,24 @@ pub enum Expr {
         condition: Box<Expr>,
         body: Vec<Expr>,
     },
+
+    /// Field access: `a.name`
+    FieldAccess {
+        object: Box<Expr>,
+        field: String,
+    },
+
+    /// Return statement: `return expr` or `return`
+    ReturnExpr {
+        value: Option<Box<Expr>>,
+    },
+
+    /// Field assignment: `it.name = value`
+    FieldAssign {
+        object: Box<Expr>,
+        field: String,
+        value: Box<Expr>,
+    },
 }
 
 #[derive(Debug)]
@@ -118,6 +136,53 @@ pub struct Param {
     pub type_annotation: String,
 }
 
+/// A field inside a type definition: `name: String?`
+#[derive(Debug, Clone)]
+pub struct FieldDef {
+    pub name: String,
+    /// The base type name, e.g. `"String"`, `"Int"`.
+    pub type_name: String,
+    /// `true` when declared with `?`, e.g. `String?`.
+    pub nullable: bool,
+}
+
+/// A user-defined type (struct):
+///
+/// ```aion
+/// type Animal(it.name, it.age) {
+///     name: String?
+///     age: Int?
+/// }
+/// ```
+#[derive(Debug)]
+pub struct TypeDef {
+    pub name: String,
+    /// Optional parent type for inheritance-like composition.
+    pub parent: Option<String>,
+    /// The field names the constructor accepts, in order.
+    pub constructor_params: Vec<String>,
+    /// All field definitions.
+    pub fields: Vec<FieldDef>,
+    /// Methods defined inside the type body.
+    pub methods: Vec<Function>,
+    /// Optional explicit constructor.
+    pub constructor: Option<ConstructorDef>,
+}
+
+/// An explicit constructor for a user-defined type:
+///
+/// ```aion
+/// constructor(name: String, age: Int) {
+///     it.name = name
+///     it.age = age
+/// }
+/// ```
+#[derive(Debug)]
+pub struct ConstructorDef {
+    pub params: Vec<Param>,
+    pub body: Vec<Expr>,
+}
+
 #[derive(Debug)]
 pub struct Function {
     pub name: String,
@@ -142,6 +207,10 @@ pub struct UserModule {
 pub struct Program {
     pub imports: Vec<Import>,
     pub functions: Vec<Function>,
+    /// User-defined types (`type Animal { … }`).
+    pub type_defs: Vec<TypeDef>,
+    /// Methods defined outside the type body: `fn Animal::speak() { … }`.
+    pub impl_methods: Vec<(String, Function)>,
     /// User-written modules resolved from non-stdlib imports.
     pub user_modules: Vec<UserModule>,
 }
