@@ -111,6 +111,12 @@ impl<'ctx> Compiler<'ctx> {
         Target::initialize_native(&InitializationConfig::default())
             .expect("failed to initialise native target");
 
+        // Verify the module before codegen to catch invalid IR early.
+        if let Err(msg) = self.module.verify() {
+            eprintln!("[aion] LLVM verification failed:\n{}", msg.to_string());
+            std::process::exit(1);
+        }
+
         let triple = TargetMachine::get_default_triple();
         let target = Target::from_triple(&triple).expect("unsupported target triple");
 
@@ -129,7 +135,13 @@ impl<'ctx> Compiler<'ctx> {
             )
             .expect("failed to create TargetMachine");
 
-        // Run LLVM optimization passes (O3-level optimizations).
+        // Run LLVM middle-end optimization passes.
+        //
+        // Capped at O1 because LLVM 21's new pass manager at O2+ can
+        // mis-transform functions annotated with `gc "shadow-stack"` and
+        // `@llvm.gcroot`, causing a crash during backend code emission.
+        // The TargetMachine is still set to Aggressive, so backend
+        // optimizations (regalloc, scheduling, etc.) remain at full power.
         let opts = PassBuilderOptions::create();
         opts.set_verify_each(false);
         opts.set_loop_unrolling(true);
@@ -138,7 +150,7 @@ impl<'ctx> Compiler<'ctx> {
         opts.set_merge_functions(true);
 
         self.module
-            .run_passes("default<O3>", &machine, opts)
+            .run_passes("default<O1>", &machine, opts)
             .expect("failed to run optimization passes");
 
         machine

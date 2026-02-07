@@ -1,0 +1,30 @@
+// GC stress test — creates many type instances and temporary strings
+// to exercise the mark-sweep collector.
+
+type Pet {
+    name: String
+    age: Int
+
+    constructor(name: String, age: Int) {
+        it.name = name
+        it.age = age
+    }
+
+    fn greet() -> String {
+        return "I'm ${it.name}, age ${it.age}"
+    }
+}
+
+fn main() {
+    println("=== Aion GC stress test (types) ===")
+
+    i := 0
+    while (i < 1000000) {
+        p := Pet("pet_${i}", i)
+        msg := p.greet()
+        println(msg)
+        i += 1
+    }
+
+    println("=== done (1000000 Pet instances, no crash) ===")
+}

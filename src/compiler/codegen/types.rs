@@ -153,6 +153,8 @@ pub fn compile_constructors<'ctx>(
         let ctor = td.constructor.as_ref().unwrap();
         let type_info = &type_registry[&td.name];
 
+        // Enable LLVM's built-in shadow-stack GC strategy.
+        // (set before emitting body, but gcroot calls come later)
         let entry = context.append_basic_block(*fn_val, "entry");
         builder.position_at_end(entry);
 
@@ -171,6 +173,8 @@ pub fn compile_constructors<'ctx>(
         var_type_names.insert("it".to_string(), td.name.clone());
 
         // Bind constructor parameters as local variables.
+        let mut ptr_allocas: Vec<PointerValue<'ctx>> = Vec::new();
+
         for (i, param) in ctor.params.iter().enumerate() {
             let llvm_ty = resolve_field_type(context, &param.type_annotation, &known_structs);
             let alloca = builder
@@ -179,6 +183,22 @@ pub fn compile_constructors<'ctx>(
             let arg_val = fn_val.get_nth_param(i as u32).expect("ctor param index");
             builder.build_store(alloca, arg_val).expect("store ctor param");
             variables.insert(param.name.clone(), (alloca, llvm_ty));
+
+            // Collect pointer-typed allocas for GC root registration.
+            if llvm_ty.is_pointer_type() {
+                ptr_allocas.push(alloca);
+            }
+        }
+
+        // Always enable shadow-stack GC so local-variable gcroots are valid.
+        fn_val.set_gc("shadow-stack");
+        if !ptr_allocas.is_empty() {
+            let gcroot = rt["llvm.gcroot"];
+            let null_meta = context.ptr_type(inkwell::AddressSpace::default()).const_null();
+            for alloca in &ptr_allocas {
+                builder.build_call(gcroot, &[(*alloca).into(), null_meta.into()], "")
+                    .expect("emit gcroot");
+            }
         }
 
         // Compile the constructor body.
@@ -296,6 +316,8 @@ pub fn compile_methods<'ctx>(
     for (type_name, func, fn_val) in &declared {
         let type_info = &type_registry[type_name.as_str()];
 
+        // Enable LLVM's built-in shadow-stack GC strategy.
+        // (set after collecting pointer allocas)
         let entry = context.append_basic_block(*fn_val, "entry");
         builder.position_at_end(entry);
 
@@ -310,6 +332,8 @@ pub fn compile_methods<'ctx>(
         );
         var_type_names.insert("it".to_string(), type_name.clone());
 
+        let mut ptr_allocas: Vec<PointerValue<'ctx>> = Vec::new();
+
         for (i, param) in func.params.iter().enumerate() {
             let llvm_ty = resolve_field_type(context, &param.type_annotation, &known_structs);
             let alloca = builder
@@ -318,6 +342,22 @@ pub fn compile_methods<'ctx>(
             let arg_val = fn_val.get_nth_param((i + 1) as u32).expect("method param index");
             builder.build_store(alloca, arg_val).expect("store method param");
             variables.insert(param.name.clone(), (alloca, llvm_ty));
+
+            // Collect pointer-typed allocas for GC root registration.
+            if llvm_ty.is_pointer_type() {
+                ptr_allocas.push(alloca);
+            }
+        }
+
+        // Always enable shadow-stack GC so local-variable gcroots are valid.
+        fn_val.set_gc("shadow-stack");
+        if !ptr_allocas.is_empty() {
+            let gcroot = rt["llvm.gcroot"];
+            let null_meta = context.ptr_type(inkwell::AddressSpace::default()).const_null();
+            for alloca in &ptr_allocas {
+                builder.build_call(gcroot, &[(*alloca).into(), null_meta.into()], "")
+                    .expect("emit gcroot");
+            }
         }
 
         let is_arrow = func.is_arrow && func.body.len() == 1;
@@ -346,7 +386,27 @@ pub fn compile_methods<'ctx>(
                 .map(|bb| bb.get_terminator().is_none())
                 .unwrap_or(false);
             if needs_terminator {
-                builder.build_return(None).expect("build void return");
+                let ret_ty = fn_val.get_type().get_return_type();
+                match ret_ty {
+                    None => { builder.build_return(None).expect("build void return"); }
+                    Some(ty) if ty.is_int_type() => {
+                        let zero = ty.into_int_type().const_zero();
+                        builder.build_return(Some(&zero)).expect("build default int return");
+                    }
+                    Some(ty) if ty.is_float_type() => {
+                        let zero = ty.into_float_type().const_zero();
+                        builder.build_return(Some(&zero)).expect("build default float return");
+                    }
+                    Some(ty) if ty.is_pointer_type() => {
+                        let null = ty.into_pointer_type().const_null();
+                        builder.build_return(Some(&null)).expect("build default ptr return");
+                    }
+                    Some(ty) if ty.is_struct_type() => {
+                        let zero = ty.into_struct_type().const_zero();
+                        builder.build_return(Some(&zero)).expect("build default struct return");
+                    }
+                    _ => { builder.build_return(None).expect("build void return"); }
+                }
             }
         }
     }

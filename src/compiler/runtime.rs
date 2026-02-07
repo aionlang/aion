@@ -12,11 +12,19 @@ use crate::errors::{self, Phase};
 /// The core runtime C source.
 const RUNTIME_SRC: &str = include_str!("../../runtime/aion_runtime.c");
 
+/// The shadow stack C source (always linked).
+const SHADOWSTACK_SRC: &str = include_str!("../../runtime/aion_shadowstack.c");
+
 /// The math module C source.
 const MATH_SRC: &str = include_str!("../../runtime/aion_math.c");
 
 /// The sockets module C source.
 const SOCKETS_SRC: &str = include_str!("../../runtime/aion_sockets.c");
+
+/// Stack-probe shim (__chkstk) for Windows when linking MSVC objects
+/// with MinGW gcc.
+#[cfg(windows)]
+const CHKSTK_SRC: &str = include_str!("../../runtime/aion_chkstk.c");
 
 /// Build the Aion runtime (core + stdlib modules) into a static
 /// library and return its path.
@@ -30,7 +38,15 @@ pub fn build(imported_modules: &[String]) -> PathBuf {
     // ── determine which C sources to compile ────────────────────
 
 
-    let mut sources: Vec<(&str, &str)> = vec![("aion_runtime.c", RUNTIME_SRC)];
+    let mut sources: Vec<(&str, &str)> = vec![
+        ("aion_runtime.c", RUNTIME_SRC),
+        ("aion_shadowstack.c", SHADOWSTACK_SRC),
+    ];
+
+    // On Windows we always need the __chkstk shim when linking
+    // MSVC-targeted objects with MinGW gcc.
+    #[cfg(windows)]
+    sources.push(("aion_chkstk.c", CHKSTK_SRC));
 
     for m in imported_modules {
         match m.as_str() {
