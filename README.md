@@ -1,5 +1,10 @@
 # Aion Language
+
+## TURING COMLETE 
+
 A compiled programming language that targets native binaries via LLVM.
+
+
 
 ## Quick start
 
