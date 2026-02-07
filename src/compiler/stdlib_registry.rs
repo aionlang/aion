@@ -56,6 +56,8 @@ pub fn registry(module: &str) -> Option<HashMap<&'static str, StdlibFunc>> {
             floor => "aion_math_floor" (1) -> f64,
             ceil  => "aion_math_ceil"  (1) -> f64,
             pow   => "aion_math_pow"   (2) -> f64,
+            max   => "aion_math_max"   (2) -> f64,
+            min   => "aion_math_min"   (2) -> f64,
         },
         _ => None,
     }

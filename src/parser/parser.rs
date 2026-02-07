@@ -12,10 +12,11 @@
 //! args       = expr ("," expr)*
 //! ```
 
-use crate::ast::{Expr, Function, Import, Program};
+use crate::ast::{Expr, Function, Import, Program, BinOperator};
 use crate::errors::{self, Phase};
 use crate::lexer::lexer::Token;
 use logos::Logos;
+
 
 /// A single token together with the source text it matched.
 #[derive(Debug, Clone)]
@@ -251,8 +252,31 @@ impl Parser {
         }
     }
     
-    /// Parse an expression.
+
     fn parse_expr(&mut self) -> Expr {
+        let mut left = self.parse_primary();
+
+        while let Some(op) = self.peek() {
+            let bin_op = match op {
+                Token::Plus => BinOperator::Add,
+                Token::Minus => BinOperator::Sub,
+                _ => break, // Not a binary operator, stop parsing
+            };
+            self.advance(); // consume the operator
+
+            let right = self.parse_primary();
+            left = Expr::BinaryOp {
+                op: bin_op,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+
+        left
+    }
+
+    /// Parse an expression.
+    fn parse_primary(&mut self) -> Expr {
         let st = self.peek_spanned().expect("expected expression").clone();
 
         match st.token {

@@ -8,7 +8,7 @@ use inkwell::module::Module;
 use inkwell::types::BasicType;
 use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, PointerValue, ValueKind};
 
-use crate::ast::{Expr, Function, Import, UserModule};
+use crate::ast::{Expr, Function, Import, UserModule, BinOperator};
 use crate::errors::{self, Phase};
 
 use super::stdlib_registry;
@@ -280,10 +280,23 @@ pub fn compile_expr<'ctx>(
 
             let llvm_args: Vec<BasicMetadataValueEnum> = args
                 .iter()
-                .map(|a| {
-                    compile_expr(context, builder, a, rt, module_fns, variables)
-                        .expect("argument must produce a value")
-                        .into()
+                .zip(llvm_fn.get_type().get_param_types().iter())
+                .map(|(a, expected_ty)| {
+                    let val = compile_expr(context, builder, a, rt, module_fns, variables)
+                        .expect("argument must produce a value");
+                    // Implicit int → float coercion for stdlib math calls.
+                    if val.is_int_value() && expected_ty.is_float_type() {
+                        let coerced = builder
+                            .build_signed_int_to_float(
+                                val.into_int_value(),
+                                context.f64_type(),
+                                "i2f",
+                            )
+                            .expect("int to float coercion");
+                        coerced.into()
+                    } else {
+                        val.into()
+                    }
                 })
                 .collect();
 
@@ -414,6 +427,47 @@ pub fn compile_expr<'ctx>(
             match call.try_as_basic_value() {
                 ValueKind::Basic(val) => Some(val),
                 ValueKind::Instruction(_) => None,
+            }
+        }
+
+        // ── binary operation ─────────────────────────────────────
+        Expr::BinaryOp { op, left, right } => {
+            let lhs = compile_expr(context, builder, left, rt, module_fns, variables)
+                .expect("left operand must produce a value");
+            let rhs = compile_expr(context, builder, right, rt, module_fns, variables)
+                .expect("right operand must produce a value");
+
+            match op {
+                BinOperator::Add => {
+                    if lhs.is_int_value() {
+                        Some(builder.build_int_add(
+                            lhs.into_int_value(),
+                            rhs.into_int_value(),
+                            "add",
+                        ).expect("build int add").into())
+                    } else {
+                        Some(builder.build_float_add(
+                            lhs.into_float_value(),
+                            rhs.into_float_value(),
+                            "fadd",
+                        ).expect("build float add").into())
+                    }
+                }
+                BinOperator::Sub => {
+                    if lhs.is_int_value() {
+                        Some(builder.build_int_sub(
+                            lhs.into_int_value(),
+                            rhs.into_int_value(),
+                            "sub",
+                        ).expect("build int sub").into())
+                    } else {
+                        Some(builder.build_float_sub(
+                            lhs.into_float_value(),
+                            rhs.into_float_value(),
+                            "fsub",
+                        ).expect("build float sub").into())
+                    }
+                }
             }
         }
 
