@@ -2,7 +2,16 @@ import aion.math;
 
 fn main() {
 
-    a := 1
+    a := 2
     println(a + 3) 
 
+    if (a == 1) {
+        println("a is 1")
+    } else {
+        println("a is not 1")
+    }
+
+    while (a == 2) {
+        println(a)
+    }
 }

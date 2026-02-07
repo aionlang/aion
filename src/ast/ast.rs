@@ -41,8 +41,16 @@ pub enum Expr {
         args: Vec<Expr>,
     },
 
+    IfExpr {
+        condition: Box<Expr>,
+        then_branch: Vec<Expr>,
+        else_branch: Option<Vec<Expr>>,
+    },
+
     /// A floating-point literal like `3.14`
     FloatLiteral(f64),
+
+    BooleanLiteral(bool),
 
     /// An integer literal like `42`
     IntLiteral(i64),
@@ -70,12 +78,22 @@ pub enum Expr {
         right: Box<Expr>,
     },
 
+    WhileExpr {
+        condition: Box<Expr>,
+        body: Vec<Expr>,
+    },
 }
 
 #[derive(Debug)]
 pub enum BinOperator {
     Add,
     Sub,
+    Eq,
+    Neq,
+    Lt,
+    Gt,
+    Lte,
+    Gte,
 }
 
 #[derive(Debug)]
