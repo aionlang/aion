@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use inkwell::context::Context;
+use inkwell::intrinsics::Intrinsic;
 use inkwell::module::Module;
 
 use super::Runtime;
@@ -8,7 +9,7 @@ use super::Runtime;
 enum ParamKind { Ptr, I64, F64, None, PtrPtr }
 
 /// Describes the return type of a runtime function.
-enum RetKind { Void, Ptr }
+enum RetKind { Void, Ptr, I64 }
 
 /// Declare the external `aion_*` core runtime functions from a data table.
 pub fn declare_runtime<'ctx>(
@@ -24,11 +25,15 @@ pub fn declare_runtime<'ctx>(
         ("aion_println_int",   ParamKind::I64, RetKind::Void),
         ("aion_println_float", ParamKind::F64, RetKind::Void),
         ("aion_panic",         ParamKind::Ptr, RetKind::Void),
-        ("aion_alloc",         ParamKind::I64, RetKind::Ptr),
-        ("aion_free",          ParamKind::Ptr, RetKind::Void),
-        ("aion_concat",        ParamKind::PtrPtr, RetKind::Ptr),
-        ("aion_int_to_str",    ParamKind::I64, RetKind::Ptr),
-        ("aion_float_to_str",  ParamKind::F64, RetKind::Ptr),
+        ("aion_alloc",           ParamKind::I64, RetKind::Ptr),
+        ("aion_free",            ParamKind::Ptr, RetKind::Void),
+        ("aion_gc_collect",      ParamKind::None, RetKind::Void),
+        ("aion_gc_safepoint",    ParamKind::None, RetKind::Void),
+        ("aion_gc_heap_size",    ParamKind::None, RetKind::I64),
+        ("aion_gc_object_count", ParamKind::None, RetKind::I64),
+        ("aion_concat",          ParamKind::PtrPtr, RetKind::Ptr),
+        ("aion_int_to_str",      ParamKind::I64, RetKind::Ptr),
+        ("aion_float_to_str",    ParamKind::F64, RetKind::Ptr),
     ];
 
     let void   = context.void_type();
@@ -50,11 +55,20 @@ pub fn declare_runtime<'ctx>(
         let fn_type = match ret {
             RetKind::Void => void.fn_type(&params, false),
             RetKind::Ptr  => ptr.fn_type(&params, false),
+            RetKind::I64  => i64_ty.fn_type(&params, false),
         };
 
         let fn_val = module.add_function(name, fn_type, Option::None);
         rt.insert(name, fn_val);
     }
+
+    // ── @llvm.gcroot intrinsic for built-in shadow-stack GC ──
+    let gcroot = Intrinsic::find("llvm.gcroot")
+        .expect("@llvm.gcroot intrinsic not found");
+    let gcroot_fn = gcroot
+        .get_declaration(module, &[])
+        .expect("failed to declare @llvm.gcroot");
+    rt.insert("llvm.gcroot", gcroot_fn);
 
     rt
 }

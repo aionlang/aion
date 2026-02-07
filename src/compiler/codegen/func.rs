@@ -139,7 +139,7 @@ fn compile_fn_body_inner<'ctx>(
     fn_val: FunctionValue<'ctx>,
     type_registry: &TypeRegistry<'ctx>,
 ) {
-    let returns_value = matches!(kind, FnKind::TopLevel) && func.name == "main";
+    let _returns_value = matches!(kind, FnKind::TopLevel) && func.name == "main";
 
     let entry = context.append_basic_block(fn_val, "entry");
     builder.position_at_end(entry);
@@ -151,6 +151,8 @@ fn compile_fn_body_inner<'ctx>(
     let mut var_type_names: HashMap<String, String> = HashMap::new();
 
     // ── Bind function parameters as local variables. ─────────────
+    let mut ptr_allocas: Vec<PointerValue<'ctx>> = Vec::new();
+
     for (i, param) in func.params.iter().enumerate() {
         let llvm_ty = resolve_type(context, Some(param.type_annotation.as_str()))
             .unwrap_or_else(|| {
@@ -163,6 +165,23 @@ fn compile_fn_body_inner<'ctx>(
         let arg_val = fn_val.get_nth_param(i as u32).expect("param index");
         builder.build_store(alloca, arg_val).expect("store param");
         variables.insert(param.name.clone(), (alloca, llvm_ty));
+
+        // Collect pointer-typed allocas for GC root registration.
+        if llvm_ty.is_pointer_type() {
+            ptr_allocas.push(alloca);
+        }
+    }
+
+    // Always enable shadow-stack GC so that both parameter and
+    // local-variable gcroot calls are valid.
+    fn_val.set_gc("shadow-stack");
+    if !ptr_allocas.is_empty() {
+        let gcroot = rt["llvm.gcroot"];
+        let null_meta = context.ptr_type(inkwell::AddressSpace::default()).const_null();
+        for alloca in &ptr_allocas {
+            builder.build_call(gcroot, &[(*alloca).into(), null_meta.into()], "")
+                .expect("emit gcroot");
+        }
     }
 
     // ── Arrow function: compile the single expression and maybe return it.
@@ -172,21 +191,17 @@ fn compile_fn_body_inner<'ctx>(
         let has_return_type = func.return_type.is_some();
 
         if is_main {
-            // main() always returns i32 0 regardless of body.
             let i32_type = context.i32_type();
             builder
                 .build_return(Some(&i32_type.const_int(0, false)))
                 .expect("build return");
         } else if let Some(v) = val {
             if has_return_type {
-                // Has a return type annotation → return the value.
                 builder.build_return(Some(&v)).expect("build arrow return");
             } else {
-                // No return type, void function that happened to produce a value.
                 builder.build_return(None).expect("build void return");
             }
         } else {
-            // The expression was void — emit a plain return.
             builder.build_return(None).expect("build void return");
         }
         return;

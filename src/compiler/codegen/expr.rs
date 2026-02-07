@@ -293,6 +293,21 @@ pub fn compile_expr<'ctx>(
                 builder.build_store(alloca, *val).expect("build store");
             }
 
+            // Register pointer-typed local variables as GC roots so the
+            // collector can see them during a mark phase.  The enclosing
+            // function must already have `gc "shadow-stack"` set (which
+            // happens when it has at least one pointer-typed parameter).
+            if llvm_type.is_pointer_type() {
+                if let Some(gcroot) = rt.get("llvm.gcroot") {
+                    let null_meta = context.ptr_type(inkwell::AddressSpace::default()).const_null();
+                    let _ = builder.build_call(
+                        *gcroot,
+                        &[alloca.into(), null_meta.into()],
+                        "",
+                    );
+                }
+            }
+
             // Track the Aion type name for struct variables (for field/method access).
             // Strategy 1: explicit type annotation matching a struct type.
             if let Some(ann) = type_annotation.as_deref() {
@@ -422,6 +437,14 @@ pub fn compile_expr<'ctx>(
 
             // ── body block ──
             builder.position_at_end(body_bb);
+
+            // Emit a GC safe-point at the top of each iteration.
+            // At this point no un-rooted temporaries are live, so it's
+            // safe to collect.
+            if let Some(sp) = rt.get("aion_gc_safepoint") {
+                builder.build_call(*sp, &[], "").expect("emit gc safepoint");
+            }
+
             for expr in body {
                 compile_expr(context, builder, expr, rt, module_fns, variables, type_registry, var_type_names);
             }
@@ -851,6 +874,9 @@ pub fn compile_expr<'ctx>(
 
         // ── return statement ────────────────────────────────────
         Expr::ReturnExpr { value } => {
+            // LLVM's shadow-stack GC strategy automatically pops the
+            // frame at every return — no manual pop needed.
+
             if let Some(val_expr) = value {
                 let val = compile_expr(context, builder, val_expr, rt, module_fns, variables, type_registry, var_type_names)
                     .expect("return value must produce a value");
