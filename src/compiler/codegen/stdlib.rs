@@ -25,6 +25,12 @@ pub fn declare_stdlib<'ctx>(
         }
 
         let mod_name = imp.module_name().to_string();
+
+        // Skip if we already declared this module (multiple selective imports).
+        if map.contains_key(&mod_name) {
+            continue;
+        }
+
         let registry = stdlib_registry::registry(&mod_name).unwrap_or_else(|| {
             errors::fatal_with_hint(
                 Phase::Compiler,

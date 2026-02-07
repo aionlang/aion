@@ -1,9 +1,9 @@
-import aion.sockets;
+import aion.sockets.TcpListener;
 
 fn main() {
     println("Starting echo server on port 8080...")
     
-    server := sockets.TcpListener(8080)
+    server := TcpListener(8080)
     
     if (server.listen(5) < 0) {
         println("Failed to listen")

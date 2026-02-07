@@ -5,10 +5,13 @@
 // Object-oriented socket API built on top of low-level C primitives.
 //
 // Usage:
-//   import aion.sockets;
+//   import aion.sockets;              // full module import
+//   import aion.sockets.TcpListener;  // selective: use TcpListener directly
 //
 //   fn main() {
-//       server := sockets.TcpListener(8080)
+//       server := sockets.TcpListener(8080)   // qualified
+//       // OR with selective import:
+//       server := TcpListener(8080)            // unqualified
 //       server.listen()
 //       client := server.accept()
 //       client.send("Hello, world!")

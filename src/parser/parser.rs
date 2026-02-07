@@ -3,7 +3,7 @@
 //! Grammar (current subset):
 //! ```text
 //! program    = import* function* EOF
-//! import     = "import" IDENT ("." IDENT)* ";"
+//! import     = "import" IDENT ("." IDENT)* ";"   // selective when last segment is a symbol
 //! function   = "fn" IDENT "(" ")" "{" statement* "}"
 //! statement  = var_def | expr_stmt
 //! expr       = func_call | module_call | float_lit | int_lit | string_lit | var_ref
@@ -11,6 +11,10 @@
 //! module_call= IDENT "." IDENT "(" args ")"
 //! args       = expr ("," expr)*
 //! ```
+//!
+//! Import flavours:
+//!   `import aion.sockets;`              — full module import
+//!   `import aion.sockets.TcpListener;`  — selective: imports TcpListener, qualify with sockets.TcpListener if ambiguous
 
 use crate::ast::{AssignBinOperator, BinOperator, ConstructorDef, Expr, FieldDef, Function, Import, Param, Program, StringInterpolationPart, TypeDef};
 use crate::errors::{self, Phase};
@@ -137,23 +141,39 @@ impl Parser {
         Program { imports, functions, type_defs, impl_methods, user_modules: Vec::new() }
     }
 
-    /// Parse an import path: `aion.math;`
+    /// Parse an import path: `aion.math;` or `aion.sockets.TcpListener;`
     /// The `import` keyword has already been consumed.
+    ///
+    /// Selective import detection:
+    ///   `aion.X.Y` / `std.X.Y`  → module = [aion/std, X], symbol = Y
+    ///   `X.Y` (user module)      → module = [X],          symbol = Y
+    ///   Everything else           → module = full path,    symbol = None
     fn parse_import(&mut self) -> Import {
-        let mut path = Vec::new();
+        let mut segments = Vec::new();
 
         // First segment.
-        path.push(self.parse_ident_string());
+        segments.push(self.parse_ident_string());
 
         // Additional dot-separated segments.
         while self.peek() == Some(&Token::Dot) {
             self.advance(); // consume '.'
-            path.push(self.parse_ident_string());
+            segments.push(self.parse_ident_string());
         }
 
         self.expect(Token::Semi, "expected ';' after import path");
 
-        Import { path }
+        // Split into (module path, optional symbol).
+        let is_namespace = segments.first().map(|s| s == "aion" || s == "std").unwrap_or(false);
+        let min_for_selective = if is_namespace { 3 } else { 2 };
+
+        let (path, symbol) = if segments.len() >= min_for_selective {
+            let sym = segments.pop().unwrap();
+            (segments, Some(sym))
+        } else {
+            (segments, None)
+        };
+
+        Import { path, symbol }
     }
 
     /// Parse a type definition.

@@ -1,12 +1,18 @@
-/// An import declaration: `import aion.math;`
+/// An import declaration.
+///
+/// Full module:   `import aion.math;`       → path=["aion","math"],  symbol=None
+/// Selective:     `import aion.math.sqrt;`  → path=["aion","math"],  symbol=Some("sqrt")
 #[derive(Debug, Clone)]
 pub struct Import {
-    /// The dot-separated path segments, e.g. `["aion", "math"]`.
+    /// The dot-separated module path, e.g. `["aion", "math"]`.
     pub path: Vec<String>,
+    /// An optional specific symbol imported from that module.
+    /// When present, the symbol can be used unqualified.
+    pub symbol: Option<String>,
 }
 
 impl Import {
-    /// Return the short module name (last segment), e.g. `"math"`.
+    /// Return the short module name (last segment of the *module* path), e.g. `"math"`.
     pub fn module_name(&self) -> &str {
         self.path.last().expect("empty import path")
     }
@@ -25,6 +31,12 @@ impl Import {
     #[allow(dead_code)]
     pub fn is_user(&self) -> bool {
         !self.is_stdlib() && !self.is_std()
+    }
+
+    /// Returns `true` when this import targets a specific symbol
+    /// rather than the whole module.
+    pub fn is_selective(&self) -> bool {
+        self.symbol.is_some()
     }
 }
 
