@@ -6,7 +6,7 @@ use inkwell::types::BasicType;
 use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, PointerValue, ValueKind, FunctionValue};
 use inkwell::{IntPredicate, FloatPredicate};
 
-use crate::ast::{Expr, BinOperator, AssignBinOperator};
+use crate::ast::{Expr, BinOperator, AssignBinOperator, StringInterpolationPart};
 use crate::errors::{self, Phase};
 
 use super::{Runtime, ModuleFns, TypeRegistry};
@@ -67,6 +67,35 @@ pub fn compile_expr<'ctx>(
                 .build_global_string_ptr(text, "str")
                 .expect("build global string");
             Some(global.as_pointer_value().into())
+        }
+
+        Expr::InterpolatedString { parts } => {
+            let mut result: Option<BasicValueEnum<'ctx>> = None;
+
+            for part in parts {
+                let part_value = match part {
+                    StringInterpolationPart::Literal(text) => {
+                        let global = builder
+                            .build_global_string_ptr(text, "str_part")
+                            .expect("build string literal");
+                        global.as_pointer_value().into()
+                    }
+                    StringInterpolationPart::Expr(expr) => {
+                        let val = compile_expr(
+                            context, builder, expr, rt, module_fns,
+                            variables, type_registry, var_type_names,
+                        ).expect("interpolated expression must produce a value");
+                        string_from_value(context, builder, rt, val)
+                    }
+                };
+
+                result = Some(if let Some(prev) = result {
+                    string_concat(context, builder, rt, prev, part_value)
+                } else {
+                    part_value
+                });
+            }
+            result
         }
 
         // ── module.func(args…) ──────────────────────────────────
@@ -666,5 +695,57 @@ pub fn compile_expr<'ctx>(
             builder.position_at_end(dead_bb);
             None
         }
+    }
+}
+
+fn string_from_value<'ctx>(
+    _context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    rt: &Runtime<'ctx>,
+    val: BasicValueEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    if val.is_pointer_value() {
+        // Already a string
+        val
+    } else if val.is_int_value() {
+        let f = rt.get("aion_int_to_str").expect("aion_int_to_str not found");
+        let call = builder
+            .build_call(*f, &[val.into()], "int_to_str")
+            .expect("build int_to_str call");
+        match call.try_as_basic_value() {
+            ValueKind::Basic(v) => v,
+            _ => panic!("aion_int_to_str returned void or instruction"),
+        }
+    } else if val.is_float_value() {
+        let f = rt.get("aion_float_to_str").expect("aion_float_to_str not found");
+        let call = builder
+            .build_call(*f, &[val.into()], "float_to_str")
+            .expect("build float_to_str call");
+        match call.try_as_basic_value() {
+            ValueKind::Basic(v) => v,
+            _ => panic!("aion_float_to_str returned void or instruction"),
+        }
+    } else {
+        errors::fatal(
+            Phase::Compiler,
+            format!("Cannot convert {:?} to string in interpolation", val.get_type()),
+        )
+    }
+}
+
+fn string_concat<'ctx>(
+    _context: &'ctx Context,
+    builder: &Builder<'ctx>,
+    rt: &Runtime<'ctx>,
+    left: BasicValueEnum<'ctx>,
+    right: BasicValueEnum<'ctx>,
+) -> BasicValueEnum<'ctx> {
+    let f = rt.get("aion_concat").expect("aion_concat not found");
+    let call = builder
+        .build_call(*f, &[left.into(), right.into()], "concat")
+        .expect("build concat call");
+    match call.try_as_basic_value() {
+        ValueKind::Basic(v) => v,
+        _ => panic!("aion_concat returned void or instruction"),
     }
 }

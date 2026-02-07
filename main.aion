@@ -14,6 +14,10 @@ type Animal {
 
 }
 
+fn Animal::animalToString() -> String {
+    return "Animal(${it.name}, ${it.age})"
+}
+
 fn Animal::setAge(age: Int) {
     it.age = age
 }
@@ -24,9 +28,6 @@ fn Animal::speak() -> String {
 
 fn main() {
     a := Animal("Fido")
-    println(a.bark())
     a.setAge(5)
-    println(a.speak())
-    println(a.age)
+    println(a.animalToString())
 }
-

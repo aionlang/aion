@@ -64,8 +64,9 @@ pub enum Token {
     #[regex(r"[0-9]+")]
     IntLit,
 
-    /// String literal: "hello world"
-    #[regex(r#""([^"\\]|\\.)*""#)]
+
+    /// String literal: "hello world" or "hello ${name}" (with interpolation)
+    #[regex(r#""([^"\\]|\\.|\$\{[^}]*\})*""#)]
     Str,
 
     /// Identifier: foo, main, math, sqrt, my_var

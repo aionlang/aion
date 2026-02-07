@@ -12,7 +12,7 @@
 //! args       = expr ("," expr)*
 //! ```
 
-use crate::ast::{Expr, Function, Import, Param, Program, TypeDef, FieldDef, ConstructorDef, BinOperator, AssignBinOperator};
+use crate::ast::{AssignBinOperator, BinOperator, ConstructorDef, Expr, FieldDef, Function, Import, Param, Program, StringInterpolationPart, TypeDef};
 use crate::errors::{self, Phase};
 use crate::lexer::lexer::Token;
 use logos::Logos;
@@ -519,6 +519,80 @@ impl Parser {
         left
     }
 
+    fn parse_interpolated_string(&mut self, content: String) -> Expr {
+        let mut parts = Vec::new();
+        let mut current_literal = String::new();
+        let mut chars = content.chars().peekable();
+        
+        while let Some(ch) = chars.next() {
+            if ch == '$' && chars.peek() == Some(&'{') {
+                // Found start of interpolation
+                chars.next(); // consume '{'
+                
+                // Save any literal text we've accumulated
+                if !current_literal.is_empty() {
+                    parts.push(StringInterpolationPart::Literal(current_literal.clone()));
+                    current_literal.clear();
+                }
+                
+                // Extract the expression inside ${}
+                let mut expr_str = String::new();
+                let mut depth = 1;
+                
+                while depth > 0 {
+                    match chars.next() {
+                        Some('{') => {
+                            depth += 1;
+                            expr_str.push('{');
+                        }
+                        Some('}') => {
+                            depth -= 1;
+                            if depth > 0 {
+                                expr_str.push('}');
+                            }
+                        }
+                        Some(c) => expr_str.push(c),
+                        None => {
+                            errors::fatal(
+                                Phase::Parser,
+                                "Unclosed interpolation expression in string",
+                            );
+                        }
+                    }
+                }
+                
+                // Parse the expression
+                let mut expr_parser = Parser::new(&expr_str);
+                let expr = expr_parser.parse_expr();
+                parts.push(StringInterpolationPart::Expr(Box::new(expr)));
+            } else if ch == '\\' {
+                // Handle escape sequences
+                match chars.next() {
+                    Some('n') => current_literal.push('\n'),
+                    Some('t') => current_literal.push('\t'),
+                    Some('r') => current_literal.push('\r'),
+                    Some('\\') => current_literal.push('\\'),
+                    Some('"') => current_literal.push('"'),
+                    Some('$') => current_literal.push('$'),
+                    Some(c) => {
+                        current_literal.push('\\');
+                        current_literal.push(c);
+                    }
+                    None => current_literal.push('\\'),
+                }
+            } else {
+                current_literal.push(ch);
+            }
+        }
+        
+        // Save any remaining literal text
+        if !current_literal.is_empty() {
+            parts.push(StringInterpolationPart::Literal(current_literal));
+        }
+        
+        Expr::InterpolatedString { parts }
+    }
+
     /// Parse an expression.
     fn parse_primary(&mut self) -> Expr {
         let st = self.peek_spanned().expect("expected expression").clone();
@@ -539,7 +613,12 @@ impl Parser {
             Token::Str => {
                 self.advance();
                 let content = st.lexeme[1..st.lexeme.len() - 1].to_string();
-                Expr::StringLiteral(content)
+
+                if content.contains("${") {
+                    return self.parse_interpolated_string(content);
+                } else {
+                    Expr::StringLiteral(content)
+                }
             }
 
             Token::While => {

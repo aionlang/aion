@@ -5,7 +5,7 @@ use inkwell::module::Module;
 use super::Runtime;
 
 /// Describes the parameter types of a runtime function (no generics yet).
-enum ParamKind { Ptr, I64, F64, None }
+enum ParamKind { Ptr, I64, F64, None, PtrPtr }
 
 /// Describes the return type of a runtime function.
 enum RetKind { Void, Ptr }
@@ -26,6 +26,9 @@ pub fn declare_runtime<'ctx>(
         ("aion_panic",         ParamKind::Ptr, RetKind::Void),
         ("aion_alloc",         ParamKind::I64, RetKind::Ptr),
         ("aion_free",          ParamKind::Ptr, RetKind::Void),
+        ("aion_concat",        ParamKind::PtrPtr, RetKind::Ptr),
+        ("aion_int_to_str",    ParamKind::I64, RetKind::Ptr),
+        ("aion_float_to_str",  ParamKind::F64, RetKind::Ptr),
     ];
 
     let void   = context.void_type();
@@ -37,10 +40,11 @@ pub fn declare_runtime<'ctx>(
 
     for &(name, ref param, ref ret) in TABLE {
         let params: Vec<inkwell::types::BasicMetadataTypeEnum> = match param {
-            ParamKind::Ptr  => vec![ptr.into()],
-            ParamKind::I64  => vec![i64_ty.into()],
-            ParamKind::F64  => vec![f64_ty.into()],
-            ParamKind::None => vec![],
+            ParamKind::Ptr    => vec![ptr.into()],
+            ParamKind::I64    => vec![i64_ty.into()],
+            ParamKind::F64    => vec![f64_ty.into()],
+            ParamKind::None   => vec![],
+            ParamKind::PtrPtr => vec![ptr.into(), ptr.into()],
         };
 
         let fn_type = match ret {

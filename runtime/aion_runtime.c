@@ -48,6 +48,48 @@ void aion_println_float(double f) {
     printf("%g\n", f);
 }
 
+/* Concatenate two strings. Returns a heap-allocated string. */
+char* aion_concat(const char* a, const char* b) {
+    size_t len = strlen(a) + strlen(b);
+    char* res = (char*)malloc(len + 1);
+    if (!res) {
+        fprintf(stderr, "Out of memory in aion_concat\\n");
+        exit(1);
+    }
+    strcpy(res, a);
+    strcat(res, b);
+    return res;
+}
+
+/* Convert int to string. Returns a heap-allocated string. */
+char* aion_int_to_str(long long n) {
+    // 20 chars enough for 64-bit int (approx 19 digits) + sign + null
+    char buffer[32]; 
+    snprintf(buffer, sizeof(buffer), "%lld", n);
+    size_t len = strlen(buffer);
+    char* res = (char*)malloc(len + 1);
+    if (!res) {
+        fprintf(stderr, "Out of memory in aion_int_to_str\\n");
+        exit(1);
+    }
+    strcpy(res, buffer);
+    return res;
+}
+
+/* Convert float to string. Returns a heap-allocated string. */
+char* aion_float_to_str(double f) {
+    char buffer[64];
+    snprintf(buffer, sizeof(buffer), "%g", f);
+    size_t len = strlen(buffer);
+    char* res = (char*)malloc(len + 1);
+    if (!res) {
+        fprintf(stderr, "Out of memory in aion_float_to_str\\n");
+        exit(1);
+    }
+    strcpy(res, buffer);
+    return res;
+}
+
 /* ── Process control ─────────────────────────────────────────── */
 
 /* Abort with a message (used by the compiler for unreachable / panic). */

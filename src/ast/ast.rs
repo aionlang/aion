@@ -33,6 +33,12 @@ impl Import {
 pub enum Expr {
     /// A string literal: `"hello"`
     StringLiteral(String),
+    
+    /// A string interpolation: `"Hello, ${name}!"`
+    /// Parts can be either literal strings or expressions.
+    InterpolatedString {
+        parts: Vec<StringInterpolationPart>,
+    },
 
     /// `math.sqrt(144.0)` — call a module function
     ModuleCall {
@@ -105,6 +111,12 @@ pub enum Expr {
         field: String,
         value: Box<Expr>,
     },
+}
+
+#[derive(Debug)]
+pub enum StringInterpolationPart {
+    Literal(String),
+    Expr(Box<Expr>),
 }
 
 #[derive(Debug)]
