@@ -41,8 +41,16 @@ pub enum Expr {
         args: Vec<Expr>,
     },
 
+    IfExpr {
+        condition: Box<Expr>,
+        then_branch: Vec<Expr>,
+        else_branch: Option<Vec<Expr>>,
+    },
+
     /// A floating-point literal like `3.14`
     FloatLiteral(f64),
+
+    BooleanLiteral(bool),
 
     /// An integer literal like `42`
     IntLiteral(i64),
@@ -54,6 +62,11 @@ pub enum Expr {
         value: Option<Box<Expr>>,         // Some(expr) or None
     },
     
+    VarAssign {
+        name: String,
+        value: Box<Expr>,
+        op: Option<AssignBinOperator>, // Some(op) for `a += 5`, None for `a = 5`
+    },
     /// Variable reference: just `a`
     VarRef(String),
 
@@ -70,12 +83,31 @@ pub enum Expr {
         right: Box<Expr>,
     },
 
+    WhileExpr {
+        condition: Box<Expr>,
+        body: Vec<Expr>,
+    },
+}
+
+#[derive(Debug)]
+pub enum AssignBinOperator {
+    AddAssign, // +=
+    SubAssign, // -=
+    MulAssign, // *=
+    DivAssign, // /=
+    DotAssign, // .= method call assignment, e.g. `s .=concat(" world")` → `s = s.concat(" world")`
 }
 
 #[derive(Debug)]
 pub enum BinOperator {
     Add,
     Sub,
+    Eq,
+    Neq,
+    Lt,
+    Gt,
+    Lte,
+    Gte,
 }
 
 #[derive(Debug)]

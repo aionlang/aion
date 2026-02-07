@@ -12,7 +12,7 @@
 //! args       = expr ("," expr)*
 //! ```
 
-use crate::ast::{Expr, Function, Import, Program, BinOperator};
+use crate::ast::{Expr, Function, Import, Program, BinOperator, AssignBinOperator};
 use crate::errors::{self, Phase};
 use crate::lexer::lexer::Token;
 use logos::Logos;
@@ -142,6 +142,7 @@ impl Parser {
         Import { path }
     }
 
+    
     /// Parse a function definition: `fn <name>() { … }`
     fn parse_function(&mut self) -> Function {
         let name = self.parse_ident_string();
@@ -175,6 +176,8 @@ impl Parser {
                 // Look ahead to distinguish variable def from other expressions
                 if self.peek_ahead_is_var_def() {
                     self.parse_var_def()
+                } else if self.peek_ahead_is_assignment() {
+                    self.parse_assignment()
                 } else {
                     self.parse_expr()
                 }
@@ -192,6 +195,38 @@ impl Parser {
             self.tokens[self.pos + 1].token,
             Token::Colon | Token::ColonEquals | Token::DoubleColonEquals
         )
+    }
+
+    fn peek_ahead_is_assignment(&self) -> bool {
+        if self.pos + 1 >= self.tokens.len() {
+            return false;
+        }
+        matches!(
+            self.tokens[self.pos + 1].token,
+            Token::Equals | Token::PlusEquals | Token::MinusEquals | Token::DotEquals
+        )
+    }
+
+    /// Parse an assignment: `a = 5`, `a += 1`, `a -= 3`, `a .= method()`
+    fn parse_assignment(&mut self) -> Expr {
+        let name = self.parse_ident_string();
+        let op_token = self.advance(); // consume =, +=, -=, .=
+
+        let op = match op_token.token {
+            Token::Equals      => None,
+            Token::PlusEquals  => Some(AssignBinOperator::AddAssign),
+            Token::MinusEquals => Some(AssignBinOperator::SubAssign),
+            Token::DotEquals   => Some(AssignBinOperator::DotAssign),
+            _ => unreachable!(),
+        };
+
+        let value = self.parse_expr();
+
+        Expr::VarAssign {
+            name,
+            value: Box::new(value),
+            op,
+        }
     }
 
     /// Parse an expression.
@@ -254,13 +289,40 @@ impl Parser {
     
 
     fn parse_expr(&mut self) -> Expr {
+        let mut left = self.parse_additive();
+
+        while let Some(op) = self.peek() {
+            let bin_op = match op {
+                Token::EqualsEquals  => BinOperator::Eq,
+                Token::BangEquals    => BinOperator::Neq,
+                Token::Less          => BinOperator::Lt,
+                Token::Greater       => BinOperator::Gt,
+                Token::LessEquals    => BinOperator::Lte,
+                Token::GreaterEquals => BinOperator::Gte,
+                _ => break,
+            };
+            self.advance(); // consume the comparison operator
+
+            let right = self.parse_additive();
+            left = Expr::BinaryOp {
+                op: bin_op,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+
+        left
+    }
+
+    /// Parse additive expressions: `+` and `-`.
+    fn parse_additive(&mut self) -> Expr {
         let mut left = self.parse_primary();
 
         while let Some(op) = self.peek() {
             let bin_op = match op {
-                Token::Plus => BinOperator::Add,
+                Token::Plus  => BinOperator::Add,
                 Token::Minus => BinOperator::Sub,
-                _ => break, // Not a binary operator, stop parsing
+                _ => break,
             };
             self.advance(); // consume the operator
 
@@ -297,7 +359,63 @@ impl Parser {
                 let content = st.lexeme[1..st.lexeme.len() - 1].to_string();
                 Expr::StringLiteral(content)
             }
-            // Identifier — could be variable reference, module call, or function call
+
+            Token::While => {
+                self.advance(); // consume 'while'
+                self.expect(Token::LParen, "expected '(' after 'while'");
+                let condition = self.parse_expr();
+                self.expect(Token::RParen, "expected ')' after while condition");
+                self.expect(Token::LBrace, "expected '{' to open 'while' body");
+
+                let mut body = Vec::new();
+                while self.peek() != Some(&Token::RBrace) {
+                    body.push(self.parse_statement());
+                }
+                self.expect(Token::RBrace, "expected '}' to close 'while' body");
+
+                Expr::WhileExpr { condition: Box::new(condition), body }
+            }
+
+            Token::If => {
+                self.advance(); // consume 'if'
+                self.expect(Token::LParen, "expected '(' after 'if'");
+                let condition = self.parse_expr();
+                self.expect(Token::RParen, "expected ')' after if condition");
+                self.expect(Token::LBrace, "expected '{' to open 'if' body");
+
+                let mut then_branch = Vec::new();
+                while self.peek() != Some(&Token::RBrace) {
+                    then_branch.push(self.parse_statement());
+                }
+                self.expect(Token::RBrace, "expected '}' to close 'if' body");
+
+                let else_branch = if self.peek() == Some(&Token::Else) {
+                    self.advance(); // consume 'else'
+                    self.expect(Token::LBrace, "expected '{' after 'else'");
+                    let mut stmts = Vec::new();
+                    while self.peek() != Some(&Token::RBrace) {
+                        stmts.push(self.parse_statement());
+                    }
+                    self.expect(Token::RBrace, "expected '}' to close 'else' body");
+                    Some(stmts)
+                } else {
+                    None
+                };
+
+                Expr::IfExpr { condition: Box::new(condition), then_branch, else_branch }
+            }
+            
+            // Identifier — could be variable reference, module call, or function call or conditional expression
+            // Boolean literals
+            Token::True => {
+                self.advance();
+                Expr::BooleanLiteral(true)
+            }
+            Token::False => {
+                self.advance();
+                Expr::BooleanLiteral(false)
+            }
+
             Token::Ident | Token::Fn | Token::Import => {
                 self.advance();
                 let name = st.lexeme.clone();
@@ -324,6 +442,10 @@ impl Parser {
 
                     Expr::FuncCall { name, args }
                 }
+
+                // is it variable value modification? 
+
+
                 else {
                     // Just a variable reference
                     Expr::VarRef(name)

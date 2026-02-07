@@ -16,3 +16,10 @@ a := 12
 a: Int := 12
 ```
 
+```aion
+
+if (a == 1) {
+    println("a equals to 1")
+}
+
+```

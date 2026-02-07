@@ -7,8 +7,9 @@ use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::types::BasicType;
 use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, PointerValue, ValueKind};
+use inkwell::{IntPredicate, FloatPredicate};
 
-use crate::ast::{Expr, Function, Import, UserModule, BinOperator};
+use crate::ast::{Expr, Function, Import, UserModule, BinOperator, AssignBinOperator};
 use crate::errors::{self, Phase};
 
 use super::stdlib_registry;
@@ -146,7 +147,18 @@ fn emit_print_call<'ctx>(
     };
 
     let f = rt[fn_name];
-    let a: [BasicMetadataValueEnum; 1] = [val.into()];
+    // Widen i1 (bool) to i64 so it matches aion_print_int's signature.
+    let arg: BasicValueEnum = if val.is_int_value()
+        && val.into_int_value().get_type().get_bit_width() < 64
+    {
+        builder
+            .build_int_z_extend(val.into_int_value(), builder.get_insert_block().unwrap().get_context().i64_type(), "widen")
+            .expect("widen bool to i64")
+            .into()
+    } else {
+        val
+    };
+    let a: [BasicMetadataValueEnum; 1] = [arg.into()];
     builder.build_call(f, &a, "call").expect("build call");
 }
 
@@ -330,6 +342,14 @@ pub fn compile_expr<'ctx>(
                     });
                     (ty, val)
                 }
+                (Some("Bool"), _) => {
+                    let ty = context.bool_type().as_basic_type_enum();
+                    let val = value.as_ref().map(|v| {
+                        compile_expr(context, builder, v, rt, module_fns, variables)
+                            .expect("initializer must produce a value")
+                    });
+                    (ty, val)
+                }
                 (None, Some(init_expr)) => {
                     let val = compile_expr(context, builder, init_expr, rt, module_fns, variables)
                         .expect("variable initializer must produce a value");
@@ -374,6 +394,132 @@ pub fn compile_expr<'ctx>(
             Some(val)
         }
 
+        // variable assignment ─────────────────────────────────────────────
+        Expr::VarAssign { name, value, op } => {
+            let (ptr, ty) = variables.get(name)
+                .unwrap_or_else(|| errors::fatal(
+                    Phase::Compiler,
+                    format!("Undefined variable: '{name}'"),
+                ));
+            let ptr = *ptr;
+            let ty = *ty;
+
+            let new_val = compile_expr(context, builder, value, rt, module_fns, variables)
+                .expect("assignment value must produce a value");
+
+            let store_val = match op {
+                None => new_val,
+                Some(assign_op) => {
+                    let current = builder.build_load(ty, ptr, "cur")
+                        .expect("load current value");
+                    if current.is_int_value() {
+                        let lhs = current.into_int_value();
+                        let rhs = new_val.into_int_value();
+                        let result = match assign_op {
+                            AssignBinOperator::AddAssign => builder.build_int_add(lhs, rhs, "addtmp"),
+                            AssignBinOperator::SubAssign => builder.build_int_sub(lhs, rhs, "subtmp"),
+                            AssignBinOperator::MulAssign => builder.build_int_mul(lhs, rhs, "multmp"),
+                            AssignBinOperator::DivAssign => builder.build_int_signed_div(lhs, rhs, "divtmp"),
+                            AssignBinOperator::DotAssign => errors::fatal(
+                                Phase::Compiler,
+                                ".= is not supported on integer types".to_string(),
+                            ),
+                        };
+                        result.expect("build int op").into()
+                    } else {
+                        let lhs = current.into_float_value();
+                        let rhs = new_val.into_float_value();
+                        let result = match assign_op {
+                            AssignBinOperator::AddAssign => builder.build_float_add(lhs, rhs, "faddtmp"),
+                            AssignBinOperator::SubAssign => builder.build_float_sub(lhs, rhs, "fsubtmp"),
+                            AssignBinOperator::MulAssign => builder.build_float_mul(lhs, rhs, "fmultmp"),
+                            AssignBinOperator::DivAssign => builder.build_float_div(lhs, rhs, "fdivtmp"),
+                            AssignBinOperator::DotAssign => errors::fatal(
+                                Phase::Compiler,
+                                ".= is not supported on float types".to_string(),
+                            ),
+                        };
+                        result.expect("build float op").into()
+                    }
+                }
+            };
+
+            builder.build_store(ptr, store_val).expect("build store");
+            None
+        }
+
+        // while expression ─────────────────────────────────────
+        Expr::WhileExpr { condition, body } => {
+            let parent_fn = builder.get_insert_block().unwrap().get_parent().unwrap();
+
+            let cond_bb = context.append_basic_block(parent_fn, "while_cond");
+            let body_bb = context.append_basic_block(parent_fn, "while_body");
+            let end_bb  = context.append_basic_block(parent_fn, "while_end");
+
+            // Jump into the condition check.
+            builder.build_unconditional_branch(cond_bb).expect("branch to cond");
+
+            // ── condition block ──
+            builder.position_at_end(cond_bb);
+            let cond_val = compile_expr(context, builder, condition, rt, module_fns, variables)
+                .expect("while condition must produce a value");
+            builder.build_conditional_branch(
+                cond_val.into_int_value(),
+                body_bb,
+                end_bb,
+            ).expect("build conditional branch");
+
+            // ── body block ──
+            builder.position_at_end(body_bb);
+            for expr in body {
+                compile_expr(context, builder, expr, rt, module_fns, variables);
+            }
+            // Loop back to condition.
+            builder.build_unconditional_branch(cond_bb).expect("branch back to cond");
+
+            // ── continue after the loop ──
+            builder.position_at_end(end_bb);
+            None
+        }
+
+        // conditional expression ─────────────────────────────────────
+        Expr::IfExpr { condition, then_branch, else_branch } => {
+            // Compile the condition and create basic blocks for the branches.
+            let cond_val = compile_expr(context, builder, condition, rt, module_fns, variables)
+                .expect("condition must produce a value");
+            let parent_fn = builder.get_insert_block().unwrap().get_parent().unwrap();
+            let then_bb = context.append_basic_block(parent_fn, "then");
+            let else_bb = context.append_basic_block(parent_fn, "else");
+            let merge_bb = context.append_basic_block(parent_fn, "ifcont");
+
+            // Build the conditional branch.
+            builder.build_conditional_branch(
+                cond_val.into_int_value(),
+                then_bb,
+                else_bb,
+            ).expect("build conditional branch");
+
+            // Compile the then branch.
+            builder.position_at_end(then_bb);
+            for expr in then_branch {
+                compile_expr(context, builder, expr, rt, module_fns, variables);
+            }
+            builder.build_unconditional_branch(merge_bb).expect("build branch");
+
+            // Compile the else branch (or just jump to merge if no else).
+            builder.position_at_end(else_bb);
+            if let Some(else_exprs) = else_branch {
+                for expr in else_exprs {
+                    compile_expr(context, builder, expr, rt, module_fns, variables);
+                }
+            }
+            builder.build_unconditional_branch(merge_bb).expect("build branch");
+
+            // Continue at the merge block.
+            builder.position_at_end(merge_bb);
+            None
+        }
+
         // ── unqualified function call ───────────────────────────
         Expr::FuncCall { name, args } => {
             // ── built-in print() / println(): type-based dispatch ─
@@ -394,6 +540,8 @@ pub fn compile_expr<'ctx>(
                 return None;
             }
 
+
+    
             // ── general function lookup ──────────────────────────
             // Search all modules for a matching function name.
             let mut found: Option<&FunctionValue<'ctx>> = None;
@@ -468,6 +616,43 @@ pub fn compile_expr<'ctx>(
                         ).expect("build float sub").into())
                     }
                 }
+                BinOperator::Eq | BinOperator::Neq |
+                BinOperator::Lt | BinOperator::Gt  |
+                BinOperator::Lte | BinOperator::Gte => {
+                    if lhs.is_int_value() {
+                        let pred = match op {
+                            BinOperator::Eq  => IntPredicate::EQ,
+                            BinOperator::Neq => IntPredicate::NE,
+                            BinOperator::Lt  => IntPredicate::SLT,
+                            BinOperator::Gt  => IntPredicate::SGT,
+                            BinOperator::Lte => IntPredicate::SLE,
+                            BinOperator::Gte => IntPredicate::SGE,
+                            _ => unreachable!(),
+                        };
+                        Some(builder.build_int_compare(
+                            pred,
+                            lhs.into_int_value(),
+                            rhs.into_int_value(),
+                            "cmp",
+                        ).expect("build int compare").into())
+                    } else {
+                        let pred = match op {
+                            BinOperator::Eq  => FloatPredicate::OEQ,
+                            BinOperator::Neq => FloatPredicate::ONE,
+                            BinOperator::Lt  => FloatPredicate::OLT,
+                            BinOperator::Gt  => FloatPredicate::OGT,
+                            BinOperator::Lte => FloatPredicate::OLE,
+                            BinOperator::Gte => FloatPredicate::OGE,
+                            _ => unreachable!(),
+                        };
+                        Some(builder.build_float_compare(
+                            pred,
+                            lhs.into_float_value(),
+                            rhs.into_float_value(),
+                            "fcmp",
+                        ).expect("build float compare").into())
+                    }
+                }
             }
         }
 
@@ -479,6 +664,12 @@ pub fn compile_expr<'ctx>(
         // ── integer literal ─────────────────────────────────────
         Expr::IntLiteral(v) => {
             Some(context.i64_type().const_int(*v as u64, false).into())
+        }
+
+        // ── boolean literal ─────────────────────────────────────
+        Expr::BooleanLiteral(b) => {
+            let int_val = if *b { 1 } else { 0 };
+            Some(context.bool_type().const_int(int_val, false).into())
         }
     }
 }

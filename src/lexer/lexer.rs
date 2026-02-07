@@ -9,6 +9,20 @@ pub enum Token {
     #[token("import")]
     Import,
 
+    #[token("true")]
+    True,
+    #[token("false")]
+    False,
+
+    #[token("if")]
+    If,
+
+    #[token("else")]
+    Else,
+
+    #[token("while")]
+    While,
+
     // ── punctuation ─────────────────────────────────────────────
     #[token("(")]
     LParen,
@@ -54,13 +68,29 @@ pub enum Token {
     #[regex(r"//[^\n]*", logos::skip, allow_greedy = true)]
     Error,
 
+    // ── operators ────────────────────────────────────────────────
 
+    // var definition: `a: Int := 5` or `a := 5`
     #[token("::=")]
     DoubleColonEquals,
 
     #[token(":=")]
     ColonEquals,
         
+    // variable assignment: `a = 5`
+    #[token("=")]
+    Equals,
+
+    #[token("+=")]
+    PlusEquals,
+
+    #[token("-=")]
+    MinusEquals,
+        
+    #[token(".=")]
+    DotEquals,
+
+    // meth
     #[token(":")]
     Colon,
 
@@ -69,4 +99,25 @@ pub enum Token {
 
     #[token("-")]
     Minus,
+
+    // conditional operators
+    #[token("==")]
+    EqualsEquals,
+
+    #[token("!=")]
+    BangEquals,
+
+    #[token("<=")]
+    LessEquals,
+
+    #[token(">=")]
+    GreaterEquals,
+
+    #[token("<")]
+    Less,
+
+    #[token(">")]
+    Greater,
+
+
 }
