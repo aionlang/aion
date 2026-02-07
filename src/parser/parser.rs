@@ -12,7 +12,7 @@
 //! args       = expr ("," expr)*
 //! ```
 
-use crate::ast::{Expr, Function, Import, Program, BinOperator};
+use crate::ast::{Expr, Function, Import, Program, BinOperator, AssignBinOperator};
 use crate::errors::{self, Phase};
 use crate::lexer::lexer::Token;
 use logos::Logos;
@@ -176,6 +176,8 @@ impl Parser {
                 // Look ahead to distinguish variable def from other expressions
                 if self.peek_ahead_is_var_def() {
                     self.parse_var_def()
+                } else if self.peek_ahead_is_assignment() {
+                    self.parse_assignment()
                 } else {
                     self.parse_expr()
                 }
@@ -193,6 +195,38 @@ impl Parser {
             self.tokens[self.pos + 1].token,
             Token::Colon | Token::ColonEquals | Token::DoubleColonEquals
         )
+    }
+
+    fn peek_ahead_is_assignment(&self) -> bool {
+        if self.pos + 1 >= self.tokens.len() {
+            return false;
+        }
+        matches!(
+            self.tokens[self.pos + 1].token,
+            Token::Equals | Token::PlusEquals | Token::MinusEquals | Token::DotEquals
+        )
+    }
+
+    /// Parse an assignment: `a = 5`, `a += 1`, `a -= 3`, `a .= method()`
+    fn parse_assignment(&mut self) -> Expr {
+        let name = self.parse_ident_string();
+        let op_token = self.advance(); // consume =, +=, -=, .=
+
+        let op = match op_token.token {
+            Token::Equals      => None,
+            Token::PlusEquals  => Some(AssignBinOperator::AddAssign),
+            Token::MinusEquals => Some(AssignBinOperator::SubAssign),
+            Token::DotEquals   => Some(AssignBinOperator::DotAssign),
+            _ => unreachable!(),
+        };
+
+        let value = self.parse_expr();
+
+        Expr::VarAssign {
+            name,
+            value: Box::new(value),
+            op,
+        }
     }
 
     /// Parse an expression.
@@ -408,6 +442,10 @@ impl Parser {
 
                     Expr::FuncCall { name, args }
                 }
+
+                // is it variable value modification? 
+
+
                 else {
                     // Just a variable reference
                     Expr::VarRef(name)

@@ -87,6 +87,9 @@ pub enum Token {
     #[token("-=")]
     MinusEquals,
         
+    #[token(".=")]
+    DotEquals,
+
     // meth
     #[token(":")]
     Colon,

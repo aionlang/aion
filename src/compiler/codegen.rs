@@ -9,7 +9,7 @@ use inkwell::types::BasicType;
 use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, PointerValue, ValueKind};
 use inkwell::{IntPredicate, FloatPredicate};
 
-use crate::ast::{Expr, Function, Import, UserModule, BinOperator};
+use crate::ast::{Expr, Function, Import, UserModule, BinOperator, AssignBinOperator};
 use crate::errors::{self, Phase};
 
 use super::stdlib_registry;
@@ -392,6 +392,60 @@ pub fn compile_expr<'ctx>(
                 .build_load(*ty, *ptr, name)
                 .expect("build load");
             Some(val)
+        }
+
+        // variable assignment ─────────────────────────────────────────────
+        Expr::VarAssign { name, value, op } => {
+            let (ptr, ty) = variables.get(name)
+                .unwrap_or_else(|| errors::fatal(
+                    Phase::Compiler,
+                    format!("Undefined variable: '{name}'"),
+                ));
+            let ptr = *ptr;
+            let ty = *ty;
+
+            let new_val = compile_expr(context, builder, value, rt, module_fns, variables)
+                .expect("assignment value must produce a value");
+
+            let store_val = match op {
+                None => new_val,
+                Some(assign_op) => {
+                    let current = builder.build_load(ty, ptr, "cur")
+                        .expect("load current value");
+                    if current.is_int_value() {
+                        let lhs = current.into_int_value();
+                        let rhs = new_val.into_int_value();
+                        let result = match assign_op {
+                            AssignBinOperator::AddAssign => builder.build_int_add(lhs, rhs, "addtmp"),
+                            AssignBinOperator::SubAssign => builder.build_int_sub(lhs, rhs, "subtmp"),
+                            AssignBinOperator::MulAssign => builder.build_int_mul(lhs, rhs, "multmp"),
+                            AssignBinOperator::DivAssign => builder.build_int_signed_div(lhs, rhs, "divtmp"),
+                            AssignBinOperator::DotAssign => errors::fatal(
+                                Phase::Compiler,
+                                ".= is not supported on integer types".to_string(),
+                            ),
+                        };
+                        result.expect("build int op").into()
+                    } else {
+                        let lhs = current.into_float_value();
+                        let rhs = new_val.into_float_value();
+                        let result = match assign_op {
+                            AssignBinOperator::AddAssign => builder.build_float_add(lhs, rhs, "faddtmp"),
+                            AssignBinOperator::SubAssign => builder.build_float_sub(lhs, rhs, "fsubtmp"),
+                            AssignBinOperator::MulAssign => builder.build_float_mul(lhs, rhs, "fmultmp"),
+                            AssignBinOperator::DivAssign => builder.build_float_div(lhs, rhs, "fdivtmp"),
+                            AssignBinOperator::DotAssign => errors::fatal(
+                                Phase::Compiler,
+                                ".= is not supported on float types".to_string(),
+                            ),
+                        };
+                        result.expect("build float op").into()
+                    }
+                }
+            };
+
+            builder.build_store(ptr, store_val).expect("build store");
+            None
         }
 
         // while expression ─────────────────────────────────────

@@ -62,6 +62,11 @@ pub enum Expr {
         value: Option<Box<Expr>>,         // Some(expr) or None
     },
     
+    VarAssign {
+        name: String,
+        value: Box<Expr>,
+        op: Option<AssignBinOperator>, // Some(op) for `a += 5`, None for `a = 5`
+    },
     /// Variable reference: just `a`
     VarRef(String),
 
@@ -82,6 +87,15 @@ pub enum Expr {
         condition: Box<Expr>,
         body: Vec<Expr>,
     },
+}
+
+#[derive(Debug)]
+pub enum AssignBinOperator {
+    AddAssign, // +=
+    SubAssign, // -=
+    MulAssign, // *=
+    DivAssign, // /=
+    DotAssign, // .= method call assignment, e.g. `s .=concat(" world")` → `s = s.concat(" world")`
 }
 
 #[derive(Debug)]
