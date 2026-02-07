@@ -12,6 +12,7 @@ mod compiler;
 mod errors;
 mod lexer;
 mod parser;
+mod resolver;
 mod stdlib;
 
 use std::env;
@@ -61,74 +62,24 @@ fn main() {
     let mut parser = Parser::new(&source);
     let mut program = parser.parse_program();
 
-    // ── Resolve module imports ───────────────────────────────────
+    // ── Auto-load prelude ────────────────────────────────────────
     //
-    // Three import flavours:
-    //   import aion.math;   → C-backed stdlib (compiler declares externs)
-    //   import std.io;      → Aion stdlib, embedded in the compiler binary
-    //   import utils;       → user-local .aion file (same dir or lib/)
-    //
-    let source_dir = source_path.parent().unwrap_or_else(|| std::path::Path::new("."));
-
-    for imp in &program.imports {
-        if imp.is_stdlib() {
-            continue; // C-backed modules — handled during LLVM codegen
-        }
-
-        let mod_name = imp.module_name();
-
-        // ── embedded Aion stdlib ────────────────────────────────
-        if imp.is_std() {
-            let src = stdlib::get(mod_name).unwrap_or_else(|| {
-                errors::fatal_with_hint(
-                    Phase::Compiler,
-                    format!("Unknown standard module 'std.{mod_name}'"),
-                    Some(format!("Available: {}", stdlib::available().join(", "))),
-                );
-            });
-
-            errors::info(format!("loading std.{mod_name} (embedded)"));
-
-            let mut mod_parser = Parser::new(src);
-            let mod_program = mod_parser.parse_program();
-
-            program.user_modules.push(UserModule {
-                name: mod_name.to_string(),
-                functions: mod_program.functions,
-            });
-            continue;
-        }
-
-        // ── user-local module from disk ─────────────────────────
-        let candidates = [
-            source_dir.join(format!("{mod_name}.aion")),
-            source_dir.join("lib").join(format!("{mod_name}.aion")),
-        ];
-
-        let mod_path = candidates.iter().find(|p| p.exists()).unwrap_or_else(|| {
-            errors::fatal_with_hint(
-                Phase::Compiler,
-                format!("Could not find module '{mod_name}'"),
-                Some(format!("Searched:\n  {}",
-                    candidates.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("\n  ")
-                )),
-            );
-        });
-
-        let mod_source = fs::read_to_string(mod_path).unwrap_or_else(|e| {
-            errors::fatal(Phase::Compiler, format!("Could not read {}: {e}", mod_path.display()));
-        });
-
-        errors::info(format!("loading module '{mod_name}' from {}", mod_path.display()));
-
-        let mut mod_parser = Parser::new(&mod_source);
-        let mod_program = mod_parser.parse_program();
-
+    // The prelude provides always-available functions like `println()`.
+    // It is injected as a user module so its functions are compiled and
+    // callable without any import statement.
+    {
+        let prelude_src = stdlib::prelude();
+        let mut prelude_parser = Parser::new(prelude_src);
+        let prelude_prog = prelude_parser.parse_program();
         program.user_modules.push(UserModule {
-            name: mod_name.to_string(),
-            functions: mod_program.functions,
+            name: "prelude".to_string(),
+            functions: prelude_prog.functions,
         });
     }
+
+    // ── Resolve module imports ───────────────────────────────────
+    let source_dir = source_path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    resolver::resolve_imports(&mut program, source_dir);
 
     // Collect stdlib module names (e.g. "math") for runtime build.
     let imported_modules: Vec<String> = program

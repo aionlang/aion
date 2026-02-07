@@ -5,10 +5,9 @@
 //! program    = import* function* EOF
 //! import     = "import" IDENT ("." IDENT)* ";"
 //! function   = "fn" IDENT "(" ")" "{" statement* "}"
-//! statement  = print_stmt | expr_stmt
-//! print_stmt = "print" "(" expr ")"
-//! expr_stmt  = expr
-//! expr       = module_call | float_lit | int_lit | string_lit
+//! statement  = var_def | expr_stmt
+//! expr       = func_call | module_call | float_lit | int_lit | string_lit | var_ref
+//! func_call  = IDENT "(" args ")"
 //! module_call= IDENT "." IDENT "(" args ")"
 //! args       = expr ("," expr)*
 //! ```
@@ -171,10 +170,6 @@ impl Parser {
     /// Parse a single statement inside a function body.
     fn parse_statement(&mut self) -> Expr {
         match self.peek() {
-            Some(Token::Print) => {
-                self.advance(); // consume 'print'
-                self.parse_print()
-            }
             Some(Token::Ident) => {
                 // Look ahead to distinguish variable def from other expressions
                 if self.peek_ahead_is_var_def() {
@@ -185,25 +180,6 @@ impl Parser {
             }
             _ => self.parse_expr(),
         }
-    }
-    /// Parse `print(...)` — the `print` keyword has already been consumed.
-    ///
-    /// If the argument is a string literal we emit `PrintStr`, otherwise
-    /// `PrintExpr` wrapping an arbitrary expression.
-    fn parse_print(&mut self) -> Expr {
-        self.expect(Token::LParen, "expected '(' after 'print'");
-
-        // Check if argument is a plain string literal.
-        let expr = if self.peek() == Some(&Token::Str) {
-            let st = self.advance();
-            let content = st.lexeme[1..st.lexeme.len() - 1].to_string();
-            Expr::PrintStr(content)
-        } else {
-            Expr::PrintExpr(Box::new(self.parse_expr()))
-        };
-
-        self.expect(Token::RParen, "expected ')' after print argument");
-        expr
     }
 
 
@@ -235,20 +211,9 @@ impl Parser {
         let type_annotation = if self.peek() == Some(&Token::Colon) {
             self.advance(); // consume ':'
             
-            // Parse type name
+            // Parse type name — Int, Float, or any future custom type
             let type_name = match self.peek() {
-                Some(Token::TypeInt) => {
-                    self.advance();
-                    "Int".to_string()
-                }
-                Some(Token::TypeFloat) => {
-                    self.advance();
-                    "Float".to_string()
-                }
-                Some(Token::Ident) => {
-                    // Allow custom type names for future expansion
-                    self.parse_ident_string()
-                }
+                Some(Token::Ident) => self.parse_ident_string(),
                 _ => errors::fatal_with_hint(
                     Phase::Parser,
                     format!("Expected type name after ':', got {:?}", self.peek()),
@@ -306,10 +271,10 @@ impl Parser {
             Token::Str => {
                 self.advance();
                 let content = st.lexeme[1..st.lexeme.len() - 1].to_string();
-                Expr::PrintStr(content)
+                Expr::StringLiteral(content)
             }
-            // Identifier — could be variable reference or module call
-            Token::Ident | Token::Print | Token::Fn | Token::Import => {
+            // Identifier — could be variable reference, module call, or function call
+            Token::Ident | Token::Fn | Token::Import => {
                 self.advance();
                 let name = st.lexeme.clone();
 
@@ -326,7 +291,16 @@ impl Parser {
                         func,
                         args,
                     }
-                } else {
+                }
+                // Is it a function call?  func(args…)
+                else if self.peek() == Some(&Token::LParen) {
+                    self.advance(); // consume '('
+                    let args = self.parse_arg_list();
+                    self.expect(Token::RParen, "expected ')' after arguments");
+
+                    Expr::FuncCall { name, args }
+                }
+                else {
                     // Just a variable reference
                     Expr::VarRef(name)
                 }
@@ -363,7 +337,7 @@ impl Parser {
     fn parse_ident_string(&mut self) -> String {
         let st = self.advance();
         match st.token {
-            Token::Ident | Token::Print | Token::Fn | Token::Import => st.lexeme,
+            Token::Ident | Token::Fn | Token::Import => st.lexeme,
             other => errors::fatal(
                 Phase::Parser,
                 format!("Expected identifier, got {other:?}"),

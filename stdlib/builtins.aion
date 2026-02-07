@@ -1,0 +1,87 @@
+// ═══════════════════════════════════════════════════════════════════
+// Aion Built-in Function Declarations
+// ═══════════════════════════════════════════════════════════════════
+//
+// This file contains the canonical declarations of all built-in
+// functions that are available in every Aion program without an
+// import statement.
+//
+// These are **stub declarations** — the real implementations live in
+// C (runtime/aion_runtime.c) and are linked into every binary.
+// This file exists so that:
+//
+//   1. An IDE / language server can resolve "Go to Definition" for
+//      built-in functions like `print()`.
+//   2. Developers have a single human-readable reference for every
+//      built-in's signature, parameter types, and behaviour.
+//   3. Future tooling (linters, doc generators) can consume this as
+//      the source of truth.
+//
+// Syntax convention:
+//   @builtin            — marks the function as compiler-intrinsic
+//   @runtime "<symbol>" — the C symbol that backs this function
+//   @param  <name> <Type> — parameter name and type
+//   @return <Type>      — return type (Void if omitted)
+//
+// ═══════════════════════════════════════════════════════════════════
+
+// ── I/O ─────────────────────────────────────────────────────────
+
+// @builtin
+// @runtime "aion_print"
+// @param message String
+// @return Void
+//
+// Prints a string to standard output
+//
+// Example:
+//   print("Hello, world!\n")
+//
+fn print(message: String) {}
+
+// @builtin
+// @runtime "aion_print_int"
+// @param value Int
+// @return Void
+//
+// Prints a 64-bit integer to standard output, followed by a newline.
+//
+// Example:
+//   x: Int := 42
+//   print(x)
+//
+fn print_int(value: Int) {}
+
+// @builtin
+// @runtime "aion_print_float"
+// @param value Float
+// @return Void
+//
+// Prints a floating-point number to standard output, followed by a
+// newline. Very small or very large values use scientific notation.
+//
+// Example:
+//   print(3.14)
+//
+fn print_float(value: Float) {}
+
+// ── Process control ─────────────────────────────────────────────
+
+// @builtin
+// @runtime "aion_panic"
+// @param message String
+// @return Void
+//
+// Immediately terminates the program with an error message.
+// The message is printed to standard error in the format:
+//   [aion] panic: <message>
+//
+// Example:
+//   panic("something went wrong")
+//
+fn panic(message: String) {}
+
+// ── Memory ──────────────────────────────────────────────────────
+//
+// Aion uses automatic garbage collection. There are no manual
+// allocation or deallocation functions exposed to user code.

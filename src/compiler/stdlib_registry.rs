@@ -2,6 +2,17 @@
 //!
 //! Maps module names (e.g. `"math"`) to their C function descriptors.
 //! Extend this file when adding new `import aion.*` modules.
+//!
+//! ## Adding a new module
+//!
+//! Use the `stdlib_module!` macro:
+//!
+//! ```ignore
+//! "strings" => stdlib_module! {
+//!     concat  => "aion_str_concat"  (2) -> f64,
+//!     length  => "aion_str_length"  (1) -> f64,
+//! }
+//! ```
 
 use std::collections::HashMap;
 
@@ -16,22 +27,36 @@ pub struct StdlibFunc {
     pub returns_f64: bool,
 }
 
+/// Declaratively build a `HashMap` of stdlib function descriptors.
+///
+/// Syntax:  `name => "c_symbol" (arity) -> f64,`
+macro_rules! stdlib_module {
+    ( $( $name:ident => $c_name:literal ($arity:expr) -> f64 ),+ $(,)? ) => {{
+        let mut m = HashMap::new();
+        $(
+            m.insert(
+                stringify!($name),
+                StdlibFunc { c_name: $c_name, arity: $arity, returns_f64: true },
+            );
+        )+
+        Some(m)
+    }};
+}
+
 /// Return the function registry for a given module name.
 ///
 /// Extend this when you add new `import aion.*` modules backed by C.
 pub fn registry(module: &str) -> Option<HashMap<&'static str, StdlibFunc>> {
     match module {
-        "math" => {
-            let mut m = HashMap::new();
-            m.insert("sqrt",  StdlibFunc { c_name: "aion_math_sqrt",  arity: 1, returns_f64: true });
-            m.insert("abs",   StdlibFunc { c_name: "aion_math_abs",   arity: 1, returns_f64: true });
-            m.insert("sin",   StdlibFunc { c_name: "aion_math_sin",   arity: 1, returns_f64: true });
-            m.insert("cos",   StdlibFunc { c_name: "aion_math_cos",   arity: 1, returns_f64: true });
-            m.insert("floor", StdlibFunc { c_name: "aion_math_floor", arity: 1, returns_f64: true });
-            m.insert("ceil",  StdlibFunc { c_name: "aion_math_ceil",  arity: 1, returns_f64: true });
-            m.insert("pow",   StdlibFunc { c_name: "aion_math_pow",   arity: 2, returns_f64: true });
-            Some(m)
-        }
+        "math" => stdlib_module! {
+            sqrt  => "aion_math_sqrt"  (1) -> f64,
+            abs   => "aion_math_abs"   (1) -> f64,
+            sin   => "aion_math_sin"   (1) -> f64,
+            cos   => "aion_math_cos"   (1) -> f64,
+            floor => "aion_math_floor" (1) -> f64,
+            ceil  => "aion_math_ceil"  (1) -> f64,
+            pow   => "aion_math_pow"   (2) -> f64,
+        },
         _ => None,
     }
 }

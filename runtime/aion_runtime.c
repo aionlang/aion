@@ -18,18 +18,33 @@
 
 /* ── I/O ─────────────────────────────────────────────────────── */
 
-/* Print a string followed by a newline. */
+/* Print a string (no trailing newline). */
 void aion_print(const char *s) {
-    puts(s);
+    printf("%s", s);
+}
+
+/* Print a 64-bit integer (no trailing newline). */
+void aion_print_int(long long n) {
+    printf("%lld", n);
+}
+
+/* Print a double (no trailing newline). */
+void aion_print_float(double f) {
+    printf("%g", f);
+}
+
+/* Print a string followed by a newline. */
+void aion_println(const char *s) {
+    printf("%s\n", s);
 }
 
 /* Print a 64-bit integer followed by a newline. */
-void aion_print_int(long long n) {
+void aion_println_int(long long n) {
     printf("%lld\n", n);
 }
 
 /* Print a double followed by a newline. */
-void aion_print_float(double f) {
+void aion_println_float(double f) {
     printf("%g\n", f);
 }
 
