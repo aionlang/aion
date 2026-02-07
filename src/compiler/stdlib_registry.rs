@@ -5,7 +5,7 @@
 //!
 //! ## Adding a new module
 //!
-//! Use the `stdlib_module!` macro:
+//! For all-f64 modules (like math), use the `stdlib_module!` macro:
 //!
 //! ```ignore
 //! "strings" => stdlib_module! {
@@ -13,21 +13,40 @@
 //!     length  => "aion_str_length"  (1) -> f64,
 //! }
 //! ```
+//!
+//! For modules with mixed types, use `stdlib_typed!`:
+//!
+//! ```ignore
+//! "sockets" => stdlib_typed! {
+//!     _raw_create => "aion_socket_raw_create" [Int, Int, Int] -> Int,
+//!     _raw_recv   => "aion_socket_raw_recv"   [Int, Int]      -> Str,
+//! }
+//! ```
 
 use std::collections::HashMap;
+
+/// Parameter / return type for C-backed stdlib functions.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CType {
+    Int,    // i64  (long long in C)
+    Float,  // f64  (double in C)
+    Str,    // ptr  (const char * in C)
+    Void,   // void (return only)
+}
 
 /// Describes one C function exposed from a standard-library module.
 #[derive(Clone, Debug)]
 pub struct StdlibFunc {
     /// The C symbol name, e.g. `"aion_math_sqrt"`.
     pub c_name: &'static str,
-    /// Number of f64 parameters.
-    pub arity: usize,
-    /// Return type — for now all math functions return f64.
-    pub returns_f64: bool,
+    /// Parameter types, in order.
+    pub params: Vec<CType>,
+    /// Return type.
+    pub ret: CType,
 }
 
-/// Declaratively build a `HashMap` of stdlib function descriptors.
+/// Declaratively build a `HashMap` of stdlib function descriptors
+/// where every parameter and return value is `f64`.
 ///
 /// Syntax:  `name => "c_symbol" (arity) -> f64,`
 macro_rules! stdlib_module {
@@ -36,7 +55,31 @@ macro_rules! stdlib_module {
         $(
             m.insert(
                 stringify!($name),
-                StdlibFunc { c_name: $c_name, arity: $arity, returns_f64: true },
+                StdlibFunc {
+                    c_name: $c_name,
+                    params: vec![CType::Float; $arity],
+                    ret: CType::Float,
+                },
+            );
+        )+
+        Some(m)
+    }};
+}
+
+/// Declaratively build a `HashMap` with explicit per-parameter types.
+///
+/// Syntax:  `name => "c_symbol" [Type, Type, …] -> RetType,`
+macro_rules! stdlib_typed {
+    ( $( $name:ident => $c_name:literal [ $($pty:ident),* ] -> $rty:ident ),+ $(,)? ) => {{
+        let mut m = HashMap::new();
+        $(
+            m.insert(
+                stringify!($name),
+                StdlibFunc {
+                    c_name: $c_name,
+                    params: vec![ $( CType::$pty ),* ],
+                    ret: CType::$rty,
+                },
             );
         )+
         Some(m)
@@ -59,6 +102,25 @@ pub fn registry(module: &str) -> Option<HashMap<&'static str, StdlibFunc>> {
             max   => "aion_math_max"   (2) -> f64,
             min   => "aion_math_min"   (2) -> f64,
         },
+
+        "sockets" => stdlib_typed! {
+            // Raw primitives (prefixed with _ to discourage direct use)
+            _raw_create   => "aion_socket_raw_create"   [Int, Int, Int]      -> Int,
+            _raw_bind     => "aion_socket_raw_bind"     [Int, Int]           -> Int,
+            _raw_connect  => "aion_socket_raw_connect"  [Int, Str, Int]      -> Int,
+            _raw_listen   => "aion_socket_raw_listen"   [Int, Int]           -> Int,
+            _raw_accept   => "aion_socket_raw_accept"   [Int]                -> Int,
+            _raw_send     => "aion_socket_raw_send"     [Int, Str, Int]      -> Int,
+            _raw_recv     => "aion_socket_raw_recv"     [Int, Int]           -> Str,
+            _raw_close    => "aion_socket_raw_close"    [Int]                -> Int,
+            _raw_shutdown => "aion_socket_raw_shutdown"  [Int, Int]           -> Int,
+            _raw_setopt   => "aion_socket_raw_setopt"   [Int, Int, Int]      -> Int,
+            _raw_error    => "aion_socket_raw_error"    []                   -> Int,
+            _raw_is_valid => "aion_socket_raw_is_valid" [Int]                -> Int,
+            _raw_cleanup  => "aion_socket_raw_cleanup"  []                   -> Void,
+            _strlen       => "aion_socket_strlen"       [Str]                -> Int
+        },
+
         _ => None,
     }
 }

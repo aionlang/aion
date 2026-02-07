@@ -197,14 +197,59 @@ fn compile_fn_body_inner<'ctx>(
         compile_expr(context, builder, expr, rt, module_fns, &mut variables, type_registry, &mut var_type_names);
     }
 
-    if returns_value {
-        let i32_type = context.i32_type();
-        builder
-            .build_return(Some(&i32_type.const_int(0, false)))
-            .expect("build return");
-    } else {
-        builder.build_return(None).expect("build void return");
+    // Add a default terminator if the last basic block needs one.
+    let needs_terminator = builder.get_insert_block()
+        .map(|bb| bb.get_terminator().is_none())
+        .unwrap_or(false);
+    if needs_terminator {
+        let ret_ty = fn_val.get_type().get_return_type();
+        match ret_ty {
+            None => { builder.build_return(None).expect("build void return"); }
+            Some(ty) if ty.is_int_type() => {
+                let zero = ty.into_int_type().const_zero();
+                builder.build_return(Some(&zero)).expect("build default int return");
+            }
+            Some(ty) if ty.is_float_type() => {
+                let zero = ty.into_float_type().const_zero();
+                builder.build_return(Some(&zero)).expect("build default float return");
+            }
+            Some(ty) if ty.is_pointer_type() => {
+                let null = ty.into_pointer_type().const_null();
+                builder.build_return(Some(&null)).expect("build default ptr return");
+            }
+            Some(ty) if ty.is_struct_type() => {
+                let zero = ty.into_struct_type().const_zero();
+                builder.build_return(Some(&zero)).expect("build default struct return");
+            }
+            _ => { builder.build_return(None).expect("build void return"); }
+        }
     }
+}
+
+/// Forward-declare all top-level functions so they can be called from
+/// constructors and methods that are compiled earlier.
+///
+/// Registers them under the synthetic `"__top"` module in `module_fns`.
+pub fn forward_declare_functions<'ctx>(
+    context: &'ctx Context,
+    module: &Module<'ctx>,
+    functions: &[Function],
+    module_fns: &mut ModuleFns<'ctx>,
+) {
+    let mut top_fns: HashMap<String, FunctionValue<'ctx>> = HashMap::new();
+    for func in functions {
+        let param_types = build_param_types(context, &func.params);
+        let fn_type = if func.name == "main" {
+            context.i32_type().fn_type(&param_types, false)
+        } else if let Some(ret_ty) = resolve_type(context, func.return_type.as_deref()) {
+            ret_ty.fn_type(&param_types, false)
+        } else {
+            context.void_type().fn_type(&param_types, false)
+        };
+        let fn_val = module.add_function(&func.name, fn_type, None);
+        top_fns.insert(func.name.clone(), fn_val);
+    }
+    module_fns.insert("__top".to_string(), top_fns);
 }
 
 /// Forward-declare all top-level functions so they can call each other
@@ -218,25 +263,10 @@ pub fn compile_functions<'ctx>(
     module_fns: &mut ModuleFns<'ctx>,
     type_registry: &TypeRegistry<'ctx>,
 ) {
-    // 1. Forward-declare every top-level function with the correct type.
-    let mut top_fns: HashMap<String, FunctionValue<'ctx>> = HashMap::new();
-    for func in functions {
-        let param_types = build_param_types(context, &func.params);
-        let fn_type = if func.name == "main" {
-            // Entry point always returns i32.
-            context.i32_type().fn_type(&param_types, false)
-        } else if let Some(ret_ty) = resolve_type(context, func.return_type.as_deref()) {
-            ret_ty.fn_type(&param_types, false)
-        } else {
-            // No return type annotation → void.
-            context.void_type().fn_type(&param_types, false)
-        };
-        let fn_val = module.add_function(&func.name, fn_type, None);
-        top_fns.insert(func.name.clone(), fn_val);
+    // 1. Forward-declare if not already done by forward_declare_functions.
+    if !module_fns.contains_key("__top") {
+        forward_declare_functions(context, module, functions, module_fns);
     }
-    // Register them under a synthetic "__top" module so the expr
-    // compiler can find them via the normal module_fns lookup.
-    module_fns.insert("__top".to_string(), top_fns);
 
     // 2. Compile each body (the LLVM function already exists).
     for func in functions {

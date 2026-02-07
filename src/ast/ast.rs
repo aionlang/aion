@@ -111,6 +111,17 @@ pub enum Expr {
         field: String,
         value: Box<Expr>,
     },
+
+    /// Chained method call: `expr.method(args…)`
+    ///
+    /// Unlike `ModuleCall` (where the receiver is a bare identifier),
+    /// the receiver here is an arbitrary expression, e.g.
+    /// `it.stream.send(data)`.
+    MethodCall {
+        object: Box<Expr>,
+        method: String,
+        args: Vec<Expr>,
+    },
 }
 
 #[derive(Debug)]

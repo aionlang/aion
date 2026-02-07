@@ -1,0 +1,34 @@
+import aion.sockets;
+
+fn main() {
+    println("Starting echo server on port 8080...")
+    
+    server := sockets.TcpListener(8080)
+    
+    if (server.listen(5) < 0) {
+        println("Failed to listen")
+        return
+    }
+    
+    println("Server listening. Waiting for connection...")
+    
+    client := server.accept()
+    
+    if (client.isValid() == 0) {
+        println("Failed to accept client")
+        server.close()
+        return
+    }
+    
+    println("Client connected!")
+    
+    data := client.receive(1024)
+    println("Received: ${data}")
+    
+    client.send("Echo: ${data}")
+    
+    client.close()
+    server.close()
+    
+    println("Server shut down")
+}

@@ -34,6 +34,6 @@ pub type TypeRegistry<'ctx> = HashMap<String, TypeInfo<'ctx>>;
 
 pub use runtime::declare_runtime;
 pub use stdlib::declare_stdlib;
-pub use func::{compile_functions, compile_user_module};
+pub use func::{forward_declare_functions, compile_functions, compile_user_module};
 pub use expr::compile_expr;
 pub use types::{compile_type_defs, compile_constructors, compile_methods};

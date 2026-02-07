@@ -56,24 +56,28 @@ impl<'ctx> Compiler<'ctx> {
         // Create LLVM struct types for all user-defined type definitions.
         let type_registry = codegen::compile_type_defs(self.context, &program.type_defs);
 
-        // Compile explicit constructors into LLVM functions.
-        let ctor_fns = codegen::compile_constructors(
-            self.context, &self.module, &self.builder,
-            &program.type_defs, &type_registry, &rt, &module_fns,
+        // Forward-declare all top-level functions so constructors/methods
+        // can call helper functions like AF_INET(), SOCK_STREAM(), etc.
+        codegen::forward_declare_functions(
+            self.context, &self.module, &program.functions, &mut module_fns,
         );
-        if !ctor_fns.is_empty() {
-            module_fns.insert("__ctors".to_string(), ctor_fns);
-        }
+
+        // Compile explicit constructors into LLVM functions.
+        // Two-pass: forward-declares all, then compiles bodies.
+        // Inserts __ctors into module_fns internally.
+        codegen::compile_constructors(
+            self.context, &self.module, &self.builder,
+            &program.type_defs, &type_registry, &rt, &mut module_fns,
+        );
 
         // Compile methods (both inline type methods and impl methods).
-        let method_maps = codegen::compile_methods(
+        // Two-pass: forward-declares all, then compiles bodies.
+        // Inserts __methods_TypeName entries into module_fns internally.
+        codegen::compile_methods(
             self.context, &self.module, &self.builder,
             &program.type_defs, &program.impl_methods,
-            &type_registry, &rt, &module_fns,
+            &type_registry, &rt, &mut module_fns,
         );
-        for (type_name, methods) in method_maps {
-            module_fns.insert(format!("__methods_{type_name}"), methods);
-        }
 
         for user_mod in &program.user_modules {
             let fns = codegen::compile_user_module(

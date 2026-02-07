@@ -598,6 +598,25 @@ impl Parser {
         let st = self.peek_spanned().expect("expected expression").clone();
 
         match st.token {
+            // ── unary minus: -expr ──────────────────────────────
+            Token::Minus => {
+                self.advance(); // consume '-'
+                let inner = self.parse_primary();
+                // Fold negative literals at parse time.
+                match inner {
+                    Expr::IntLiteral(v) => Expr::IntLiteral(-v),
+                    Expr::FloatLiteral(v) => Expr::FloatLiteral(-v),
+                    other => {
+                        // General case: 0 - expr
+                        Expr::BinaryOp {
+                            op: BinOperator::Sub,
+                            left: Box::new(Expr::IntLiteral(0)),
+                            right: Box::new(other),
+                        }
+                    }
+                }
+            }
+
             Token::FloatLit => {
                 self.advance();
                 Expr::FloatLiteral(
@@ -681,29 +700,52 @@ impl Parser {
                 self.advance();
                 let name = st.lexeme.clone();
 
-                // Is it a dot-access?  module.func(args…) or field access a.name
+                // ── dot-access chain ─────────────────────────────
+                // Handles:  module.func(args)          → ModuleCall
+                //           obj.field                  → FieldAccess
+                //           obj.field.method(args)     → MethodCall (chained)
+                //           obj.field.field2           → FieldAccess (chained)
                 if self.peek() == Some(&Token::Dot) {
-                    self.advance(); // consume '.'
+                    self.advance(); // consume first '.'
                     let member = self.parse_ident_string();
 
-                    if self.peek() == Some(&Token::LParen) {
+                    let mut expr = if self.peek() == Some(&Token::LParen) {
                         // module.func(args…) → ModuleCall
                         self.advance(); // consume '('
                         let args = self.parse_arg_list();
                         self.expect(Token::RParen, "expected ')' after arguments");
-
-                        Expr::ModuleCall {
-                            module: name,
-                            func: member,
-                            args,
-                        }
+                        Expr::ModuleCall { module: name, func: member, args }
                     } else {
-                        // a.name → FieldAccess
+                        // obj.field → FieldAccess
                         Expr::FieldAccess {
                             object: Box::new(Expr::VarRef(name)),
                             field: member,
                         }
+                    };
+
+                    // Continue chaining: .field or .method(args)
+                    while self.peek() == Some(&Token::Dot) {
+                        self.advance(); // consume '.'
+                        let next_member = self.parse_ident_string();
+
+                        if self.peek() == Some(&Token::LParen) {
+                            self.advance(); // consume '('
+                            let args = self.parse_arg_list();
+                            self.expect(Token::RParen, "expected ')' after arguments");
+                            expr = Expr::MethodCall {
+                                object: Box::new(expr),
+                                method: next_member,
+                                args,
+                            };
+                        } else {
+                            expr = Expr::FieldAccess {
+                                object: Box::new(expr),
+                                field: next_member,
+                            };
+                        }
                     }
+
+                    expr
                 }
                 // Is it a function call?  func(args…)
                 else if self.peek() == Some(&Token::LParen) {

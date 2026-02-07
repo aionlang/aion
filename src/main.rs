@@ -108,7 +108,7 @@ fn main() {
     let rt_lib = compiler::runtime::build(&imported_modules);
     errors::info(format!("built runtime → {}", rt_lib.display()));
 
-    compiler::linker::link(&obj_path, &rt_lib, &output_path);
+    compiler::linker::link(&obj_path, &rt_lib, &output_path, &imported_modules);
     errors::success(format!("done → {}", output_path.display()));
 
     // ── Run the compiled binary ─────────────────────────────────

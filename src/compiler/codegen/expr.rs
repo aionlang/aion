@@ -124,6 +124,61 @@ pub fn compile_expr<'ctx>(
                 }
             }
 
+            // ── constructor call via module: sockets.TcpListener(8080) ──
+            if type_registry.contains_key(func.as_str()) {
+                if let Some(ctors) = module_fns.get("__ctors") {
+                    if let Some(ctor_fn) = ctors.get(func.as_str()) {
+                        let llvm_args: Vec<BasicMetadataValueEnum> = args
+                            .iter()
+                            .map(|a| {
+                                compile_expr(context, builder, a, rt, module_fns, variables, type_registry, var_type_names)
+                                    .expect("constructor argument must produce a value")
+                                    .into()
+                            })
+                            .collect();
+                        let call = builder
+                            .build_call(*ctor_fn, &llvm_args, "modctorcall")
+                            .expect("build module constructor call");
+                        return match call.try_as_basic_value() {
+                            ValueKind::Basic(val) => Some(val),
+                            ValueKind::Instruction(_) => None,
+                        };
+                    }
+                }
+                // Shorthand constructor (no explicit constructor block).
+                if let Some(type_info) = type_registry.get(func.as_str()) {
+                    if !type_info.has_explicit_constructor {
+                        let alloca = builder
+                            .build_alloca(type_info.struct_type, "mod_ctor_tmp")
+                            .expect("build struct alloca");
+                        for (i, param_name) in type_info.constructor_params.iter().enumerate() {
+                            if i >= args.len() {
+                                errors::fatal(
+                                    Phase::Compiler,
+                                    format!(
+                                        "Constructor for '{}' expects {} arguments, got {}",
+                                        func, type_info.constructor_params.len(), args.len()
+                                    ),
+                                );
+                            }
+                            let field_idx = type_info.fields.iter()
+                                .position(|(fname, _)| fname == param_name)
+                                .unwrap();
+                            let val = compile_expr(context, builder, &args[i], rt, module_fns, variables, type_registry, var_type_names)
+                                .expect("constructor argument must produce a value");
+                            let field_ptr = builder
+                                .build_struct_gep(type_info.struct_type, alloca, field_idx as u32, &format!("field_{param_name}"))
+                                .expect("build struct gep");
+                            builder.build_store(field_ptr, val).expect("build field store");
+                        }
+                        let struct_val = builder
+                            .build_load(type_info.struct_type, alloca, "struct_val")
+                            .expect("load struct");
+                        return Some(struct_val);
+                    }
+                }
+            }
+
             let mod_fns = module_fns.get(module).unwrap_or_else(|| {
                 errors::fatal_with_hint(
                     Phase::Compiler,
@@ -234,15 +289,41 @@ pub fn compile_expr<'ctx>(
                 .build_alloca(llvm_type, name)
                 .expect("build alloca");
 
-            if let Some(val) = init_val {
-                builder.build_store(alloca, val).expect("build store");
+            if let Some(val) = &init_val {
+                builder.build_store(alloca, *val).expect("build store");
             }
 
-            // Track the Aion type name for struct variables (for field access).
-            if let Some(init_expr) = value {
-                if let Expr::FuncCall { name: ctor_name, .. } = init_expr.as_ref() {
-                    if type_registry.contains_key(ctor_name.as_str()) {
-                        var_type_names.insert(name.clone(), ctor_name.clone());
+            // Track the Aion type name for struct variables (for field/method access).
+            // Strategy 1: explicit type annotation matching a struct type.
+            if let Some(ann) = type_annotation.as_deref() {
+                if type_registry.contains_key(ann) {
+                    var_type_names.insert(name.clone(), ann.to_string());
+                }
+            }
+            // Strategy 2: FuncCall to a known type constructor.
+            if !var_type_names.contains_key(name) {
+                if let Some(init_expr) = value {
+                    if let Expr::FuncCall { name: ctor_name, .. } = init_expr.as_ref() {
+                        if type_registry.contains_key(ctor_name.as_str()) {
+                            var_type_names.insert(name.clone(), ctor_name.clone());
+                        }
+                    }
+                    // Strategy 3: ModuleCall to a known type constructor (e.g., sockets.TcpListener(8080)).
+                    if let Expr::ModuleCall { func: fn_name, .. } = init_expr.as_ref() {
+                        if type_registry.contains_key(fn_name.as_str()) {
+                            var_type_names.insert(name.clone(), fn_name.clone());
+                        }
+                    }
+                }
+            }
+            // Strategy 4: infer from the LLVM value type matching a known struct type.
+            if !var_type_names.contains_key(name) {
+                if let Some(val) = &init_val {
+                    for (tname, tinfo) in type_registry.iter() {
+                        if val.get_type() == tinfo.struct_type.as_basic_type_enum() {
+                            var_type_names.insert(name.clone(), tname.clone());
+                            break;
+                        }
                     }
                 }
             }
@@ -552,6 +633,28 @@ pub fn compile_expr<'ctx>(
                             rhs.into_int_value(),
                             "cmp",
                         ).expect("build int compare").into())
+                    } else if lhs.is_pointer_value() {
+                        // Pointer comparison: convert both to integers.
+                        let lhs_int = builder.build_ptr_to_int(
+                            lhs.into_pointer_value(), context.i64_type(), "ptr2int_l"
+                        ).expect("ptr to int lhs");
+                        let rhs_int = if rhs.is_pointer_value() {
+                            builder.build_ptr_to_int(
+                                rhs.into_pointer_value(), context.i64_type(), "ptr2int_r"
+                            ).expect("ptr to int rhs")
+                        } else if rhs.is_int_value() {
+                            rhs.into_int_value()
+                        } else {
+                            errors::fatal(Phase::Compiler, "Cannot compare pointer with float".to_string())
+                        };
+                        let pred = match op {
+                            BinOperator::Eq  => IntPredicate::EQ,
+                            BinOperator::Neq => IntPredicate::NE,
+                            _ => errors::fatal(Phase::Compiler,
+                                "Only == and != supported for pointer comparisons".to_string()),
+                        };
+                        Some(builder.build_int_compare(pred, lhs_int, rhs_int, "ptrcmp")
+                            .expect("build ptr compare").into())
                     } else {
                         let pred = match op {
                             BinOperator::Eq  => FloatPredicate::OEQ,
@@ -680,6 +783,72 @@ pub fn compile_expr<'ctx>(
             }
         }
 
+        // ── chained method call: expr.method(args…) ────────────
+        Expr::MethodCall { object, method, args } => {
+            // Currently only supports: FieldAccess.method(args)
+            // i.e. chains like `it.stream.send(data)`
+            if let Expr::FieldAccess { object: inner_obj, field } = object.as_ref() {
+                if let Expr::VarRef(var_name) = inner_obj.as_ref() {
+                    // Resolve the type of the intermediary field.
+                    let owner_type_name = var_type_names.get(var_name.as_str()).unwrap_or_else(|| {
+                        errors::fatal(Phase::Compiler,
+                            format!("Variable '{var_name}' is not a struct type (cannot chain '.{field}.{method}()')"))
+                    });
+                    let owner_info = type_registry.get(owner_type_name.as_str()).unwrap_or_else(|| {
+                        errors::fatal(Phase::Compiler, format!("Unknown type '{owner_type_name}'"))
+                    });
+                    let (var_ptr, _) = variables.get(var_name.as_str()).unwrap();
+
+                    // Get the field index and LLVM type.
+                    let field_idx = owner_info.fields.iter()
+                        .position(|(fname, _)| fname == field)
+                        .unwrap_or_else(|| errors::fatal(Phase::Compiler,
+                            format!("Type '{owner_type_name}' has no field '{field}'")));
+                    let (_fname, field_llvm_ty) = &owner_info.fields[field_idx];
+
+                    // Find the type name of the field by matching its LLVM struct type.
+                    let field_type_name = type_registry.iter()
+                        .find(|(_name, info)| info.struct_type.as_basic_type_enum() == *field_llvm_ty)
+                        .map(|(name, _)| name.clone())
+                        .unwrap_or_else(|| errors::fatal(Phase::Compiler,
+                            format!("Cannot determine struct type for field '{field}' of '{owner_type_name}'")));
+
+                    // Look up the method on the field's type.
+                    let method_key = format!("__methods_{field_type_name}");
+                    let methods = module_fns.get(&method_key).unwrap_or_else(|| {
+                        errors::fatal(Phase::Compiler,
+                            format!("Type '{field_type_name}' has no methods (looking for '{method}')"))
+                    });
+                    let method_fn = methods.get(method.as_str()).unwrap_or_else(|| {
+                        errors::fatal(Phase::Compiler,
+                            format!("Type '{field_type_name}' has no method '{method}'"))
+                    });
+
+                    // GEP to the field — this gives us a *pointer* to the nested struct,
+                    // which serves as the `it` argument for the method.
+                    let field_ptr = builder
+                        .build_struct_gep(owner_info.struct_type, *var_ptr, field_idx as u32, &format!("gep_{field}"))
+                        .expect("build struct gep for chained method");
+
+                    let mut llvm_args: Vec<BasicMetadataValueEnum> = vec![field_ptr.into()];
+                    for a in args {
+                        let val = compile_expr(context, builder, a, rt, module_fns, variables, type_registry, var_type_names)
+                            .expect("method argument must produce a value");
+                        llvm_args.push(val.into());
+                    }
+                    let call = builder
+                        .build_call(*method_fn, &llvm_args, "chainedcall")
+                        .expect("build chained method call");
+                    return match call.try_as_basic_value() {
+                        ValueKind::Basic(val) => Some(val),
+                        ValueKind::Instruction(_) => None,
+                    };
+                }
+            }
+            errors::fatal(Phase::Compiler,
+                format!("Unsupported chained method call: .{method}() on complex expression"))
+        }
+
         // ── return statement ────────────────────────────────────
         Expr::ReturnExpr { value } => {
             if let Some(val_expr) = value {
@@ -687,7 +856,30 @@ pub fn compile_expr<'ctx>(
                     .expect("return value must produce a value");
                 builder.build_return(Some(&val)).expect("build return");
             } else {
-                builder.build_return(None).expect("build void return");
+                // Bare `return` — check if the parent function has a
+                // non-void return type and emit a default value.
+                let parent_fn = builder.get_insert_block().unwrap().get_parent().unwrap();
+                let ret_ty = parent_fn.get_type().get_return_type();
+                if let Some(ty) = ret_ty {
+                    // Return a zero/default value for the return type.
+                    if ty.is_int_type() {
+                        let zero = ty.into_int_type().const_zero();
+                        builder.build_return(Some(&zero)).expect("build default int return");
+                    } else if ty.is_float_type() {
+                        let zero = ty.into_float_type().const_zero();
+                        builder.build_return(Some(&zero)).expect("build default float return");
+                    } else if ty.is_pointer_type() {
+                        let null = ty.into_pointer_type().const_null();
+                        builder.build_return(Some(&null)).expect("build default ptr return");
+                    } else if ty.is_struct_type() {
+                        let zero = ty.into_struct_type().const_zero();
+                        builder.build_return(Some(&zero)).expect("build default struct return");
+                    } else {
+                        builder.build_return(None).expect("build void return");
+                    }
+                } else {
+                    builder.build_return(None).expect("build void return");
+                }
             }
             // After a return, create a new basic block for any dead code.
             let parent_fn = builder.get_insert_block().unwrap().get_parent().unwrap();

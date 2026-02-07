@@ -19,6 +19,7 @@ pub fn get(name: &str) -> Option<&'static str> {
     match name {
         "io" => Some(include_str!("../stdlib/io.aion")),
         "name" => Some(include_str!("../stdlib/name.aion")),
+        "sockets" => Some(include_str!("../stdlib/sockets.aion")),
         // ── add new modules here ──────────────────────────────
         // "strings" => Some(include_str!("../stdlib/strings.aion")),
         // "fmt"     => Some(include_str!("../stdlib/fmt.aion")),
@@ -50,6 +51,7 @@ pub fn get_stub(name: &str) -> Option<&'static str> {
     match name {
         "builtins" => Some(include_str!("../stdlib/builtins.aion")),
         "math"     => Some(include_str!("../stdlib/math.aion")),
+        "sockets" => Some(include_str!("../stdlib/sockets.aion")),
         _ => None,
     }
 }

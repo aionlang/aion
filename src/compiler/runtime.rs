@@ -15,6 +15,9 @@ const RUNTIME_SRC: &str = include_str!("../../runtime/aion_runtime.c");
 /// The math module C source.
 const MATH_SRC: &str = include_str!("../../runtime/aion_math.c");
 
+/// The sockets module C source.
+const SOCKETS_SRC: &str = include_str!("../../runtime/aion_sockets.c");
+
 /// Build the Aion runtime (core + stdlib modules) into a static
 /// library and return its path.
 ///
@@ -25,11 +28,14 @@ pub fn build(imported_modules: &[String]) -> PathBuf {
     std::fs::create_dir_all(&cache_dir).expect("failed to create runtime cache dir");
 
     // ── determine which C sources to compile ────────────────────
+
+
     let mut sources: Vec<(&str, &str)> = vec![("aion_runtime.c", RUNTIME_SRC)];
 
     for m in imported_modules {
         match m.as_str() {
             "math" => sources.push(("aion_math.c", MATH_SRC)),
+            "sockets" => sources.push(("aion_sockets.c", SOCKETS_SRC)),
             other  => errors::warn(Phase::Compiler, format!("no C source for module '{other}'")),
         }
     }

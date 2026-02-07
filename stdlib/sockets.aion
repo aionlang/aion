@@ -1,0 +1,257 @@
+// ═══════════════════════════════════════════════════════════════════
+// Aion Standard Library — sockets module (high-level API)
+// ═══════════════════════════════════════════════════════════════════
+//
+// Object-oriented socket API built on top of low-level C primitives.
+//
+// Usage:
+//   import aion.sockets;
+//
+//   fn main() {
+//       server := sockets.TcpListener(8080)
+//       server.listen()
+//       client := server.accept()
+//       client.send("Hello, world!")
+//       data := client.receive(1024)
+//       client.close()
+//       server.close()
+//   }
+//
+
+// ── Constants ─────────────────────────────────────────────────────
+
+// Socket domains
+fn AF_INET() -> Int { return 2 }
+
+// Socket types
+fn SOCK_STREAM() -> Int { return 1 }
+fn SOCK_DGRAM() -> Int { return 2 }
+
+// Socket options
+fn OPT_REUSEADDR() -> Int { return 1 }
+fn OPT_NONBLOCK() -> Int { return 2 }
+
+// Shutdown modes
+fn SHUT_RD() -> Int { return 0 }
+fn SHUT_WR() -> Int { return 1 }
+fn SHUT_RDWR() -> Int { return 2 }
+
+// ── TcpStream: A connected TCP socket ────────────────────────────
+
+type TcpStream {
+    fd: Int
+    connected: Int
+
+    constructor(fd: Int) {
+        it.fd = fd
+        it.connected = 1
+    }
+
+    fn send(data: String) -> Int {
+        if (it.connected == 0) {
+            return -1
+        }
+        len := sockets._strlen(data)
+        return sockets._raw_send(it.fd, data, len)
+    }
+
+    fn send_all(data: String) -> Int {
+        total := sockets._strlen(data)
+        sent := 0
+        while (sent < total) {
+            n := it.send(data)
+            if (n <= 0) {
+                return -1
+            }
+            sent = sent + n
+        }
+        return 0
+    }
+
+    fn receive(max_bytes: Int) -> String {
+        if (it.connected == 0) {
+            return ""
+        }
+        result := sockets._raw_recv(it.fd, max_bytes)
+        if (result == 0) {
+            it.connected = 0
+        }
+        return result
+    }
+
+    fn shutdown(how: Int) -> Int {
+        return sockets._raw_shutdown(it.fd, how)
+    }
+
+    fn close() -> Int {
+        result := sockets._raw_close(it.fd)
+        it.connected = 0
+        return result
+    }
+
+    fn set_nonblocking(enabled: Int) -> Int {
+        return sockets._raw_setopt(it.fd, OPT_NONBLOCK(), enabled)
+    }
+
+    fn isValid() -> Int {
+        return sockets._raw_is_valid(it.fd)
+    }
+}
+
+// ── TcpListener: A TCP server socket ──────────────────────────────
+
+type TcpListener {
+    fd: Int
+    port: Int
+    listening: Int
+
+    constructor(port: Int) {
+        it.port = port
+        it.listening = 0
+        
+        // Create socket
+        fd := sockets._raw_create(AF_INET(), SOCK_STREAM(), 0)
+        it.fd = fd
+        
+        if (fd < 0) {
+            println("Failed to create socket")
+            return
+        }
+        
+        // Enable address reuse
+        sockets._raw_setopt(fd, OPT_REUSEADDR(), 1)
+        
+        // Bind to port
+        if (sockets._raw_bind(fd, port) < 0) {
+            println("Failed to bind to port")
+            sockets._raw_close(fd)
+            it.fd = -1
+        }
+    }
+
+    fn listen(backlog: Int) -> Int {
+        if (it.fd < 0) {
+            return -1
+        }
+        
+        result := sockets._raw_listen(it.fd, backlog)
+        if (result == 0) {
+            it.listening = 1
+        }
+        return result
+    }
+
+    fn accept() -> TcpStream {
+        if (it.listening == 0) {
+            return TcpStream(-1)
+        }
+        
+        client_fd := sockets._raw_accept(it.fd)
+        return TcpStream(client_fd)
+    }
+
+    fn close() -> Int {
+        it.listening = 0
+        return sockets._raw_close(it.fd)
+    }
+
+    fn set_nonblocking(enabled: Int) -> Int {
+        return sockets._raw_setopt(it.fd, OPT_NONBLOCK(), enabled)
+    }
+}
+
+// ── TcpClient: Connect to a remote server ────────────────────────
+
+type TcpClient {
+    stream: TcpStream
+
+    constructor(host: String, port: Int) {
+        // Create socket
+        fd := sockets._raw_create(AF_INET(), SOCK_STREAM(), 0)
+        
+        if (fd < 0) {
+            println("Failed to create socket")
+            it.stream = TcpStream(-1)
+            return
+        }
+        
+        // Connect
+        if (sockets._raw_connect(fd, host, port) < 0) {
+            println("Failed to connect")
+            sockets._raw_close(fd)
+            it.stream = TcpStream(-1)
+            return
+        }
+        
+        it.stream = TcpStream(fd)
+    }
+
+    fn send(data: String) -> Int {
+        return it.stream.send(data)
+    }
+
+    fn receive(max_bytes: Int) -> String {
+        return it.stream.receive(max_bytes)
+    }
+
+    fn close() -> Int {
+        return it.stream.close()
+    }
+}
+
+// ── UdpSocket: UDP datagram socket ────────────────────────────────
+
+type UdpSocket {
+    fd: Int
+    bound: Int
+
+    constructor(port: Int) {
+        // Create UDP socket
+        fd := sockets._raw_create(AF_INET(), SOCK_DGRAM(), 0)
+        it.fd = fd
+        it.bound = 0
+        
+        if (fd < 0) {
+            println("Failed to create UDP socket")
+            return
+        }
+        
+        // Bind if port specified
+        if (port > 0) {
+            if (sockets._raw_bind(fd, port) == 0) {
+                it.bound = 1
+            }
+        }
+    }
+
+    fn bind(port: Int) -> Int {
+        if (it.bound == 1) {
+            return -1
+        }
+        
+        result := sockets._raw_bind(it.fd, port)
+        if (result == 0) {
+            it.bound = 1
+        }
+        return result
+    }
+
+    fn receive(max_bytes: Int) -> String {
+        return sockets._raw_recv(it.fd, max_bytes)
+    }
+
+    fn close() -> Int {
+        it.bound = 0
+        return sockets._raw_close(it.fd)
+    }
+}
+
+// ── Utility functions ─────────────────────────────────────────────
+
+fn cleanup() {
+    sockets._raw_cleanup()
+}
+
+fn get_last_error() -> Int {
+    return sockets._raw_error()
+}

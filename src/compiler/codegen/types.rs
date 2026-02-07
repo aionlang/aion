@@ -13,23 +13,44 @@ use super::{Runtime, ModuleFns, TypeInfo, TypeRegistry};
 use super::expr::compile_expr;
 
 /// Map a user-facing type name to an LLVM basic type (for struct fields).
+///
+/// `known_structs` maps type names to their opaque struct types,
+/// allowing cross-references between types (e.g. `stream: TcpStream`).
 fn resolve_field_type<'ctx>(
     context: &'ctx Context,
     type_name: &str,
+    known_structs: &HashMap<String, inkwell::types::StructType<'ctx>>,
 ) -> inkwell::types::BasicTypeEnum<'ctx> {
     match type_name {
         "Int"    => context.i64_type().as_basic_type_enum(),
         "Float"  => context.f64_type().as_basic_type_enum(),
         "Bool"   => context.bool_type().as_basic_type_enum(),
         "String" => context.ptr_type(inkwell::AddressSpace::default()).as_basic_type_enum(),
-        other => crate::errors::fatal(
-            crate::errors::Phase::Compiler,
-            format!("Unsupported field type: '{other}'"),
-        ),
+        other => {
+            if let Some(st) = known_structs.get(other) {
+                st.as_basic_type_enum()
+            } else {
+                crate::errors::fatal(
+                    crate::errors::Phase::Compiler,
+                    format!("Unsupported field type: '{other}'"),
+                )
+            }
+        }
     }
 }
 
+/// Build a map from type name → StructType from a TypeRegistry.
+fn struct_types_from_registry<'ctx>(
+    registry: &TypeRegistry<'ctx>,
+) -> HashMap<String, inkwell::types::StructType<'ctx>> {
+    registry.iter().map(|(name, info)| (name.clone(), info.struct_type)).collect()
+}
+
 /// Create LLVM struct types for all user-defined type definitions.
+///
+/// Uses a two-pass approach so types can reference each other:
+///   1. Create opaque struct types for every `type` definition.
+///   2. Resolve field types and set the struct body.
 ///
 /// Returns a [`TypeRegistry`] that maps each type name to its
 /// LLVM struct layout and field metadata.
@@ -39,25 +60,31 @@ pub fn compile_type_defs<'ctx>(
 ) -> TypeRegistry<'ctx> {
     let mut registry = TypeRegistry::new();
 
+    // ── Pass 1: create opaque struct types ────────────────────
+    let mut struct_types: HashMap<String, inkwell::types::StructType<'ctx>> = HashMap::new();
     for td in type_defs {
-        // Build the ordered list of (field_name, llvm_type).
+        let struct_type = context.opaque_struct_type(&td.name);
+        struct_types.insert(td.name.clone(), struct_type);
+    }
+
+    // ── Pass 2: resolve fields and set struct bodies ──────────
+    for td in type_defs {
+        let struct_type = struct_types[&td.name];
+
         let fields: Vec<(String, inkwell::types::BasicTypeEnum<'ctx>)> = td
             .fields
             .iter()
             .map(|f| {
-                let llvm_ty = resolve_field_type(context, &f.type_name);
+                let llvm_ty = resolve_field_type(context, &f.type_name, &struct_types);
                 (f.name.clone(), llvm_ty)
             })
             .collect();
 
-        // Create the LLVM struct type.
         let field_types: Vec<inkwell::types::BasicTypeEnum<'ctx>> =
             fields.iter().map(|(_, ty)| *ty).collect();
-        let struct_type = context.opaque_struct_type(&td.name);
         struct_type.set_body(&field_types, false);
 
         let constructor_params = if td.constructor_params.is_empty() {
-            // Default: all fields in declaration order.
             fields.iter().map(|(name, _)| name.clone()).collect()
         } else {
             td.constructor_params.clone()
@@ -76,6 +103,10 @@ pub fn compile_type_defs<'ctx>(
 
 /// Compile explicit `constructor(…) { … }` blocks into LLVM functions.
 ///
+/// Uses a two-pass approach:
+///   1. Forward-declare all constructors so they can call each other.
+///   2. Compile the constructor bodies.
+///
 /// Each constructor becomes a function named after the type (e.g. `Animal`)
 /// that allocates the struct, executes the body, and returns it by value.
 /// Returns a map of type_name → FunctionValue to add to `module_fns`.
@@ -86,10 +117,13 @@ pub fn compile_constructors<'ctx>(
     type_defs: &[TypeDef],
     type_registry: &TypeRegistry<'ctx>,
     rt: &Runtime<'ctx>,
-    module_fns: &ModuleFns<'ctx>,
+    module_fns: &mut ModuleFns<'ctx>,
 ) -> HashMap<String, FunctionValue<'ctx>> {
     let mut ctor_fns = HashMap::new();
+    let known_structs = struct_types_from_registry(type_registry);
 
+    // ── Pass 1: forward-declare all constructors ─────────────
+    let mut declared: Vec<(&TypeDef, FunctionValue<'ctx>)> = Vec::new();
     for td in type_defs {
         let ctor = match &td.constructor {
             Some(c) => c,
@@ -97,20 +131,29 @@ pub fn compile_constructors<'ctx>(
         };
         let type_info = &type_registry[&td.name];
 
-        // Build parameter types from the constructor's typed params.
         let param_types: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> = ctor
             .params
             .iter()
             .map(|p| {
-                resolve_field_type(context, &p.type_annotation).into()
+                resolve_field_type(context, &p.type_annotation, &known_structs).into()
             })
             .collect();
 
-        // fn TypeName(params…) -> StructType
         let fn_type = type_info.struct_type.fn_type(&param_types, false);
         let fn_val = module.add_function(&td.name, fn_type, None);
+        ctor_fns.insert(td.name.clone(), fn_val);
+        declared.push((td, fn_val));
+    }
 
-        let entry = context.append_basic_block(fn_val, "entry");
+    // Register forward-declared constructors so bodies can call them.
+    module_fns.insert("__ctors".to_string(), ctor_fns.clone());
+
+    // ── Pass 2: compile constructor bodies ───────────────────
+    for (td, fn_val) in &declared {
+        let ctor = td.constructor.as_ref().unwrap();
+        let type_info = &type_registry[&td.name];
+
+        let entry = context.append_basic_block(*fn_val, "entry");
         builder.position_at_end(entry);
 
         let mut variables: HashMap<String, (PointerValue<'ctx>, inkwell::types::BasicTypeEnum<'ctx>)> =
@@ -129,7 +172,7 @@ pub fn compile_constructors<'ctx>(
 
         // Bind constructor parameters as local variables.
         for (i, param) in ctor.params.iter().enumerate() {
-            let llvm_ty = resolve_field_type(context, &param.type_annotation);
+            let llvm_ty = resolve_field_type(context, &param.type_annotation, &known_structs);
             let alloca = builder
                 .build_alloca(llvm_ty, &param.name)
                 .expect("alloca ctor param");
@@ -151,14 +194,16 @@ pub fn compile_constructors<'ctx>(
             .build_load(type_info.struct_type, struct_alloca, "ret_struct")
             .expect("load struct for return");
         builder.build_return(Some(&struct_val)).expect("return struct");
-
-        ctor_fns.insert(td.name.clone(), fn_val);
     }
 
     ctor_fns
 }
 
 /// Compile methods for user-defined types into LLVM functions.
+///
+/// Uses a two-pass approach:
+///   1. Forward-declare all methods so they can call each other.
+///   2. Compile the method bodies.
 ///
 /// Handles both:
 /// - Inline methods defined inside `type Animal { fn bark() { … } }`
@@ -168,7 +213,8 @@ pub fn compile_constructors<'ctx>(
 /// receives a hidden first parameter `it: ptr` (pointer to the struct
 /// instance).
 ///
-/// Returns a nested map: `type_name → { method_name → FunctionValue }`.
+/// Inserts `__methods_TypeName` entries into `module_fns` before bodies
+/// are compiled, so method bodies can call methods on other types.
 pub fn compile_methods<'ctx>(
     context: &'ctx Context,
     module: &Module<'ctx>,
@@ -177,24 +223,25 @@ pub fn compile_methods<'ctx>(
     impl_methods: &[(String, Function)],
     type_registry: &TypeRegistry<'ctx>,
     rt: &Runtime<'ctx>,
-    module_fns: &ModuleFns<'ctx>,
+    module_fns: &mut ModuleFns<'ctx>,
 ) -> HashMap<String, HashMap<String, FunctionValue<'ctx>>> {
     let mut all_methods: HashMap<String, HashMap<String, FunctionValue<'ctx>>> = HashMap::new();
+    let known_structs = struct_types_from_registry(type_registry);
 
     // Collect methods: (type_name, &Function) from both sources.
     let mut pairs: Vec<(String, &Function)> = Vec::new();
 
-    // 1. Inline methods from type bodies.
     for td in type_defs {
         for method in &td.methods {
             pairs.push((td.name.clone(), method));
         }
     }
-
-    // 2. Impl methods from top-level `fn Type::method()`.
     for (type_name, func) in impl_methods {
         pairs.push((type_name.clone(), func));
     }
+
+    // ── Pass 1: forward-declare all methods ──────────────────
+    let mut declared: Vec<(String, &Function, FunctionValue<'ctx>)> = Vec::new();
 
     for (type_name, func) in &pairs {
         let type_info = match type_registry.get(type_name.as_str()) {
@@ -205,22 +252,19 @@ pub fn compile_methods<'ctx>(
             ),
         };
 
-        // Build param types: hidden `it: ptr` + declared params.
         let ptr_type = context.ptr_type(inkwell::AddressSpace::default());
         let mut param_types: Vec<inkwell::types::BasicMetadataTypeEnum<'ctx>> =
             vec![ptr_type.into()];
         for p in &func.params {
-            param_types.push(resolve_field_type(context, &p.type_annotation).into());
+            param_types.push(resolve_field_type(context, &p.type_annotation, &known_structs).into());
         }
 
-        // Determine return type.
         let fn_type = match func.return_type.as_deref() {
             Some("Int")    => context.i64_type().fn_type(&param_types, false),
             Some("Float")  => context.f64_type().fn_type(&param_types, false),
             Some("Bool")   => context.bool_type().fn_type(&param_types, false),
             Some("String") => ptr_type.fn_type(&param_types, false),
             Some(other) => {
-                // Check for user-defined struct return type.
                 if let Some(ti) = type_registry.get(other) {
                     ti.struct_type.fn_type(&param_types, false)
                 } else {
@@ -236,14 +280,29 @@ pub fn compile_methods<'ctx>(
         let llvm_name = format!("{type_name}__{}", func.name);
         let fn_val = module.add_function(&llvm_name, fn_type, None);
 
-        let entry = context.append_basic_block(fn_val, "entry");
+        all_methods
+            .entry(type_name.clone())
+            .or_default()
+            .insert(func.name.clone(), fn_val);
+        declared.push((type_name.clone(), func, fn_val));
+    }
+
+    // Register all forward-declared methods so bodies can call them.
+    for (type_name, methods) in &all_methods {
+        module_fns.insert(format!("__methods_{type_name}"), methods.clone());
+    }
+
+    // ── Pass 2: compile method bodies ────────────────────────
+    for (type_name, func, fn_val) in &declared {
+        let type_info = &type_registry[type_name.as_str()];
+
+        let entry = context.append_basic_block(*fn_val, "entry");
         builder.position_at_end(entry);
 
         let mut variables: HashMap<String, (PointerValue<'ctx>, inkwell::types::BasicTypeEnum<'ctx>)> =
             HashMap::new();
         let mut var_type_names: HashMap<String, String> = HashMap::new();
 
-        // Bind `it` — the hidden first parameter (pointer to struct).
         let it_ptr = fn_val.get_nth_param(0).unwrap().into_pointer_value();
         variables.insert(
             "it".to_string(),
@@ -251,9 +310,8 @@ pub fn compile_methods<'ctx>(
         );
         var_type_names.insert("it".to_string(), type_name.clone());
 
-        // Bind declared parameters.
         for (i, param) in func.params.iter().enumerate() {
-            let llvm_ty = resolve_field_type(context, &param.type_annotation);
+            let llvm_ty = resolve_field_type(context, &param.type_annotation, &known_structs);
             let alloca = builder
                 .build_alloca(llvm_ty, &param.name)
                 .expect("alloca method param");
@@ -262,7 +320,6 @@ pub fn compile_methods<'ctx>(
             variables.insert(param.name.clone(), (alloca, llvm_ty));
         }
 
-        // Compile body.
         let is_arrow = func.is_arrow && func.body.len() == 1;
         if is_arrow {
             let val = compile_expr(
@@ -285,7 +342,6 @@ pub fn compile_methods<'ctx>(
                     &mut variables, type_registry, &mut var_type_names,
                 );
             }
-            // If no explicit return was emitted, add one.
             let needs_terminator = builder.get_insert_block()
                 .map(|bb| bb.get_terminator().is_none())
                 .unwrap_or(false);
@@ -293,11 +349,6 @@ pub fn compile_methods<'ctx>(
                 builder.build_return(None).expect("build void return");
             }
         }
-
-        all_methods
-            .entry(type_name.clone())
-            .or_default()
-            .insert(func.name.clone(), fn_val);
     }
 
     all_methods

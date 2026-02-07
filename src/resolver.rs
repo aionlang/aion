@@ -23,8 +23,26 @@ pub fn resolve_imports(program: &mut Program, source_dir: &Path) {
     let imports = program.imports.clone();
 
     for imp in &imports {
-        // C-backed modules — handled during LLVM codegen
+        // C-backed modules — handled during LLVM codegen.
+        // But if there is also a high-level Aion wrapper (hybrid module),
+        // parse it and merge its types/functions into the program.
         if imp.is_stdlib() {
+            let mod_name = imp.module_name();
+            if let Some(src) = stdlib::get(mod_name) {
+                errors::info(format!("loading aion.{mod_name} hybrid wrapper (embedded)"));
+                let mut mod_parser = Parser::new(src);
+                let mod_program = mod_parser.parse_program();
+
+                // Merge type definitions (TcpListener, TcpStream, etc.)
+                program.type_defs.extend(mod_program.type_defs);
+
+                // Merge impl methods (fn TcpListener::foo() defined outside type body)
+                program.impl_methods.extend(mod_program.impl_methods);
+
+                // Merge plain functions into program.functions so they are
+                // forward-declared before constructors/methods that call them.
+                program.functions.extend(mod_program.functions);
+            }
             continue;
         }
 
