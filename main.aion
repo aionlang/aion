@@ -1,12 +1,19 @@
 import aion.math;
 
 fn main() {
-
-    a := 0
-
-    while (a <= 100000000) {
-        a += 1
-    }
-
-    println(a)
+    println(compare(5, 3))
 }
+
+fn other() {
+    println("This is another function")
+}
+
+fn printhello() => println("Hello, world!")
+fn pi() -> Float => 3.14
+
+fn greet(name: String) {
+    print("Greeting from ")
+    println(name)
+}
+
+fn compare(a: Int, b: Int) -> Bool => a > b

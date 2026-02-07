@@ -110,10 +110,23 @@ pub enum BinOperator {
     Gte,
 }
 
+/// A single function parameter: `name: Type`.
+#[derive(Debug, Clone)]
+pub struct Param {
+    pub name: String,
+    /// e.g. `"Int"`, `"Float"`, `"String"`.
+    pub type_annotation: String,
+}
+
 #[derive(Debug)]
 pub struct Function {
     pub name: String,
+    pub params: Vec<Param>,
     pub body: Vec<Expr>,
+    /// `true` for arrow functions: `fn run() => expr`
+    pub is_arrow: bool,
+    /// Optional return type annotation: `fn pi() -> Float => 3.14`
+    pub return_type: Option<String>,
 }
 
 /// A user-written Aion module loaded via `import utils;`.
