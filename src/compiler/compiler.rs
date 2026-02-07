@@ -16,6 +16,7 @@ use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
 };
 use inkwell::OptimizationLevel;
+use inkwell::passes::PassBuilderOptions;
 
 use crate::ast::Program;
 
@@ -88,16 +89,33 @@ impl<'ctx> Compiler<'ctx> {
 
         let triple = TargetMachine::get_default_triple();
         let target = Target::from_triple(&triple).expect("unsupported target triple");
+
+        // Use native CPU and aggressive optimizations for maximum speed.
+        let cpu = TargetMachine::get_host_cpu_name().to_string();
+        let features = TargetMachine::get_host_cpu_features().to_string();
+
         let machine = target
             .create_target_machine(
                 &triple,
-                "generic",
-                "",
-                OptimizationLevel::Default,
+                &cpu,
+                &features,
+                OptimizationLevel::Aggressive,
                 RelocMode::Default,
                 CodeModel::Default,
             )
             .expect("failed to create TargetMachine");
+
+        // Run LLVM optimization passes (O3-level optimizations).
+        let opts = PassBuilderOptions::create();
+        opts.set_verify_each(false);
+        opts.set_loop_unrolling(true);
+        opts.set_loop_vectorization(true);
+        opts.set_loop_slp_vectorization(true);
+        opts.set_merge_functions(true);
+
+        self.module
+            .run_passes("default<O3>", &machine, opts)
+            .expect("failed to run optimization passes");
 
         machine
             .write_to_file(&self.module, FileType::Object, path)
