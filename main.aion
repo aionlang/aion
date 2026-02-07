@@ -1,9 +1,8 @@
+import aion.math;
+
 fn main() {
 
-    a ::= 1
-    b: Float ::= 1.3
-    print(a) 
-    println()   
-    print(b)    
-    println()
+    a := 1
+    println(a + 3) 
+
 }

@@ -63,6 +63,19 @@ pub enum Expr {
         args: Vec<Expr>,
     },
 
+    /// Binary operation
+    BinaryOp {
+        op: BinOperator, 
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
+
+}
+
+#[derive(Debug)]
+pub enum BinOperator {
+    Add,
+    Sub,
 }
 
 #[derive(Debug)]

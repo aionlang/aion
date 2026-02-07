@@ -35,10 +35,10 @@ double aion_math_ceil(double x) {
     return ceil(x);
 }
 
-long long aion_math_max(long long a, long long b) {
+double aion_math_max(double a, double b) {
     return a > b ? a : b;
 }
 
-long long aion_math_min(long long a, long long b) {
+double aion_math_min(double a, double b) {
     return a < b ? a : b;
 }

@@ -63,4 +63,10 @@ pub enum Token {
         
     #[token(":")]
     Colon,
+
+    #[token("+")]
+    Plus,
+
+    #[token("-")]
+    Minus,
 }

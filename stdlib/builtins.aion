@@ -81,7 +81,4 @@ fn print_float(value: Float) {}
 //
 fn panic(message: String) {}
 
-// ── Memory ──────────────────────────────────────────────────────
-//
-// Aion uses automatic garbage collection. There are no manual
-// allocation or deallocation functions exposed to user code.
+
