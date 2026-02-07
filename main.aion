@@ -1,19 +1,32 @@
 import aion.math;
 
+type Animal {
+    name: String
+    age: Int
+
+    constructor(name: String) {
+        it.name = name
+    }
+
+    fn bark() -> String {
+        return "Woof!"
+    }
+
+}
+
+fn Animal::setAge(age: Int) {
+    it.age = age
+}
+
+fn Animal::speak() -> String {
+    return "I am an animal"
+}
+
 fn main() {
-    println(compare(5, 3))
+    a := Animal("Fido")
+    println(a.bark())
+    a.setAge(5)
+    println(a.speak())
+    println(a.age)
 }
 
-fn other() {
-    println("This is another function")
-}
-
-fn printhello() => println("Hello, world!")
-fn pi() -> Float => 3.14
-
-fn greet(name: String) {
-    print("Greeting from ")
-    println(name)
-}
-
-fn compare(a: Int, b: Int) -> Bool => a > b

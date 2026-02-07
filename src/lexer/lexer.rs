@@ -23,6 +23,15 @@ pub enum Token {
     #[token("while")]
     While,
 
+    #[token("type")]
+    Type,
+
+    #[token("return")]
+    Return,
+
+    #[token("constructor")]
+    Constructor,
+
     // ── punctuation ─────────────────────────────────────────────
     #[token("(")]
     LParen,
@@ -73,6 +82,9 @@ pub enum Token {
     // var definition: `a: Int := 5` or `a := 5`
     #[token("::=")]
     DoubleColonEquals,
+
+    #[token("::")] 
+    DoubleColon,
 
     #[token(":=")]
     ColonEquals,
@@ -125,5 +137,6 @@ pub enum Token {
     #[token("->")] 
     ThinArrow,
 
-
+    #[token("?")]
+    Question,
 }
