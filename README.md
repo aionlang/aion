@@ -1,10 +1,28 @@
-# Aion Language
+<div align="center">
+<img src="docs/img/aion_banner.png" alt="aion logo" width=300>
+</div>
 
-## TURING COMLETE 
+---
+ 
+<div align="center">
+
+<img src="https://img.shields.io/badge/status-Turing%20Complete-yellow">
+<a href="https://github.com/aionlang/aion">
+<img src="https://img.shields.io/badge/github-Aion Repository-blue?logo=github">
+</a>
+<a href="https://github.com/aionlang/aion">
+<img src="https://img.shields.io/badge/Website-cyan">
+</a>
+</div>
+
+
+## Aion language
 
 A compiled programming language that targets native binaries via LLVM.
 
+## Resources
 
+please add
 
 ## Quick start
 
