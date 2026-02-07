@@ -119,5 +119,11 @@ pub enum Token {
     #[token(">")]
     Greater,
 
+    #[token("=>")]
+    FatArrow,
+
+    #[token("->")] 
+    ThinArrow,
+
 
 }

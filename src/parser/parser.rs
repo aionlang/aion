@@ -12,7 +12,7 @@
 //! args       = expr ("," expr)*
 //! ```
 
-use crate::ast::{Expr, Function, Import, Program, BinOperator, AssignBinOperator};
+use crate::ast::{Expr, Function, Import, Param, Program, BinOperator, AssignBinOperator};
 use crate::errors::{self, Phase};
 use crate::lexer::lexer::Token;
 use logos::Logos;
@@ -143,13 +143,34 @@ impl Parser {
     }
 
     
-    /// Parse a function definition: `fn <name>() { … }`
+    /// Parse a function definition.
+    ///
+    /// Block form:  `fn <name>() { … }`
+    /// Arrow form:  `fn <name>() => <expr>`
     fn parse_function(&mut self) -> Function {
         let name = self.parse_ident_string();
 
         self.expect(Token::LParen, "expected '(' after function name");
+        let params = self.parse_param_list();
         self.expect(Token::RParen, "expected ')' after parameter list");
-        self.expect(Token::LBrace, "expected '{' to open function body");
+
+        // ── optional return type: fn name() -> Type ──────────────
+        let return_type = if self.peek() == Some(&Token::ThinArrow) {
+            self.advance(); // consume '->'
+            Some(self.parse_ident_string())
+        } else {
+            None
+        };
+
+        // ── arrow function: fn name() => expr ────────────────────
+        if self.peek() == Some(&Token::FatArrow) {
+            self.advance(); // consume '=>'
+            let expr = self.parse_expr();
+            return Function { name, params, body: vec![expr], is_arrow: true, return_type };
+        }
+
+        // ── block function: fn name() { … } ─────────────────────
+        self.expect(Token::LBrace, "expected '{' or '=>' after function signature");
 
         let mut body = Vec::new();
 
@@ -166,7 +187,7 @@ impl Parser {
             }
         }
 
-        Function { name, body }
+        Function { name, params, body, is_arrow: false, return_type }
     }
 
     /// Parse a single statement inside a function body.
@@ -489,5 +510,38 @@ impl Parser {
                 format!("Expected identifier, got {other:?}"),
             ),
         }
+    }
+
+    /// Parse a comma-separated parameter list (without surrounding parens).
+    ///
+    /// Supports:
+    ///   `name: Type`   — typed parameter
+    ///   `name`         — untyped parameter (type inferred later)
+    fn parse_param_list(&mut self) -> Vec<Param> {
+        let mut params = Vec::new();
+
+        // Empty param list?
+        if self.peek() == Some(&Token::RParen) {
+            return params;
+        }
+
+        params.push(self.parse_single_param());
+
+        while self.peek() == Some(&Token::Comma) {
+            self.advance(); // consume ','
+            params.push(self.parse_single_param());
+        }
+
+        params
+    }
+
+    /// Parse a single parameter: `name: Type` (type is required).
+    fn parse_single_param(&mut self) -> Param {
+        let name = self.parse_ident_string();
+
+        self.expect(Token::Colon, &format!("expected ':' and type after parameter '{name}'"));
+        let type_annotation = self.parse_ident_string();
+
+        Param { name, type_annotation }
     }
 }

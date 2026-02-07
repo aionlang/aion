@@ -61,12 +61,10 @@ impl<'ctx> Compiler<'ctx> {
             module_fns.insert(user_mod.name.clone(), fns);
         }
 
-        for func in &program.functions {
-            codegen::compile_function(
-                self.context, &self.module, &self.builder,
-                func, &rt, &module_fns,
-            );
-        }
+        codegen::compile_functions(
+            self.context, &self.module, &self.builder,
+            &program.functions, &rt, &mut module_fns,
+        );
     }
 
     // ── output helpers ──────────────────────────────────────────
