@@ -31,11 +31,8 @@ impl Import {
 /// An expression in function bodies.
 #[derive(Debug)]
 pub enum Expr {
-    /// `print("...")`  — print a string literal
-    PrintStr(String),
-
-    /// `print(<expr>)` — print the result of an expression (float)
-    PrintExpr(Box<Expr>),
+    /// A string literal: `"hello"`
+    StringLiteral(String),
 
     /// `math.sqrt(144.0)` — call a module function
     ModuleCall {
@@ -59,6 +56,12 @@ pub enum Expr {
     
     /// Variable reference: just `a`
     VarRef(String),
+
+    /// Unqualified function call: `println()`, `separator()`
+    FuncCall {
+        name: String,
+        args: Vec<Expr>,
+    },
 
 }
 

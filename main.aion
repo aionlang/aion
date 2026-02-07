@@ -2,9 +2,8 @@ fn main() {
 
     a ::= 1
     b: Float ::= 1.3
-    // this is a comment
-    an : error : for real 
-    print(a)    
+    print(a) 
+    println()   
     print(b)    
-
+    println()
 }

@@ -1,0 +1,15 @@
+// ═══════════════════════════════════════════════════════════════════
+// Aion Prelude — always-available standard functions
+// ═══════════════════════════════════════════════════════════════════
+//
+// Functions in this file are automatically available in every Aion
+// program — no import statement is needed.
+//
+// Note: print() and println() are compiler built-ins and don't need
+// to be defined here. They support automatic type dispatch:
+//   print("hello")      — string, no newline
+//   println("hello")    — string, with newline
+//   println(42)         — int, with newline
+//   println(3.14)       — float, with newline
+//   println()           — just a newline
+//

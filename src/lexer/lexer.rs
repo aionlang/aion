@@ -9,9 +9,6 @@ pub enum Token {
     #[token("import")]
     Import,
 
-    #[token("print")]
-    Print,
-
     // ── punctuation ─────────────────────────────────────────────
     #[token("(")]
     LParen,
@@ -66,11 +63,4 @@ pub enum Token {
         
     #[token(":")]
     Colon,
-        
-    #[token("Int")]
-    TypeInt,
-        
-    #[token("Float")]
-    TypeFloat,
-
 }
