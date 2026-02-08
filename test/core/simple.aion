@@ -1,0 +1,18 @@
+fn main() {
+    println("Hello, world!")
+}
+
+type Point {
+    static origin: Point = Point(0, 0)
+    x: Int
+    y: Int
+
+    constructor(x: Int, y: Int) {
+        it.x = x
+        it.y = y
+    }
+
+    fn move(dx: Int, dy: Int) -> Point {
+        return Point(it.x + dx, it.y + dy)
+    }
+}

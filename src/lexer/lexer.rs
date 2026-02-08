@@ -29,6 +29,12 @@ pub enum Token {
     #[token("return")]
     Return,
 
+    #[token("extern")]
+    Extern,
+
+    #[token("abstract")]
+    Abstract,
+
     #[token("constructor")]
     Constructor,
 

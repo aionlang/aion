@@ -16,7 +16,7 @@
 //!   `import aion.sockets;`              — full module import
 //!   `import aion.sockets.TcpListener;`  — selective: imports TcpListener, qualify with sockets.TcpListener if ambiguous
 
-use crate::ast::{AssignBinOperator, BinOperator, ConstructorDef, Expr, FieldDef, Function, Import, Param, Program, StringInterpolationPart, TypeDef};
+use crate::ast::{AssignBinOperator, BinOperator, ConstructorDef, Expr, FieldDef, Function, FunctionKind, Import, Param, Program, StringInterpolationPart, TypeDef};
 use crate::errors::{self, Phase};
 use crate::lexer::lexer::Token;
 use logos::Logos;
@@ -115,6 +115,16 @@ impl Parser {
         // Parse type definitions and function definitions.
         while self.has_more() {
             match self.peek() {
+                Some(Token::Extern) => {
+                    self.advance(); // consume 'extern'
+                    self.expect(Token::Fn, "expected 'fn' after 'extern'");
+                    functions.push(self.parse_function_with_kind(FunctionKind::Extern));
+                }
+                Some(Token::Abstract) => {
+                    self.advance(); // consume 'abstract'
+                    self.expect(Token::Fn, "expected 'fn' after 'abstract'");
+                    functions.push(self.parse_function_with_kind(FunctionKind::Abstract));
+                }
                 Some(Token::Fn) => {
                     self.advance(); // consume 'fn'
                     // Check for impl method: fn Type::method(…)
@@ -124,7 +134,7 @@ impl Parser {
                         let (type_name, func) = self.parse_impl_method();
                         impl_methods.push((type_name, func));
                     } else {
-                        functions.push(self.parse_function());
+                        functions.push(self.parse_function_with_kind(FunctionKind::Regular));
                     }
                 }
                 Some(Token::Type) => {
@@ -236,9 +246,14 @@ impl Parser {
 
         while self.peek() != Some(&Token::RBrace) {
             match self.peek() {
+                Some(Token::Abstract) => {
+                    self.advance(); // consume 'abstract'
+                    self.expect(Token::Fn, "expected 'fn' after 'abstract'");
+                    methods.push(self.parse_function_with_kind(FunctionKind::Abstract));
+                }
                 Some(Token::Fn) => {
                     self.advance(); // consume 'fn'
-                    methods.push(self.parse_function());
+                    methods.push(self.parse_function_with_kind(FunctionKind::Regular));
                 }
                 Some(Token::Constructor) => {
                     self.advance(); // consume 'constructor'
@@ -285,7 +300,7 @@ impl Parser {
     fn parse_impl_method(&mut self) -> (String, Function) {
         let type_name = self.parse_ident_string();
         self.expect(Token::DoubleColon, "expected '::' in impl method");
-        let func = self.parse_function();
+        let func = self.parse_function_with_kind(FunctionKind::Regular);
         (type_name, func)
     }
 
@@ -293,7 +308,14 @@ impl Parser {
     ///
     /// Block form:  `fn <name>() { … }`
     /// Arrow form:  `fn <name>() => <expr>`
+    /// Bodyless:    `extern fn <name>()` or `abstract fn <name>()`
+    #[allow(dead_code)]
     fn parse_function(&mut self) -> Function {
+        self.parse_function_with_kind(FunctionKind::Regular)
+    }
+
+    /// Parse a function definition with a given [`FunctionKind`].
+    fn parse_function_with_kind(&mut self, kind: FunctionKind) -> Function {
         let name = self.parse_ident_string();
 
         self.expect(Token::LParen, "expected '(' after function name");
@@ -308,11 +330,16 @@ impl Parser {
             None
         };
 
+        // ── extern / abstract functions have no body ─────────────
+        if kind == FunctionKind::Extern || kind == FunctionKind::Abstract {
+            return Function { name, params, body: Vec::new(), is_arrow: false, return_type, kind };
+        }
+
         // ── arrow function: fn name() => expr ────────────────────
         if self.peek() == Some(&Token::FatArrow) {
             self.advance(); // consume '=>'
             let expr = self.parse_expr();
-            return Function { name, params, body: vec![expr], is_arrow: true, return_type };
+            return Function { name, params, body: vec![expr], is_arrow: true, return_type, kind };
         }
 
         // ── block function: fn name() { … } ─────────────────────
@@ -333,7 +360,7 @@ impl Parser {
             }
         }
 
-        Function { name, params, body, is_arrow: false, return_type }
+        Function { name, params, body, is_arrow: false, return_type, kind }
     }
 
     /// Parse a single statement inside a function body.

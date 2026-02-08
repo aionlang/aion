@@ -27,6 +27,8 @@ pub struct TypeInfo<'ctx> {
     pub constructor_params: Vec<String>,
     /// `true` if the type has an explicit `constructor(…) { … }` block.
     pub has_explicit_constructor: bool,
+    /// Optional parent type name (for inheritance / monomorphization).
+    pub parent: Option<String>,
 }
 
 /// Maps Aion type names to their compiled [`TypeInfo`].
@@ -34,6 +36,6 @@ pub type TypeRegistry<'ctx> = HashMap<String, TypeInfo<'ctx>>;
 
 pub use runtime::declare_runtime;
 pub use stdlib::declare_stdlib;
-pub use func::{forward_declare_functions, compile_functions, compile_user_module};
+pub use func::{forward_declare_functions, compile_functions, compile_user_module, monomorphize_functions};
 pub use expr::compile_expr;
 pub use types::{compile_type_defs, compile_constructors, compile_methods};

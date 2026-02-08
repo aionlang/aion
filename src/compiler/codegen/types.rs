@@ -8,7 +8,7 @@ use inkwell::module::Module;
 use inkwell::types::BasicType;
 use inkwell::values::{FunctionValue, PointerValue};
 
-use crate::ast::{Function, TypeDef};
+use crate::ast::{Function, FunctionKind, TypeDef};
 use super::{Runtime, ModuleFns, TypeInfo, TypeRegistry};
 use super::expr::compile_expr;
 
@@ -30,10 +30,8 @@ fn resolve_field_type<'ctx>(
             if let Some(st) = known_structs.get(other) {
                 st.as_basic_type_enum()
             } else {
-                crate::errors::fatal(
-                    crate::errors::Phase::Compiler,
-                    format!("Unsupported field type: '{other}'"),
-                )
+                // User-defined types passed by pointer.
+                context.ptr_type(inkwell::AddressSpace::default()).as_basic_type_enum()
             }
         }
     }
@@ -52,6 +50,9 @@ fn struct_types_from_registry<'ctx>(
 ///   1. Create opaque struct types for every `type` definition.
 ///   2. Resolve field types and set the struct body.
 ///
+/// Child types (`type Dog: Animal`) inherit all parent fields — the
+/// parent's fields are prepended so that field layout is compatible.
+///
 /// Returns a [`TypeRegistry`] that maps each type name to its
 /// LLVM struct layout and field metadata.
 pub fn compile_type_defs<'ctx>(
@@ -67,38 +68,136 @@ pub fn compile_type_defs<'ctx>(
         struct_types.insert(td.name.clone(), struct_type);
     }
 
-    // ── Pass 2: resolve fields and set struct bodies ──────────
+    // Build a quick lookup: type name → TypeDef, for parent resolution.
+    let td_map: HashMap<&str, &TypeDef> = type_defs.iter().map(|td| (td.name.as_str(), td)).collect();
+
+    // ── Pass 2: resolve fields (with inheritance) and set struct bodies ──
     for td in type_defs {
         let struct_type = struct_types[&td.name];
 
-        let fields: Vec<(String, inkwell::types::BasicTypeEnum<'ctx>)> = td
-            .fields
-            .iter()
-            .map(|f| {
+        // Inherit parent fields first.
+        let mut fields: Vec<(String, inkwell::types::BasicTypeEnum<'ctx>)> = Vec::new();
+        if let Some(ref parent_name) = td.parent {
+            if let Some(parent_td) = td_map.get(parent_name.as_str()) {
+                for f in &parent_td.fields {
+                    let llvm_ty = resolve_field_type(context, &f.type_name, &struct_types);
+                    fields.push((f.name.clone(), llvm_ty));
+                }
+            }
+        }
+
+        // Then add own fields (skip if already inherited).
+        for f in &td.fields {
+            if !fields.iter().any(|(name, _)| name == &f.name) {
                 let llvm_ty = resolve_field_type(context, &f.type_name, &struct_types);
-                (f.name.clone(), llvm_ty)
-            })
-            .collect();
+                fields.push((f.name.clone(), llvm_ty));
+            }
+        }
 
         let field_types: Vec<inkwell::types::BasicTypeEnum<'ctx>> =
             fields.iter().map(|(_, ty)| *ty).collect();
         struct_type.set_body(&field_types, false);
 
-        let constructor_params = if td.constructor_params.is_empty() {
-            fields.iter().map(|(name, _)| name.clone()).collect()
-        } else {
+        // Constructor params: for child types without explicit constructors
+        // or constructor_params, inherit from parent's constructor_params
+        // so that `Dog("Fido")` maps the same params as `Animal("Fido")`.
+        let constructor_params = if !td.constructor_params.is_empty() {
             td.constructor_params.clone()
+        } else if td.constructor.is_some() {
+            // explicit constructor — params come from the constructor block
+            Vec::new()
+        } else if let Some(ref parent_name) = td.parent {
+            // Child without own constructor: inherit parent's constructor_params.
+            if let Some(parent_td) = td_map.get(parent_name.as_str()) {
+                if !parent_td.constructor_params.is_empty() {
+                    // Parent uses shorthand constructor params.
+                    parent_td.constructor_params.clone()
+                } else if let Some(ref ctor) = parent_td.constructor {
+                    // Parent has explicit constructor block — inherit its param names.
+                    ctor.params.iter().map(|p| p.name.clone()).collect()
+                } else {
+                    fields.iter().map(|(name, _)| name.clone()).collect()
+                }
+            } else {
+                fields.iter().map(|(name, _)| name.clone()).collect()
+            }
+        } else {
+            fields.iter().map(|(name, _)| name.clone()).collect()
         };
+
+        // Only mark has_explicit_constructor if THIS type has its own
+        // constructor block.  Child types without their own constructor
+        // use the shorthand path with inherited constructor_params.
+        let has_explicit_ctor = td.constructor.is_some();
 
         registry.insert(td.name.clone(), TypeInfo {
             struct_type,
             fields,
             constructor_params,
-            has_explicit_constructor: td.constructor.is_some(),
+            has_explicit_constructor: has_explicit_ctor,
+            parent: td.parent.clone(),
         });
     }
 
     registry
+}
+
+/// Check whether `child_type` is a subtype of `parent_type` by walking
+/// the parent chain.  Returns `true` if they are the same type too.
+pub fn is_subtype_of(
+    child_type: &str,
+    parent_type: &str,
+    type_registry: &HashMap<String, super::TypeInfo<'_>>,
+) -> bool {
+    if child_type == parent_type { return true; }
+    let mut current = child_type;
+    loop {
+        match type_registry.get(current).and_then(|info| info.parent.as_deref()) {
+            Some(parent) => {
+                if parent == parent_type { return true; }
+                current = parent;
+            }
+            None => return false,
+        }
+    }
+}
+
+/// Walk the type hierarchy to find a concrete (non-abstract) method
+/// for `method_name` starting at `type_name`, then walking parents.
+pub fn resolve_method_for_type<'ctx>(
+    type_name: &str,
+    method_name: &str,
+    type_defs: &[TypeDef],
+    module_fns: &super::ModuleFns<'ctx>,
+) -> Option<FunctionValue<'ctx>> {
+    let td_map: HashMap<&str, &TypeDef> = type_defs.iter().map(|td| (td.name.as_str(), td)).collect();
+    resolve_method_inner(type_name, method_name, &td_map, module_fns)
+}
+
+fn resolve_method_inner<'ctx>(
+    type_name: &str,
+    method_name: &str,
+    td_map: &HashMap<&str, &TypeDef>,
+    module_fns: &super::ModuleFns<'ctx>,
+) -> Option<FunctionValue<'ctx>> {
+    let method_key = format!("__methods_{type_name}");
+    if let Some(methods) = module_fns.get(&method_key) {
+        if let Some(fn_val) = methods.get(method_name) {
+            if let Some(td) = td_map.get(type_name) {
+                let is_abstract = td.methods.iter()
+                    .any(|m| m.name == method_name && m.kind == FunctionKind::Abstract);
+                if !is_abstract {
+                    return Some(*fn_val);
+                }
+            }
+        }
+    }
+    if let Some(td) = td_map.get(type_name) {
+        if let Some(ref parent_name) = td.parent {
+            return resolve_method_inner(parent_name, method_name, td_map, module_fns);
+        }
+    }
+    None
 }
 
 /// Compile explicit `constructor(…) { … }` blocks into LLVM functions.

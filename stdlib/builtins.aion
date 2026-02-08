@@ -37,7 +37,7 @@
 // Example:
 //   print("Hello, world!\n")
 //
-fn print(message: String) {}
+extern fn print(message: String)
 
 // @builtin
 // @runtime "aion_print_int"
@@ -50,7 +50,7 @@ fn print(message: String) {}
 //   x: Int := 42
 //   print(x)
 //
-fn print_int(value: Int) {}
+extern fn print_int(value: Int)
 
 // @builtin
 // @runtime "aion_print_float"
@@ -63,7 +63,7 @@ fn print_int(value: Int) {}
 // Example:
 //   print(3.14)
 //
-fn print_float(value: Float) {}
+extern fn print_float(value: Float)
 
 // ── Process control ─────────────────────────────────────────────
 
@@ -79,6 +79,6 @@ fn print_float(value: Float) {}
 // Example:
 //   panic("something went wrong")
 //
-fn panic(message: String) {}
+extern fn panic(message: String)
 
 

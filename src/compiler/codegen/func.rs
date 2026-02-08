@@ -6,7 +6,7 @@ use inkwell::module::Module;
 use inkwell::types::BasicType;
 use inkwell::values::{PointerValue, FunctionValue};
 
-use crate::ast::{Function, Param, UserModule};
+use crate::ast::{Function, FunctionKind, Param, TypeDef, UserModule};
 use super::{Runtime, ModuleFns, TypeRegistry};
 use super::expr::compile_expr;
 
@@ -19,6 +19,10 @@ enum FnKind<'a> {
 }
 
 /// Map a user-facing type name to the corresponding LLVM type.
+///
+/// Primitive types map to their LLVM equivalents; any other non-empty
+/// name is assumed to be a user-defined struct type and is represented
+/// as an opaque pointer (structs are heap-allocated).
 fn resolve_type<'ctx>(
     context: &'ctx Context,
     type_name: Option<&str>,
@@ -28,7 +32,9 @@ fn resolve_type<'ctx>(
         Some("Float")  => Some(context.f64_type().into()),
         Some("Bool")   => Some(context.bool_type().into()),
         Some("String") => Some(context.ptr_type(inkwell::AddressSpace::default()).into()),
-        _ => None,
+        // User-defined types are heap-allocated structs → pointer.
+        Some(_)        => Some(context.ptr_type(inkwell::AddressSpace::default()).into()),
+        None           => None,
     }
 }
 
@@ -104,7 +110,7 @@ fn compile_fn_body<'ctx>(
     };
 
     let fn_val = module.add_function(&fn_name, fn_type, None);
-    compile_fn_body_inner(context, module, builder, func, rt, module_fns, kind, fn_val, type_registry);
+    compile_fn_body_inner(context, module, builder, func, rt, module_fns, kind, fn_val, type_registry, &HashMap::new());
     fn_val
 }
 
@@ -124,10 +130,15 @@ fn compile_fn_body_into<'ctx>(
 ) {
     let fn_val = module.get_function(&func.name)
         .expect("function must be forward-declared");
-    compile_fn_body_inner(context, module, builder, func, rt, module_fns, kind, fn_val, type_registry);
+    compile_fn_body_inner(context, module, builder, func, rt, module_fns, kind, fn_val, type_registry, &HashMap::new());
 }
 
 /// Shared implementation: emits the body into an already-created LLVM function.
+///
+/// `type_name_overrides` allows callers to override which concrete type
+/// name a parameter is associated with — the key is monomorphization:
+/// `animal: Animal` can be mapped to `Dog` so that `animal.bark()`
+/// dispatches to `Dog__bark`.
 fn compile_fn_body_inner<'ctx>(
     context: &'ctx Context,
     _module: &Module<'ctx>,
@@ -138,6 +149,7 @@ fn compile_fn_body_inner<'ctx>(
     kind: &FnKind<'_>,
     fn_val: FunctionValue<'ctx>,
     type_registry: &TypeRegistry<'ctx>,
+    type_name_overrides: &HashMap<String, String>,
 ) {
     let _returns_value = matches!(kind, FnKind::TopLevel) && func.name == "main";
 
@@ -166,10 +178,23 @@ fn compile_fn_body_inner<'ctx>(
         builder.build_store(alloca, arg_val).expect("store param");
         variables.insert(param.name.clone(), (alloca, llvm_ty));
 
+        // If the parameter is a user-defined type, register it so that
+        // `animal.bark()` is resolved as a method call, not a module call.
+        let ty = param.type_annotation.as_str();
+        if !matches!(ty, "Int" | "Float" | "Bool" | "String") {
+            var_type_names.insert(param.name.clone(), ty.to_string());
+        }
+
         // Collect pointer-typed allocas for GC root registration.
         if llvm_ty.is_pointer_type() {
             ptr_allocas.push(alloca);
         }
+    }
+
+    // Apply monomorphization overrides: e.g. map `animal` → `Dog`
+    // so that method calls dispatch to the concrete type's methods.
+    for (name, concrete_ty) in type_name_overrides {
+        var_type_names.insert(name.clone(), concrete_ty.clone());
     }
 
     // Always enable shadow-stack GC so that both parameter and
@@ -253,6 +278,12 @@ pub fn forward_declare_functions<'ctx>(
 ) {
     let mut top_fns: HashMap<String, FunctionValue<'ctx>> = HashMap::new();
     for func in functions {
+        // Extern and abstract functions have no Aion body to compile;
+        // extern symbols are resolved by the C linker, abstract ones
+        // are only placeholders for override checks.
+        if func.kind == FunctionKind::Extern || func.kind == FunctionKind::Abstract {
+            continue;
+        }
         let param_types = build_param_types(context, &func.params);
         let fn_type = if func.name == "main" {
             context.i32_type().fn_type(&param_types, false)
@@ -285,6 +316,10 @@ pub fn compile_functions<'ctx>(
 
     // 2. Compile each body (the LLVM function already exists).
     for func in functions {
+        // Skip bodyless functions.
+        if func.kind == FunctionKind::Extern || func.kind == FunctionKind::Abstract {
+            continue;
+        }
         compile_fn_body_into(
             context, module, builder, func, rt, module_fns, &FnKind::TopLevel, type_registry,
         );
@@ -312,4 +347,96 @@ pub fn compile_user_module<'ctx>(
     }
 
     fns
+}
+
+/// Generate specialised copies of functions whose parameters accept a
+/// parent type, one per concrete child type.  This is the
+/// **monomorphization** pass.
+///
+/// For example, given:
+///
+/// ```text
+/// fn makeSound(animal: Animal) -> String { return animal.bark() }
+/// type Dog: Animal { fn bark() -> String { return "Woof!" } }
+/// ```
+///
+/// We generate `makeSound__Dog` whose body compiles `animal.bark()` as
+/// a call to `Dog__bark` (not `Animal__bark`).
+///
+/// The specialised copies are registered under `"__top"` in `module_fns`
+/// so that call-site code in `expr.rs` can find them.
+pub fn monomorphize_functions<'ctx>(
+    context: &'ctx Context,
+    module: &Module<'ctx>,
+    builder: &Builder<'ctx>,
+    functions: &[Function],
+    _type_defs: &[TypeDef],
+    type_registry: &TypeRegistry<'ctx>,
+    rt: &Runtime<'ctx>,
+    module_fns: &mut ModuleFns<'ctx>,
+) {
+    // Build parent → [children] map from the type registry.
+    let mut children_of: HashMap<String, Vec<String>> = HashMap::new();
+    for (name, info) in type_registry.iter() {
+        if let Some(ref parent) = info.parent {
+            children_of.entry(parent.clone()).or_default().push(name.clone());
+        }
+    }
+
+    if children_of.is_empty() {
+        return; // nothing to monomorphize
+    }
+
+    for func in functions {
+        if func.kind == FunctionKind::Extern || func.kind == FunctionKind::Abstract {
+            continue;
+        }
+
+        // Collect (param_index, param_name, parent_type, [child_types])
+        // for each polymorphic parameter.
+        let mut poly_params: Vec<(usize, &str, &str, &Vec<String>)> = Vec::new();
+        for (i, param) in func.params.iter().enumerate() {
+            let ty = param.type_annotation.as_str();
+            if let Some(kids) = children_of.get(ty) {
+                poly_params.push((i, &param.name, ty, kids));
+            }
+        }
+
+        if poly_params.is_empty() {
+            continue;
+        }
+
+        // For simplicity, monomorphize over the first polymorphic
+        // parameter.  (Multi-param monomorphization would require the
+        // Cartesian product — future enhancement.)
+        let (_idx, param_name, _parent_ty, child_types) = poly_params[0];
+
+        for child_type in child_types {
+            let spec_name = format!("{}__{}", func.name, child_type);
+
+            // Build LLVM function type (same as the original).
+            let param_types = build_param_types(context, &func.params);
+            let fn_type = if func.name == "main" {
+                context.i32_type().fn_type(&param_types, false)
+            } else if let Some(ret_ty) = resolve_type(context, func.return_type.as_deref()) {
+                ret_ty.fn_type(&param_types, false)
+            } else {
+                context.void_type().fn_type(&param_types, false)
+            };
+            let fn_val = module.add_function(&spec_name, fn_type, None);
+
+            // Override: map the polymorphic param to the concrete child type.
+            let mut overrides = HashMap::new();
+            overrides.insert(param_name.to_string(), child_type.clone());
+
+            compile_fn_body_inner(
+                context, module, builder, func, rt, module_fns,
+                &FnKind::TopLevel, fn_val, type_registry, &overrides,
+            );
+
+            // Register under __top.
+            let top = module_fns.entry("__top".to_string()).or_default();
+            top.insert(spec_name, fn_val);
+        }
+    }
 }

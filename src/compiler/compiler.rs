@@ -62,21 +62,31 @@ impl<'ctx> Compiler<'ctx> {
             self.context, &self.module, &program.functions, &mut module_fns,
         );
 
+        // Compile methods (both inline type methods and impl methods).
+        // Two-pass: forward-declares all, then compiles bodies.
+        // Inserts __methods_TypeName entries into module_fns internally.
+        // This must happen before constructors so method FunctionValues
+        // are available.
+        codegen::compile_methods(
+            self.context, &self.module, &self.builder,
+            &program.type_defs, &program.impl_methods,
+            &type_registry, &rt, &mut module_fns,
+        );
+
+        // Monomorphize generic-over-parent-type functions: generate
+        // specialised copies for each concrete child type.
+        codegen::monomorphize_functions(
+            self.context, &self.module, &self.builder,
+            &program.functions, &program.type_defs,
+            &type_registry, &rt, &mut module_fns,
+        );
+
         // Compile explicit constructors into LLVM functions.
         // Two-pass: forward-declares all, then compiles bodies.
         // Inserts __ctors into module_fns internally.
         codegen::compile_constructors(
             self.context, &self.module, &self.builder,
             &program.type_defs, &type_registry, &rt, &mut module_fns,
-        );
-
-        // Compile methods (both inline type methods and impl methods).
-        // Two-pass: forward-declares all, then compiles bodies.
-        // Inserts __methods_TypeName entries into module_fns internally.
-        codegen::compile_methods(
-            self.context, &self.module, &self.builder,
-            &program.type_defs, &program.impl_methods,
-            &type_registry, &rt, &mut module_fns,
         );
 
         for user_mod in &program.user_modules {

@@ -1,5 +1,3 @@
-import aion.math;
-
 type Animal {
     name: String
     age: Int
@@ -8,26 +6,20 @@ type Animal {
         it.name = name
     }
 
+    abstract fn bark() -> String 
+}
+
+type Dog: Animal {
     fn bark() -> String {
         return "Woof!"
     }
-
 }
 
-fn Animal::animalToString() -> String {
-    return "Animal(${it.name}, ${it.age})"
-}
-
-fn Animal::setAge(age: Int) {
-    it.age = age
-}
-
-fn Animal::speak() -> String {
-    return "I am an animal"
+fn makeSound(animal: Animal) -> String {
+    return animal.bark()
 }
 
 fn main() {
-    a := Animal("Fido")
-    a.setAge(5)
-    println(a.animalToString())
+    
+    println(makeSound(Dog("Fido")))
 }

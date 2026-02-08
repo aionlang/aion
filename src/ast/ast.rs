@@ -218,6 +218,17 @@ pub struct ConstructorDef {
     pub body: Vec<Expr>,
 }
 
+/// Distinguishes regular, extern, and abstract functions.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FunctionKind {
+    /// `fn foo() { … }` — has a body.
+    Regular,
+    /// `extern fn foo()` — C-backed, no body.
+    Extern,
+    /// `abstract fn foo()` — must be overridden, no body.
+    Abstract,
+}
+
 #[derive(Debug)]
 pub struct Function {
     pub name: String,
@@ -227,6 +238,8 @@ pub struct Function {
     pub is_arrow: bool,
     /// Optional return type annotation: `fn pi() -> Float => 3.14`
     pub return_type: Option<String>,
+    /// Whether this is a regular, extern, or abstract function.
+    pub kind: FunctionKind,
 }
 
 /// A user-written Aion module loaded via `import utils;`.

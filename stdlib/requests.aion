@@ -1,0 +1,23 @@
+fn get(String url) -> String {
+    // Placeholder implementation: in a real implementation, this would
+    // perform an HTTP GET request and return the response body.
+    return "Response from ${url}";
+}
+
+fn post(String url, String data) -> String {
+    // Placeholder implementation: in a real implementation, this would
+    // perform an HTTP POST request with the given data and return the response body.
+    return "Posted to ${url} with data: ${data}";
+}
+
+fn put(String url, String data) -> String {
+    // Placeholder implementation: in a real implementation, this would
+    // perform an HTTP PUT request with the given data and return the response body.
+    return "Put to ${url} with data: ${data}";
+}
+
+fn delete(String url) -> String {
+    // Placeholder implementation: in a real implementation, this would
+    // perform an HTTP DELETE request and return the response body.
+    return "Deleted ${url}";
+}

@@ -46,6 +46,58 @@ fn emit_print_call<'ctx>(
     builder.build_call(f, &a, "call").expect("build call");
 }
 
+/// Walk the type hierarchy starting at `type_name` to find a concrete
+/// (non-abstract) method.  Checks `type_name` first, then parents.
+fn find_method_in_hierarchy<'ctx>(
+    type_name: &str,
+    method_name: &str,
+    type_registry: &super::TypeRegistry<'ctx>,
+    module_fns: &super::ModuleFns<'ctx>,
+) -> Option<FunctionValue<'ctx>> {
+    let mut current = type_name.to_string();
+    loop {
+        let method_key = format!("__methods_{current}");
+        if let Some(methods) = module_fns.get(&method_key) {
+            if let Some(fn_val) = methods.get(method_name) {
+                // Make sure the function has a body (non-abstract).
+                // Abstract forward-declared functions have zero basic blocks.
+                if fn_val.count_basic_blocks() > 0 {
+                    return Some(*fn_val);
+                }
+            }
+        }
+        // Walk to parent.
+        match type_registry.get(&current).and_then(|info| info.parent.as_ref()) {
+            Some(parent) => current = parent.clone(),
+            None => return None,
+        }
+    }
+}
+
+/// Try to infer the concrete Aion type name of an expression at compile
+/// time.  Returns `Some(type_name)` for constructor calls and variables
+/// with known types; `None` otherwise.
+fn infer_concrete_type(
+    expr: &crate::ast::Expr,
+    var_type_names: &HashMap<String, String>,
+    type_registry: &super::TypeRegistry<'_>,
+) -> Option<String> {
+    match expr {
+        // Direct constructor call: Dog("Fido") → "Dog"
+        crate::ast::Expr::FuncCall { name, .. } => {
+            if type_registry.contains_key(name.as_str()) {
+                return Some(name.clone());
+            }
+            None
+        }
+        // Variable with known type: d → var_type_names["d"]
+        crate::ast::Expr::VarRef(name) => {
+            var_type_names.get(name.as_str()).cloned()
+        }
+        _ => None,
+    }
+}
+
 /// Lower a single expression to LLVM IR.
 ///
 /// Returns `Some(value)` when the expression produces a result,
@@ -102,25 +154,25 @@ pub fn compile_expr<'ctx>(
         Expr::ModuleCall { module, func, args } => {
             // ── method call on a struct instance: a.speak() ─────
             if let Some(type_name) = var_type_names.get(module.as_str()) {
-                let method_key = format!("__methods_{type_name}");
-                if let Some(methods) = module_fns.get(&method_key) {
-                    if let Some(method_fn) = methods.get(func.as_str()) {
-                        // Pass the struct pointer as hidden first arg (`it`).
-                        let (ptr, _ty) = variables.get(module.as_str()).unwrap();
-                        let mut llvm_args: Vec<BasicMetadataValueEnum> = vec![(*ptr).into()];
-                        for a in args {
-                            let val = compile_expr(context, builder, a, rt, module_fns, variables, type_registry, var_type_names)
-                                .expect("method argument must produce a value");
-                            llvm_args.push(val.into());
-                        }
-                        let call = builder
-                            .build_call(*method_fn, &llvm_args, "methodcall")
-                            .expect("build method call");
-                        return match call.try_as_basic_value() {
-                            ValueKind::Basic(val) => Some(val),
-                            ValueKind::Instruction(_) => None,
-                        };
+                // Walk the type hierarchy to find a concrete (non-abstract)
+                // method.  Start at the concrete type and walk parents.
+                let method_fn = find_method_in_hierarchy(type_name, func, type_registry, module_fns);
+                if let Some(method_fn) = method_fn {
+                    // Pass the struct pointer as hidden first arg (`it`).
+                    let (ptr, _ty) = variables.get(module.as_str()).unwrap();
+                    let mut llvm_args: Vec<BasicMetadataValueEnum> = vec![(*ptr).into()];
+                    for a in args {
+                        let val = compile_expr(context, builder, a, rt, module_fns, variables, type_registry, var_type_names)
+                            .expect("method argument must produce a value");
+                        llvm_args.push(val.into());
                     }
+                    let call = builder
+                        .build_call(method_fn, &llvm_args, "methodcall")
+                        .expect("build method call");
+                    return match call.try_as_basic_value() {
+                        ValueKind::Basic(val) => Some(val),
+                        ValueKind::Instruction(_) => None,
+                    };
                 }
             }
 
@@ -560,8 +612,62 @@ pub fn compile_expr<'ctx>(
                 }
             }
 
+            // ── monomorphization dispatch ─────────────────────────
+            // If an argument is a known concrete child type, prefer the
+            // specialised function (e.g. makeSound__Dog over makeSound).
+            {
+                let mut spec_suffix: Option<String> = None;
+                for a in args.iter() {
+                    if let Some(concrete) = infer_concrete_type(a, var_type_names, type_registry) {
+                        // Check if this concrete type is a child type.
+                        if let Some(info) = type_registry.get(concrete.as_str()) {
+                            if info.parent.is_some() {
+                                spec_suffix = Some(concrete);
+                                break;
+                            }
+                        }
+                    }
+                }
+                if let Some(ref child) = spec_suffix {
+                    let spec_name = format!("{}__{}", name, child);
+                    if let Some(top) = module_fns.get("__top") {
+                        if let Some(spec_fn) = top.get(&spec_name) {
+                            // Compile args and call the specialised function.
+                            let llvm_args: Vec<BasicMetadataValueEnum> = args
+                                .iter()
+                                .enumerate()
+                                .map(|(i, a)| {
+                                    let val = compile_expr(context, builder, a, rt, module_fns, variables, type_registry, var_type_names)
+                                        .expect("argument must produce a value");
+                                    let param_ty = spec_fn.get_type().get_param_types();
+                                    if i < param_ty.len()
+                                        && param_ty[i].is_pointer_type()
+                                        && val.is_struct_value()
+                                    {
+                                        let st = val.into_struct_value();
+                                        let alloca = builder
+                                            .build_alloca(st.get_type(), "arg_box")
+                                            .expect("build arg alloca");
+                                        builder.build_store(alloca, st).expect("store arg");
+                                        let ptr_val: BasicMetadataValueEnum = alloca.into();
+                                        ptr_val
+                                    } else {
+                                        val.into()
+                                    }
+                                })
+                                .collect();
+                            let call = builder
+                                .build_call(*spec_fn, &llvm_args, "mono_call")
+                                .expect("build monomorphised call");
+                            return match call.try_as_basic_value() {
+                                ValueKind::Basic(val) => Some(val),
+                                ValueKind::Instruction(_) => None,
+                            };
+                        }
+                    }
+                }
+            }
 
-    
             // ── general function lookup ──────────────────────────
             // Search all modules for a matching function name.
             // This also finds explicit constructor functions (registered under "__ctors").
@@ -582,10 +688,27 @@ pub fn compile_expr<'ctx>(
 
             let llvm_args: Vec<BasicMetadataValueEnum> = args
                 .iter()
-                .map(|a| {
-                    compile_expr(context, builder, a, rt, module_fns, variables, type_registry, var_type_names)
-                        .expect("argument must produce a value")
-                        .into()
+                .enumerate()
+                .map(|(i, a)| {
+                    let val = compile_expr(context, builder, a, rt, module_fns, variables, type_registry, var_type_names)
+                        .expect("argument must produce a value");
+                    // If the callee expects a pointer but we have a struct value
+                    // (e.g. passing a constructor result to a fn(animal: Animal)),
+                    // store it to a stack alloca and pass the pointer.
+                    let param_ty = llvm_fn.get_type().get_param_types();
+                    if i < param_ty.len()
+                        && param_ty[i].is_pointer_type()
+                        && val.is_struct_value()
+                    {
+                        let st = val.into_struct_value();
+                        let alloca = builder
+                            .build_alloca(st.get_type(), "arg_box")
+                            .expect("build arg alloca");
+                        builder.build_store(alloca, st).expect("store arg");
+                        alloca.into()
+                    } else {
+                        val.into()
+                    }
                 })
                 .collect();
 
