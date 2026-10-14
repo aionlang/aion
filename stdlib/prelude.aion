@@ -24,6 +24,9 @@ extern fn String.trim() -> String = "aion_strings_trim"
 extern fn String.replace(from: String, to: String) -> String = "aion_strings_replace"
 // The number the text spells, or `fallback` if it is not a whole number.
 extern fn String.toIntOr(fallback: Int) -> Int = "aion_strings_to_int_or"
+// Is the whole text a whole number?
+extern fn String.isInt() -> Bool = "aion_strings_is_int"
+fn String.toIntOrNull() -> Int? = if isInt() { toIntOr(0) } else { null }
 
 fn String.split(separator: String) -> List<String> {
     parts := List<String>()
@@ -104,6 +107,19 @@ type List<T> {
 
     fn first() -> T = get(0)
     fn last() -> T = get(count - 1)
+    fn getOrNull(index: Int) -> T? {
+        if index < 0 || index >= count { return null }
+        return items[index]
+    }
+    fn firstOrNull() -> T? = getOrNull(0)
+    fn lastOrNull() -> T? = getOrNull(count - 1)
+    // The first element that passes `test`, or null.
+    fn find(test: (T) -> Bool) -> T? {
+        for i in 0..count {
+            if test(items[i]) { return items[i] }
+        }
+        return null
+    }
 
     fn contains(value: T) = indexOf(value) >= 0
     fn indexOf(value: T) -> Int {
@@ -245,6 +261,11 @@ type Map<K, V> {
     fn get(key: K) -> V {
         e := find(key)
         if e < 0 { panic("no such key: $key") }
+        return valArr[e]
+    }
+    fn getOrNull(key: K) -> V? {
+        e := find(key)
+        if e < 0 { return null }
         return valArr[e]
     }
     fn getOr(key: K, fallback: V) -> V {

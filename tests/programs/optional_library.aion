@@ -1,0 +1,15 @@
+// Library functions that return optionals.
+xs := [3, 1, 2]
+println(xs.firstOrNull(), xs.lastOrNull(), xs.getOrNull(1), xs.getOrNull(9), xs.getOrNull(-1))
+println(xs.find { it > 1 }, xs.find { it > 5 })
+none: List<String> = []
+println(none.firstOrNull(), none.firstOrNull() ?: "empty")
+m := {"a": 1}
+println(m.getOrNull("a"), m.getOrNull("b"), (m.getOrNull("b") ?: 0) + 1)
+v := m.getOrNull("a")
+if v != null { println(v * 10) }
+println("42".toIntOrNull(), "x".toIntOrNull(), "".toIntOrNull(), "-3".toIntOrNull(), "4 ".toIntOrNull())
+n := "12".toIntOrNull() ?: 0
+println(n + 1, "7".isInt(), "7x".isInt())
+opts: List<Int?> = [1, null]
+println(opts.firstOrNull(), opts.getOrNull(1), opts.getOrNull(5))

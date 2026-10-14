@@ -79,3 +79,10 @@ int64_t aion_strings_to_int_or(const char *s, int64_t fallback) {
     if (end == s || *end != '\0' || errno != 0) return fallback;
     return (int64_t)v;
 }
+
+bool aion_strings_is_int(const char *s) {
+    char *end;
+    errno = 0;
+    (void)strtoll(s, &end, 10);
+    return end != s && *end == '\0' && errno == 0;
+}
