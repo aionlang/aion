@@ -1,0 +1,5 @@
+// `import greetings` loads this file (the package's `lib.aion`).
+
+fn hello(who: String) = "Hello, $who"
+
+fn excited(who: String) = hello(who) + "!"

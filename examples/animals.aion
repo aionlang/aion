@@ -1,4 +1,4 @@
-import std.math;
+import math
 
 type Animal {
     name: String

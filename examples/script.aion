@@ -1,0 +1,26 @@
+#!/usr/bin/env aion
+// A script: no `fn main()`, just statements.  Run it with `aion examples/script.aion`.
+
+import math
+
+type Shape(name: String, sides: Int = 0) {
+    fn describe() = if sides == 0 { "$name (round)" } else { "$name with $sides sides" }
+}
+
+fn area(radius: Float) = math.pi * radius * radius
+
+shapes := Shape("circle")
+println(shapes.describe())
+println(Shape("square", sides: 4).describe())
+
+for r in 1..=3 {
+    println("radius", r, "area", area(r))
+}
+
+grade := when 87 {
+    in 90..100 -> "A"
+    in 80..90 -> "B"
+    else -> "C"
+}
+println("grade:", grade)
+println(shapes)

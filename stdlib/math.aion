@@ -8,6 +8,8 @@
 // with the right shape already exists.  Int arguments are widened to Float
 // where a Float is expected.
 
+pi := 3.141592653589793
+
 extern fn sqrt(x: Float) -> Float
 extern fn pow(base: Float, exp: Float) -> Float
 extern fn sin(x: Float) -> Float

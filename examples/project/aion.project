@@ -1,0 +1,8 @@
+name = "greeter-app"
+version = "0.1.0"
+entry = "main.aion"
+
+[dependencies]
+# A local library.  A git dependency looks like:
+#   fmt = { git = "https://github.com/someone/fmt", tag = "v1.0" }
+greetings = { path = "greetings" }

@@ -1,4 +1,4 @@
-import std.sockets.TcpListener;
+from sockets import TcpListener
 
 fn main() {
     println("Starting echo server on port 8080...")

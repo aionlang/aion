@@ -13,9 +13,14 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+/// Where compiled programs and cloned dependencies go during tests.
+fn test_cache() -> PathBuf {
+    Path::new(env!("CARGO_TARGET_TMPDIR")).join("aion-cache")
+}
+
 fn aion(args: &[&str], file: &Path, stress: bool) -> Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_aion"));
-    cmd.args(args).arg(file);
+    cmd.args(args).arg(file).env("AION_CACHE", test_cache());
     if stress {
         cmd.env("AION_GC_STRESS", "1");
     }
@@ -133,4 +138,184 @@ fn hello_world_via_build_and_run() {
     let run = Command::new(&exe).output().unwrap();
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(String::from_utf8_lossy(&run.stdout), "hi from a built binary\n");
+}
+
+// ── projects & dependencies ─────────────────────────────────────────
+
+/// A scratch directory unique to one test.
+fn scratch(name: &str) -> PathBuf {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("scratch-{name}"));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn write(path: &Path, text: &str) {
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, text).unwrap();
+}
+
+/// Run `aion <args>` with `dir` as the working directory.
+fn aion_in(dir: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_aion"))
+        .args(args)
+        .current_dir(dir)
+        .env("AION_CACHE", test_cache())
+        .output()
+        .unwrap()
+}
+
+fn stdout(o: &Output) -> String {
+    String::from_utf8_lossy(&o.stdout).into_owned()
+}
+
+fn stderr(o: &Output) -> String {
+    String::from_utf8_lossy(&o.stderr).into_owned()
+}
+
+#[test]
+fn a_project_runs_its_entry_and_resolves_nested_path_dependencies() {
+    let root = scratch("deps");
+    // text: no dependencies, default `lib.aion`, plus a nested module.
+    write(&root.join("text/aion.project"), "name = \"text\"\n");
+    write(&root.join("text/lib.aion"), "import strings\nfn shout(s: String) = strings.upper(s) + \"!\"\n");
+    write(&root.join("text/extra/pad.aion"), "fn pad(s: String) = \"[$s]\"\n");
+    // greeter: custom `lib`, depends on text.
+    write(&root.join("greeter/aion.project"), "name = \"greeter\"\nlib = \"greeter.aion\"\n[dependencies]\ntext = { path = \"../text\" }\n");
+    write(&root.join("greeter/greeter.aion"), "import text\nfn hello(who: String) = text.shout(\"hello, \" + who)\n");
+    // app: depends on both; entry is main.aion.
+    write(
+        &root.join("app/aion.project"),
+        "name = \"app\"\n[dependencies]\ngreeter = { path = \"../greeter\" }\ntext = { path = \"../text\" }\n",
+    );
+    write(
+        &root.join("app/main.aion"),
+        "import greeter\nimport text.extra.pad as p\nfrom text import shout\nprintln(greeter.hello(\"world\"))\nprintln(p.pad(\"x\"), shout(\"y\"))\n",
+    );
+
+    let out = aion_in(&root.join("app"), &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "HELLO, WORLD!\n[x] Y!\n");
+
+    // A package only sees the dependencies *it* declares.
+    write(&root.join("greeter/bad.aion"), "import app_only\n");
+    let out = aion_in(&root.join("greeter"), &["emit-ir", "bad.aion"]);
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("cannot find module `app_only`"), "{}", stderr(&out));
+}
+
+#[test]
+fn aion_new_creates_a_runnable_project() {
+    let root = scratch("new");
+    let out = aion_in(&root, &["new", "hello_app"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let run = aion_in(&root.join("hello_app"), &[]);
+    assert_eq!(stdout(&run), "Hello from hello_app!\n", "{}", stderr(&run));
+    // Refuses to overwrite.
+    assert!(!aion_in(&root, &["new", "hello_app"]).status.success());
+}
+
+#[test]
+fn project_files_are_validated() {
+    let root = scratch("badproject");
+    let check = |toml: &str, expect: &str| {
+        write(&root.join("aion.project"), toml);
+        write(&root.join("main.aion"), "println(1)\n");
+        let out = aion_in(&root, &["emit-ir"]);
+        assert!(!out.status.success(), "{toml}");
+        assert!(stderr(&out).contains(expect), "wanted `{expect}` in:\n{}", stderr(&out));
+    };
+    check("version = \"1\"\n", "missing `name`");
+    check("name = \"a\"\nbogus = \"x\"\n", "unknown key `bogus`");
+    check("name = \"a\"\n[dependencies]\nd = { }\n", "needs exactly one of `path` or `git`");
+    check("name = \"a\"\n[dependencies]\nd = { git = \"u\", tag = \"a\", rev = \"b\" }\n", "only one of tag, branch, rev");
+    check("name = \"a\"\n[dependencies]\nd = { path = \"../nowhere\" }\n", "dependency `d`");
+    check("name = \"a\"\nthis is not toml\n", "aion.project:2");
+}
+
+#[test]
+fn git_dependencies_are_pinned_by_the_lock_file() {
+    if Command::new("git").arg("--version").output().is_err() {
+        eprintln!("skipping: git is not installed");
+        return;
+    }
+    let root = scratch("git");
+    let repo = root.join("lib_repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let git = |dir: &Path, args: &[&str]| {
+        let ok = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(ok, "git {args:?} failed");
+    };
+    git(&repo, &["init", "-q"]);
+    write(&repo.join("lib.aion"), "fn version() = \"1.0\"\n");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "one"]);
+    git(&repo, &["tag", "v1"]);
+
+    let app = root.join("app");
+    write(
+        &app.join("aion.project"),
+        &format!("name = \"app\"\n[dependencies]\nlib = {{ git = \"{}\", tag = \"v1\" }}\n", repo.display()),
+    );
+    write(&app.join("main.aion"), "import lib\nprintln(lib.version())\n");
+
+    // Fresh cache so the first run really clones.
+    let cache = root.join("cache");
+    let run = |dir: &Path| {
+        Command::new(env!("CARGO_BIN_EXE_aion")).current_dir(dir).env("AION_CACHE", &cache).output().unwrap()
+    };
+    let first = run(&app);
+    assert_eq!(stdout(&first), "1.0\n", "{}", stderr(&first));
+    let lock = std::fs::read_to_string(app.join("aion.lock")).unwrap();
+    assert!(lock.contains("#tag:v1\" = \""), "{lock}");
+
+    // Upstream moves the tag and the cached clone disappears: the lock still wins.
+    write(&repo.join("lib.aion"), "fn version() = \"2.0\"\n");
+    git(&repo, &["commit", "-qam", "two"]);
+    git(&repo, &["tag", "-f", "v1"]);
+    let _ = std::fs::remove_dir_all(cache.join("git"));
+    let second = run(&app);
+    assert_eq!(stdout(&second), "1.0\n", "{}", stderr(&second));
+}
+
+#[test]
+fn unchanged_programs_are_not_rebuilt() {
+    let root = scratch("cache");
+    write(&root.join("a.aion"), "println(\"cached\")\n");
+    let cache = root.join("cache");
+    let run = || {
+        Command::new(env!("CARGO_BIN_EXE_aion")).arg("a.aion").current_dir(&root).env("AION_CACHE", &cache).output().unwrap()
+    };
+    let count = || std::fs::read_dir(cache.join("bin")).map_or(0, |d| d.count());
+    assert_eq!(stdout(&run()), "cached\n");
+    assert_eq!(count(), 1);
+    let before = std::fs::metadata(std::fs::read_dir(cache.join("bin")).unwrap().next().unwrap().unwrap().path())
+        .unwrap()
+        .modified()
+        .unwrap();
+    assert_eq!(stdout(&run()), "cached\n");
+    assert_eq!(count(), 1, "the second run reuses the first binary");
+    let after = std::fs::metadata(std::fs::read_dir(cache.join("bin")).unwrap().next().unwrap().unwrap().path())
+        .unwrap()
+        .modified()
+        .unwrap();
+    assert_eq!(before, after, "the cached binary was not rewritten");
+    // A change in the source produces a different binary.
+    write(&root.join("a.aion"), "println(\"changed\")\n");
+    assert_eq!(stdout(&run()), "changed\n");
+    assert_eq!(count(), 2);
+}
+
+#[test]
+fn a_script_with_a_shebang_line_runs() {
+    let root = scratch("shebang");
+    write(&root.join("s.aion"), "#!/usr/bin/env aion\nx := 20\nprintln(\"answer\", x + 22)\n");
+    assert_eq!(stdout(&aion_in(&root, &["s.aion"])), "answer 42\n");
 }
