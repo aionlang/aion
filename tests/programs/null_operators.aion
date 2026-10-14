@@ -1,0 +1,39 @@
+// exit: 1
+// stderr: unexpected null value
+// `!!` and `?:`
+
+a: Int? = 5
+b: Int? = null
+println(a!!, a!! + 1, b ?: -1, a ?: -1)
+t: String? = "set"
+println(t ?: "default", t!!.length())
+s: String? = null
+println(s ?: "default")
+
+type Node(v: Int) { next: Node? }
+n := Node(1)
+n.next = Node(2)
+println((n.next ?: n).v, (n.next!!.next ?: n).v)
+
+f: Float? = null
+println(f ?: 1, (f ?: 2.5) * 2)
+
+c: Int? = null
+println(c ?: b)          // an optional fallback keeps the result optional
+e: Int? = a ?: b
+println(e)
+println(b ?: c ?: 99, b ?: a ?: 99)
+
+total := 0
+for x in [1, 2, 3] {
+    v: Int? = if x == 2 { null } else { x }
+    total += v ?: 100
+}
+println(total)
+println(1 + (b ?: 2) * 3)
+
+fn firstWord(text: String?) = (text ?: "").length()
+println(firstWord(null), firstWord("hello"))
+
+println(b!!)
+println("not reached")

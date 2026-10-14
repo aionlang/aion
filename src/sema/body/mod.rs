@@ -1498,8 +1498,18 @@ impl<'c, 'a> Cx<'c, 'a> {
 
             A::Null => mk(K::Null, Ty::Null),
 
-            A::SafeField(..) | A::NotNull(_) | A::Elvis(..) => {
-                return Err(Diagnostic::new("this null-handling operator is not available yet", e.span));
+            A::NotNull(inner) => {
+                let v = self.value(inner)?;
+                let Some((plain, _)) = self.nullable_parts(v.ty) else {
+                    return Err(Diagnostic::new(format!("a {} is never null, so `!!` is pointless", self.name(v.ty)), e.span));
+                };
+                mk(K::Unwrap(Box::new(v)), plain)
+            }
+
+            A::Elvis(value, fallback) => self.elvis(value, fallback)?,
+
+            A::SafeField(..) => {
+                return Err(Diagnostic::new("`?.` is not available yet", e.span));
             }
 
             A::List(items) => self.list_literal(items, None, e.span)?,
@@ -1649,6 +1659,62 @@ impl<'c, 'a> Cx<'c, 'a> {
             }
         };
         Ok(mk(K::Binary(hop, Box::new(l), Box::new(r)), result))
+    }
+
+    /// For a type that can be null: the type without the null, and whether it is a real
+    /// optional (as opposed to an object or function reference, which may also be null at run time).
+    fn nullable_parts(&self, ty: Ty) -> Option<(Ty, bool)> {
+        match ty {
+            Ty::Opt(id) => Some((self.ck.t.opt_inner(id), true)),
+            Ty::Obj(_) | Ty::Fn(_) => Some((ty, false)),
+            _ => None,
+        }
+    }
+
+    /// `value ?: fallback`
+    ///
+    /// ```text
+    /// { $t := value; if $t == null { fallback } else { $t!! } }
+    /// ```
+    ///
+    /// A fallback that produces nothing (`x ?: panic("…")`) is run for its effect only.
+    fn elvis(&mut self, value: &ast::Expr, fallback: &ast::Expr) -> Result<hir::Expr> {
+        let v = self.value(value)?;
+        let Some((plain, boxed)) = self.nullable_parts(v.ty) else {
+            return Err(Diagnostic::new(
+                format!("a {} is never null, so `?:` has nothing to fall back from", self.name(v.ty)),
+                value.span,
+            ));
+        };
+        let value_ty = v.ty;
+        let tmp = self.new_local("$elvis", value_ty);
+        let have = |cx: &Self| {
+            let t = cx.local_expr(tmp);
+            if boxed { mk(K::Unwrap(Box::new(t)), plain) } else { t }
+        };
+        let is_null = mk(K::IsNull(Box::new(self.local_expr(tmp))), Ty::Bool);
+        let bind = hir::Stmt::Let(tmp, Some(v));
+
+        let alt = if matches!(fallback.kind, A::Null) { mk(K::Null, Ty::Null) } else { self.expr_expected(fallback, Some(plain))? };
+        if alt.ty == Ty::Void {
+            let check = hir::Stmt::Expr(mk(
+                K::Cond { cond: Box::new(is_null), then: Box::new(alt), otherwise: Box::new(unit()) },
+                Ty::Void,
+            ));
+            return Ok(mk(K::Block(vec![bind, check], Box::new(have(self))), plain));
+        }
+        // An optional (or null) fallback keeps the result optional.
+        let (alt, ty, keep) = match alt.ty {
+            Ty::Null | Ty::Opt(_) => (self.coerce(alt, value_ty, fallback.span)?, value_ty, self.local_expr(tmp)),
+            _ => (self.coerce(alt, plain, fallback.span)?, plain, have(self)),
+        };
+        Ok(mk(
+            K::Block(
+                vec![bind],
+                Box::new(mk(K::Cond { cond: Box::new(is_null), then: Box::new(alt), otherwise: Box::new(keep) }, ty)),
+            ),
+            ty,
+        ))
     }
 
     /// `==` / `!=` where a side is optional or `null`.
