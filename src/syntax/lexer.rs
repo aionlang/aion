@@ -15,6 +15,8 @@ pub enum Token {
     Import,
     #[token("type")]
     Type,
+    #[token("interface")]
+    Interface,
     #[token("constructor")]
     Constructor,
     #[token("if")]
@@ -156,6 +158,7 @@ impl Token {
             Token::Extern => "`extern`",
             Token::Import => "`import`",
             Token::Type => "`type`",
+            Token::Interface => "`interface`",
             Token::Constructor => "`constructor`",
             Token::If => "`if`",
             Token::Else => "`else`",

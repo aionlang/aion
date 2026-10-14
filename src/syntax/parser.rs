@@ -213,6 +213,7 @@ impl<'a> Parser<'a> {
                 Token::Import => imports.push(self.import()?),
                 Token::Ident if self.at_from_import() => imports.push(self.import_from()?),
                 Token::Type => items.push(Item::Type(self.type_decl()?)),
+                Token::Interface => items.push(Item::Interface(self.interface_decl()?)),
                 Token::Extern => {
                     let start = self.bump().span;
                     self.expect(Token::Fn)?;
@@ -353,6 +354,40 @@ impl<'a> Parser<'a> {
             return Err(self.expected("`{` or `=`"));
         };
         Ok(FnDecl { name, type_params, params, ret, body, span: start.to(self.prev_span()) })
+    }
+
+    /// `interface Name { fn method(params) -> Type … }`
+    fn interface_decl(&mut self) -> Result<InterfaceDecl> {
+        self.bump();
+        let name = self.ident()?;
+        self.expect(Token::LBrace)?;
+        let methods = self.scoped(false, false, |p| {
+            let mut methods = Vec::new();
+            loop {
+                match p.peek() {
+                    Some(Token::RBrace) => return Ok(methods),
+                    Some(Token::Semi) => {
+                        p.bump();
+                    }
+                    Some(Token::Fn) => {
+                        let start = p.bump().span;
+                        let name = p.ident()?;
+                        let params = p.params()?;
+                        let ret = if p.eat(Token::Arrow) { Some(p.type_ref()?) } else { None };
+                        if matches!(p.peek(), Some(Token::LBrace | Token::Eq)) && !p.nl() {
+                            return Err(Diagnostic::new(
+                                "an interface method is only a signature, without a body",
+                                p.here(),
+                            ));
+                        }
+                        methods.push(MethodSig { name, params, ret, span: start.to(p.prev_span()) });
+                    }
+                    _ => return Err(p.expected("`fn` or `}`")),
+                }
+            }
+        })?;
+        self.expect(Token::RBrace)?;
+        Ok(InterfaceDecl { name, methods })
     }
 
     fn type_decl(&mut self) -> Result<TypeDecl> {
@@ -1354,6 +1389,18 @@ mod tests {
         assert!(matches!(&e.kind, ExprKind::Try { catch_name: None, .. }));
         // `try` is an ordinary expression
         assert!(matches!(parse_expr("1 + try { 2 } catch { 3 }").kind, ExprKind::Binary(..)));
+    }
+
+    #[test]
+    fn interface_syntax() {
+        let m = module("interface Shape {\n    fn area() -> Float\n    fn scale(by: Float, name: String) -> Shape\n    fn draw()\n}\n");
+        let Item::Interface(i) = &m.items[0] else { panic!("expected an interface") };
+        assert_eq!(i.name.name, "Shape");
+        assert_eq!(i.methods.len(), 3);
+        assert_eq!(i.methods[1].params.len(), 2);
+        assert!(i.methods[0].ret.is_some() && i.methods[2].ret.is_none());
+        let err = Parser::new(0, "interface A { fn f() = 1 }", 0).and_then(|mut p| p.module()).unwrap_err();
+        assert!(err.message.contains("only a signature"));
     }
 
     #[test]

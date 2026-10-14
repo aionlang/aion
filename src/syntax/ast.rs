@@ -46,6 +46,7 @@ pub struct Import {
 pub enum Item {
     Fn(FnDecl),
     Type(TypeDecl),
+    Interface(InterfaceDecl),
     /// `fn Animal.speak() { ... }` — a method declared outside its type.
     /// For a generic type, `fn List<T>.first()` names the type's parameters.
     Method { owner: Ident, owner_params: Vec<Ident>, decl: FnDecl },
@@ -108,6 +109,22 @@ pub struct TypeDecl {
     /// `init { ... }` blocks, run after the fields are set up.
     pub inits: Vec<Vec<Stmt>>,
     pub methods: Vec<FnDecl>,
+}
+
+/// `interface Shape { fn area() -> Float }`: the methods a type must have to be used as a `Shape`.
+#[derive(Debug)]
+pub struct InterfaceDecl {
+    pub name: Ident,
+    pub methods: Vec<MethodSig>,
+}
+
+/// `fn area() -> Float` — a signature without a body.
+#[derive(Debug)]
+pub struct MethodSig {
+    pub name: Ident,
+    pub params: Vec<Param>,
+    pub ret: Option<TypeRef>,
+    pub span: Span,
 }
 
 #[derive(Debug)]

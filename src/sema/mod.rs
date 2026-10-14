@@ -384,6 +384,9 @@ impl<'a> Checker<'a> {
                     });
                     self.t.define(mi, &decl.name, Sym::GenericFn(g))?;
                 }
+                Item::Interface(d) => {
+                    return Err(Diagnostic::new("interfaces are not available yet", d.name.span));
+                }
                 _ => {}
             }
         }
@@ -875,6 +878,7 @@ fn unstable_globals(loaded: &Loaded) -> HashSet<String> {
                     td.methods.iter().for_each(|m| fn_decl(m, &mut anywhere));
                 }
                 Item::Stmt(s) => top_level.push(s),
+                Item::Interface(_) => {}
             }
         }
     }
