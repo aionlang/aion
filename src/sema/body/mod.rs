@@ -1508,8 +1508,12 @@ impl<'c, 'a> Cx<'c, 'a> {
 
             A::Elvis(value, fallback) => self.elvis(value, fallback)?,
 
-            A::SafeField(..) => {
-                return Err(Diagnostic::new("`?.` is not available yet", e.span));
+            A::SafeField(obj, field) => {
+                let recv = self.value(obj)?;
+                self.safe_access(recv, e.span, |cx, plain| {
+                    let (index, ty) = cx.field_of(&plain, field)?;
+                    Ok(mk(K::Field { obj: Box::new(plain), index }, ty))
+                })?
             }
 
             A::List(items) => self.list_literal(items, None, e.span)?,
@@ -1582,15 +1586,21 @@ impl<'c, 'a> Cx<'c, 'a> {
 
     fn field_of(&self, obj: &hir::Expr, field: &ast::Ident) -> Result<(usize, Ty)> {
         let Ty::Obj(id) = obj.ty else {
-            return Err(Diagnostic::new(
-                format!("a {} has no field `{}`", self.name(obj.ty), field.name),
-                field.span,
-            ));
+            let d = Diagnostic::new(format!("a {} has no field `{}`", self.name(obj.ty), field.name), field.span);
+            return Err(self.null_hint(obj.ty, d));
         };
         let info = self.ck.t.ty(id);
         match info.fields.iter().position(|f| f.name == field.name) {
             Some(i) => Ok((i, info.fields[i].ty)),
             None => Err(Diagnostic::new(format!("`{}` has no field `{}`", info.name, field.name), field.span)),
+        }
+    }
+
+    /// Explain how to get at a member of something that might be null.
+    fn null_hint(&self, ty: Ty, d: Diagnostic) -> Diagnostic {
+        match ty {
+            Ty::Opt(_) => d.hint("it might be null: use `?.` to access it safely, or `!!` to assert it isn't"),
+            _ => d,
         }
     }
 
@@ -1874,42 +1884,15 @@ impl<'c, 'a> Cx<'c, 'a> {
 
                 // `value.method(...)`, or a function stored in a field: `value.callback(...)`
                 let recv = self.value(obj)?;
-                if let Some(id) = self.ck.ext_method(recv.ty, &member.name) {
-                    if !type_args.is_empty() {
-                        return Err(not_generic(&member.name));
-                    }
-                    return self.call_fn(id, Some(recv), args, span);
-                }
-                let Ty::Obj(ty) = recv.ty else {
-                    return Err(Diagnostic::new(
-                        format!("a {} has no method `{}`", self.name(recv.ty), member.name),
-                        member.span,
-                    ));
-                };
-                let info = self.ck.t.ty(ty);
-                if info.array_elem.is_some() {
-                    if !type_args.is_empty() {
-                        return Err(not_generic(&member.name));
-                    }
-                    return self.array_method(recv, member, args, span);
-                }
-                if let Some(&id) = info.methods.get(&member.name) {
-                    if !type_args.is_empty() {
-                        return Err(not_generic(&member.name));
-                    }
-                    return self.call_fn(id, Some(recv), args, span);
-                }
-                if let Some(&g) = info.generic_methods.get(&member.name) {
-                    return self.call_generic_fn(g, Some(recv), type_args, args, span, expected);
-                }
-                if let Some(i) = info.fields.iter().position(|f| f.name == member.name) {
-                    let f = mk(K::Field { obj: Box::new(recv), index: i }, info.fields[i].ty);
-                    return self.call_value(f, args, span, &member.name);
-                }
-                Err(Diagnostic::new(
-                    format!("`{}` has no method `{}`", info.name, member.name),
-                    member.span,
-                ))
+                self.method_call(recv, member, type_args, args, span, expected)
+            }
+
+            // `value?.method(...)`: null if `value` is
+            A::SafeField(obj, member) => {
+                let recv = self.value(obj)?;
+                self.safe_access(recv, callee.span, |cx, plain| {
+                    cx.method_call(plain, member, type_args, args, span, expected)
+                })
             }
 
             // `make()(x)`, `(f)(x)`, …
@@ -1918,6 +1901,97 @@ impl<'c, 'a> Cx<'c, 'a> {
                 self.call_value(f, args, span, "this expression")
             }
         }
+    }
+
+    /// `recv.member(args)` for an already evaluated receiver: a method of its type, a method
+    /// added to a built-in type, or a function stored in a field.
+    fn method_call(
+        &mut self,
+        recv: hir::Expr,
+        member: &ast::Ident,
+        type_args: &[ast::TypeRef],
+        args: &[ast::Arg],
+        span: Span,
+        expected: Option<Ty>,
+    ) -> Result<hir::Expr> {
+        let not_generic = |what: &str| {
+            Diagnostic::new(format!("`{what}` is not generic, so it takes no type arguments"), member.span)
+        };
+        if let Some(id) = self.ck.ext_method(recv.ty, &member.name) {
+            if !type_args.is_empty() {
+                return Err(not_generic(&member.name));
+            }
+            return self.call_fn(id, Some(recv), args, span);
+        }
+        let Ty::Obj(ty) = recv.ty else {
+            let d = Diagnostic::new(format!("a {} has no method `{}`", self.name(recv.ty), member.name), member.span);
+            return Err(self.null_hint(recv.ty, d));
+        };
+        let info = self.ck.t.ty(ty);
+        if info.array_elem.is_some() {
+            if !type_args.is_empty() {
+                return Err(not_generic(&member.name));
+            }
+            return self.array_method(recv, member, args, span);
+        }
+        if let Some(&id) = info.methods.get(&member.name) {
+            if !type_args.is_empty() {
+                return Err(not_generic(&member.name));
+            }
+            return self.call_fn(id, Some(recv), args, span);
+        }
+        if let Some(&g) = info.generic_methods.get(&member.name) {
+            return self.call_generic_fn(g, Some(recv), type_args, args, span, expected);
+        }
+        if let Some(i) = info.fields.iter().position(|f| f.name == member.name) {
+            let f = mk(K::Field { obj: Box::new(recv), index: i }, info.fields[i].ty);
+            return self.call_value(f, args, span, &member.name);
+        }
+        Err(Diagnostic::new(
+            format!("`{}` has no method `{}`", info.name, member.name),
+            member.span,
+        ))
+    }
+
+    /// Run `access` on the non-null value of `recv`, or give null: `recv?.…`
+    ///
+    /// ```text
+    /// { $t := recv; if $t == null { null } else { access($t!!) } }
+    /// ```
+    ///
+    /// The result is optional (a plain `R` becomes `R?`); an access that produces nothing runs for effect.
+    fn safe_access(
+        &mut self,
+        recv: hir::Expr,
+        span: Span,
+        access: impl FnOnce(&mut Self, hir::Expr) -> Result<hir::Expr>,
+    ) -> Result<hir::Expr> {
+        let Some((plain, boxed)) = self.nullable_parts(recv.ty) else {
+            return Err(Diagnostic::new(format!("a {} is never null, so `?.` is pointless", self.name(recv.ty)), span)
+                .hint("use `.` instead"));
+        };
+        let tmp = self.new_local("$safe", recv.ty);
+        let present = {
+            let t = self.local_expr(tmp);
+            if boxed { mk(K::Unwrap(Box::new(t)), plain) } else { t }
+        };
+        let result = access(self, present)?;
+        let is_null = mk(K::IsNull(Box::new(self.local_expr(tmp))), Ty::Bool);
+        let bind = hir::Stmt::Let(tmp, Some(recv));
+        if result.ty == Ty::Void {
+            let check = hir::Stmt::Expr(mk(
+                K::Cond { cond: Box::new(is_null), then: Box::new(unit()), otherwise: Box::new(result) },
+                Ty::Void,
+            ));
+            return Ok(mk(K::Block(vec![bind, check], Box::new(unit())), Ty::Void));
+        }
+        let ty = self.ck.t.opt_of(result.ty);
+        let some = if matches!(result.ty, Ty::Opt(_)) { result } else { mk(K::Wrap(Box::new(result)), ty) };
+        let cond = mk(
+            K::Cond { cond: Box::new(is_null), then: Box::new(mk(K::Null, ty)), otherwise: Box::new(some) },
+            ty,
+        );
+        Ok(mk(K::Block(vec![bind], Box::new(cond)), ty))
     }
 
     /// Call a function value.

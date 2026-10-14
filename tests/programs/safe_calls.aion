@@ -1,0 +1,24 @@
+// Safe member access and calls: a?.b, a?.f(), chains with ?:
+type Node(v: Int) {
+    next: Node?
+    name: String?
+    fn double() = v * 2
+    fn label() = "node$v"
+    fn bump() { v += 1 }
+}
+a := Node(1)
+a.next = Node(2)
+a.next!!.next = Node(3)
+a.name = "first"
+println(a.next?.v, a.next?.next?.v, a.next?.next?.next?.v)
+println(a.next?.double(), a.next?.next?.next?.double())
+println(a.name?.length(), a.next?.name?.length(), a.name?.upper())
+println(a.next?.next?.next?.v ?: -1, a.next?.v ?: -1)
+n: Node? = null
+println(n?.v, n?.label(), n?.next?.next)
+n?.bump()
+m: Node? = a
+m?.bump()
+println(a.v)
+s: String? = null
+println(s?.length() ?: 0)

@@ -1,0 +1,4 @@
+// error: a Node? has no field `v`
+type Node(v: Int) { next: Node? }
+n := Node(1)
+println(n.next.v)
