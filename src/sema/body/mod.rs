@@ -1436,6 +1436,10 @@ impl<'c, 'a> Cx<'c, 'a> {
                 self.get_element(o, i, e.span)?
             }
 
+            A::Null | A::SafeField(..) | A::NotNull(_) | A::Elvis(..) => {
+                return Err(Diagnostic::new("nullable values are not available yet", e.span));
+            }
+
             A::List(items) => self.list_literal(items, None, e.span)?,
             A::Map(entries) => self.map_literal(entries, None, e.span)?,
 

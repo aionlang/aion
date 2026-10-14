@@ -138,8 +138,13 @@ impl<'a> Parser<'a> {
             }
             span = span.to(self.expect(Token::Gt)?.span);
         }
-        self.eat(Token::Question); // nullability is not tracked yet
-        Ok(TypeRef { kind: TypeKind::Named { name: id.name, args }, span })
+        let named = TypeRef { kind: TypeKind::Named { name: id.name, args }, span };
+        if self.peek() == Some(Token::Question) {
+            let q = self.bump().span;
+            let span = named.span.to(q);
+            return Ok(TypeRef { kind: TypeKind::Nullable(Box::new(named)), span });
+        }
+        Ok(named)
     }
 
     /// `<T, R>` after a declaration's name (empty if absent).
@@ -514,9 +519,19 @@ impl<'a> Parser<'a> {
     fn binary(&mut self, min_prec: u8) -> Result<Expr> {
         let mut lhs = self.unary()?;
         while let Some(tok) = self.peek() {
-            // A line break ends the expression, except before `&&` / `||`.
-            if self.nl() && !matches!(tok, Token::AndAnd | Token::OrOr) {
+            // A line break ends the expression, except before `&&` / `||` / `?:`.
+            if self.nl() && !matches!(tok, Token::AndAnd | Token::OrOr | Token::Elvis) {
                 break;
+            }
+            if tok == Token::Elvis {
+                if 5 < min_prec {
+                    break;
+                }
+                self.bump();
+                let rhs = self.binary(5)?; // right-associative
+                let span = lhs.span.to(rhs.span);
+                lhs = Expr { kind: ExprKind::Elvis(Box::new(lhs), Box::new(rhs)), span };
+                continue;
             }
             if tok == Token::In {
                 if 4 < min_prec {
@@ -605,6 +620,23 @@ impl<'a> Parser<'a> {
                     let span = e.span.to(field.span);
                     e = Expr { kind: ExprKind::Field(Box::new(e), field), span };
                 }
+                Some(Token::QuestionDot) => {
+                    self.bump();
+                    let field = self.ident()?;
+                    let span = e.span.to(field.span);
+                    e = Expr { kind: ExprKind::SafeField(Box::new(e), field), span };
+                }
+                // `x!!` — two adjacent `!`s, so `!!x` (double negation) still parses.
+                Some(Token::Bang)
+                    if !self.nl()
+                        && self.peek_at(1) == Some(Token::Bang)
+                        && self.toks[self.pos].span.end == self.toks[self.pos + 1].span.start =>
+                {
+                    self.bump();
+                    let end = self.bump().span;
+                    let span = e.span.to(end);
+                    e = Expr { kind: ExprKind::NotNull(Box::new(e)), span };
+                }
                 Some(Token::LParen) if !self.nl() => {
                     self.bump();
                     let args = self.scoped(true, false, |p| p.args())?;
@@ -640,7 +672,14 @@ impl<'a> Parser<'a> {
                 Some(Token::LBrace)
                     if !self.nl()
                         && !self.no_brace
-                        && matches!(e.kind, ExprKind::Name(_) | ExprKind::Field(..) | ExprKind::Call { .. } | ExprKind::Index { .. }) =>
+                        && matches!(
+                            e.kind,
+                            ExprKind::Name(_)
+                                | ExprKind::Field(..)
+                                | ExprKind::SafeField(..)
+                                | ExprKind::Call { .. }
+                                | ExprKind::Index { .. }
+                        ) =>
                 {
                     let lambda = self.lambda()?;
                     let span = e.span.to(lambda.span);
@@ -699,6 +738,10 @@ impl<'a> Parser<'a> {
             Token::Float => {
                 self.bump();
                 ExprKind::Float(self.text(tok).parse().expect("lexer guarantees a valid float"))
+            }
+            Token::Null => {
+                self.bump();
+                ExprKind::Null
             }
             Token::True | Token::False => {
                 self.bump();
@@ -1041,11 +1084,12 @@ fn binop(t: Token) -> Option<(u8, BinOp)> {
         Token::Le => (4, BinOp::Le),
         Token::Gt => (4, BinOp::Gt),
         Token::Ge => (4, BinOp::Ge),
-        Token::Plus => (5, BinOp::Add),
-        Token::Minus => (5, BinOp::Sub),
-        Token::Star => (6, BinOp::Mul),
-        Token::Slash => (6, BinOp::Div),
-        Token::Percent => (6, BinOp::Rem),
+        // 5 is the elvis operator, handled in `binary`
+        Token::Plus => (6, BinOp::Add),
+        Token::Minus => (6, BinOp::Sub),
+        Token::Star => (7, BinOp::Mul),
+        Token::Slash => (7, BinOp::Div),
+        Token::Percent => (7, BinOp::Rem),
         _ => return None,
     })
 }
@@ -1228,6 +1272,48 @@ mod tests {
         assert!(err("1 +").contains("expected an expression"));
         assert!(err("#").contains("unexpected character"));
         assert!(err("99999999999999999999").contains("too large"));
+    }
+
+    #[test]
+    fn nullable_syntax() {
+        // types
+        let m = module("fn f(a: Int?, b: List<String?>?) -> Point? = null\nx: Line? = null\n");
+        let Item::Fn(f) = &m.items[0] else { panic!("expected a function") };
+        assert!(matches!(&f.params[0].ty.kind, TypeKind::Nullable(t) if matches!(&t.kind, TypeKind::Named { name, .. } if name == "Int")));
+        let TypeKind::Nullable(list) = &f.params[1].ty.kind else { panic!("expected a nullable list") };
+        let TypeKind::Named { args, .. } = &list.kind else { panic!("expected List<…>") };
+        assert!(matches!(&args[0].kind, TypeKind::Nullable(_)));
+        assert!(matches!(&f.ret.as_ref().unwrap().kind, TypeKind::Nullable(_)));
+
+        // expressions
+        assert!(matches!(parse_expr("null").kind, ExprKind::Null));
+        assert!(matches!(parse_expr("a!!").kind, ExprKind::NotNull(_)));
+        assert!(matches!(parse_expr("a?.b").kind, ExprKind::SafeField(..)));
+        let call = parse_expr("a?.b(1)?.c");
+        let ExprKind::SafeField(inner, c) = &call.kind else { panic!("expected ?.c, got {call:?}") };
+        assert_eq!(c.name, "c");
+        assert!(matches!(&inner.kind, ExprKind::Call { callee, .. } if matches!(callee.kind, ExprKind::SafeField(..))));
+        // a trailing lambda after a safe call
+        assert!(matches!(parse_expr("a?.each { it }").kind, ExprKind::Call { .. }));
+    }
+
+    #[test]
+    fn elvis_precedence_and_associativity() {
+        // tighter than comparison and `&&`, looser than arithmetic
+        let e = parse_expr("a ?: b + 1 == c");
+        let ExprKind::Binary(BinOp::Eq, l, _) = &e.kind else { panic!("expected ==, got {e:?}") };
+        let ExprKind::Elvis(_, rhs) = &l.kind else { panic!("expected ?:") };
+        assert!(matches!(rhs.kind, ExprKind::Binary(BinOp::Add, ..)));
+        // right-associative: a ?: (b ?: c)
+        let e = parse_expr("a ?: b ?: c");
+        let ExprKind::Elvis(_, rhs) = &e.kind else { panic!("expected ?:") };
+        assert!(matches!(rhs.kind, ExprKind::Elvis(..)));
+        // may continue on the next line
+        assert!(matches!(parse_expr("a\n    ?: b").kind, ExprKind::Elvis(..)));
+        // `a !! b`-style misuse and double negation still parse as before
+        let e = parse_expr("!!a");
+        assert!(matches!(&e.kind, ExprKind::Unary(UnOp::Not, inner) if matches!(inner.kind, ExprKind::Unary(UnOp::Not, _))));
+        assert!(matches!(parse_expr("a != b").kind, ExprKind::Binary(BinOp::Ne, ..)));
     }
 
     #[test]

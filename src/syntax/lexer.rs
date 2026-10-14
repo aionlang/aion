@@ -39,6 +39,8 @@ pub enum Token {
     True,
     #[token("false")]
     False,
+    #[token("null")]
+    Null,
 
     // ── literals / names ────────────────────────────────────────
     #[regex(r"[0-9]+\.[0-9]+")]
@@ -76,6 +78,12 @@ pub enum Token {
     Comma,
     #[token("?")]
     Question,
+    /// Safe member access: `a?.b`.
+    #[token("?.")]
+    QuestionDot,
+    /// The elvis operator: `a ?: b`.
+    #[token("?:")]
+    Elvis,
     #[token(":")]
     Colon,
     /// `:=` and `::=` both declare-and-infer.
@@ -153,6 +161,7 @@ impl Token {
             Token::Continue => "`continue`",
             Token::Return => "`return`",
             Token::True | Token::False => "a boolean",
+            Token::Null => "`null`",
             Token::Float | Token::Int => "a number",
             Token::Str => "a string",
             Token::Ident => "an identifier",
@@ -168,6 +177,8 @@ impl Token {
             Token::Semi => "`;`",
             Token::Comma => "`,`",
             Token::Question => "`?`",
+            Token::QuestionDot => "`?.`",
+            Token::Elvis => "`?:`",
             Token::Colon => "`:`",
             Token::ColonEq => "`:=`",
             Token::Arrow => "`->`",

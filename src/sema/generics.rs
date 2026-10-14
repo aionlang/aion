@@ -70,6 +70,8 @@ impl<'a> Checker<'a> {
                     _ => Err(Diagnostic::new(format!("unknown type `{name}`"), ty.span)),
                 }
             }
+            // Nullability is not tracked yet: `T?` means `T`.
+            TypeKind::Nullable(inner) => self.resolve_type(module, inner, subst),
             TypeKind::Fn { params, ret } => {
                 let params =
                     params.iter().map(|p| self.resolve_value_type(module, p, subst)).collect::<Result<Vec<_>>>()?;

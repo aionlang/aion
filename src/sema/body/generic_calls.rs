@@ -189,6 +189,8 @@ impl Cx<'_, '_> {
                     self.unify(tpl, a, t, bind);
                 }
             }
+            // Nullability is not tracked yet: `T?` unifies like `T`.
+            TypeKind::Nullable(inner) => self.unify(tpl, inner, actual, bind),
             TypeKind::Fn { params, ret } => {
                 let Ty::Fn(id) = actual else { return };
                 let sig = self.ck.t.fn_sig(id);

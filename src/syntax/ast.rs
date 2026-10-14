@@ -21,6 +21,8 @@ pub enum TypeKind {
     Named { name: String, args: Vec<TypeRef> },
     /// `(A, B) -> R`
     Fn { params: Vec<TypeRef>, ret: Box<TypeRef> },
+    /// `T?`: a `T` or `null`.
+    Nullable(Box<TypeRef>),
 }
 
 #[derive(Debug)]
@@ -162,6 +164,14 @@ pub enum ExprKind {
     Name(String),
     /// `obj.field` — also `module.name` before name resolution.
     Field(Box<Expr>, Ident),
+    /// `obj?.field`: null if `obj` is null.  With a call, `obj?.method(…)`.
+    SafeField(Box<Expr>, Ident),
+    /// `expr!!`: the value, or a panic if it is null.
+    NotNull(Box<Expr>),
+    /// `a ?: b`: `a` unless it is null.
+    Elvis(Box<Expr>, Box<Expr>),
+    /// The `null` literal.
+    Null,
     /// `f(x)`, `List<Int>()`: explicit type arguments are optional.
     Call { callee: Box<Expr>, type_args: Vec<TypeRef>, args: Vec<Arg> },
     /// `xs[i]`
