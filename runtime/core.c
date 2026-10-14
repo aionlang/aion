@@ -11,6 +11,7 @@
 #include "aion.h"
 
 #include <inttypes.h>
+#include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -32,10 +33,79 @@ static size_t threshold = MIN_THRESHOLD;
 
 /* ── Panics ───────────────────────────────────────────────────── */
 
+/* ── Closures, defer and try ──────────────────────────────────── */
+
+/* A function value is a GC object whose first slot is the code pointer; the
+ * object itself is passed to the code as a hidden first argument. */
+static void call0(void *closure) { (*(void (**)(void *))closure)(closure); }
+static void call1(void *closure, const char *arg) { (*(void (**)(void *, const char *))closure)(closure, arg); }
+
+/* `defer`red closures, innermost last.  They are GC roots. */
+static void **defer_stack = NULL;
+static size_t defer_len = 0, defer_cap = 0;
+
+void aion_defer_push(void *closure) {
+    if (defer_len == defer_cap) {
+        defer_cap = defer_cap ? defer_cap * 2 : 64;
+        defer_stack = realloc(defer_stack, defer_cap * sizeof *defer_stack);
+        if (!defer_stack) { fputs("[aion] out of memory\n", stderr); exit(1); }
+    }
+    defer_stack[defer_len++] = closure;
+}
+
+int64_t aion_defer_mark(void) { return (int64_t)defer_len; }
+
+/* Run deferred closures, newest first, until only `mark` remain. */
+void aion_defer_run(int64_t mark) {
+    while (defer_len > (size_t)mark) {
+        void *closure = defer_stack[--defer_len];
+        call0(closure);
+    }
+}
+
+/* One per active `try`: where to jump back to when something panics. */
+typedef struct TryContext {
+    struct TryContext *prev;
+    jmp_buf jump;
+    AionFrame *frame; /* shadow stack to restore */
+    size_t defers;    /* deferred closures to run before jumping */
+} TryContext;
+
+static TryContext *try_top = NULL;
+static char panic_message[512];
+static int fatal_panic = 0;
+
 void aion_panic(const char *msg) {
+    if (try_top) {
+        TryContext *ctx = try_top;
+        snprintf(panic_message, sizeof panic_message, "%s", msg);
+        try_top = ctx->prev; /* a panic inside a deferred closure goes to the next handler */
+        aion_defer_run((int64_t)ctx->defers);
+        longjmp(ctx->jump, 1);
+    }
+    if (!fatal_panic) { /* run the cleanups, once, before dying */
+        fatal_panic = 1;
+        aion_defer_run(0);
+    }
     fflush(stdout);
     fprintf(stderr, "[aion] panic: %s\n", msg);
     exit(1);
+}
+
+/* try { body } catch (message) { handler }: both are closures. */
+void aion_try(void *body, void *handler) {
+    TryContext ctx;
+    ctx.prev = try_top;
+    ctx.frame = aion_frame_top;
+    ctx.defers = defer_len;
+    try_top = &ctx;
+    if (setjmp(ctx.jump) == 0) {
+        call0(body);
+        try_top = ctx.prev;
+    } else {
+        aion_frame_top = ctx.frame;
+        call1(handler, aion_string(panic_message));
+    }
 }
 
 void aion_panic_null(void) { aion_panic("null reference"); }
@@ -94,6 +164,7 @@ void aion_gc_collect(void) {
     for (int64_t i = 0; i < aion_roots_len; i++) mark(*aion_roots[i]);
     for (AionFrame *f = aion_frame_top; f; f = f->prev)
         for (uint64_t i = 0; i < f->n; i++) mark(f->slots[i]);
+    for (size_t i = 0; i < defer_len; i++) mark(defer_stack[i]);
     drain();
 
     size_t live = 0;
