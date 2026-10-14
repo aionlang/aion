@@ -111,10 +111,15 @@ pub(super) fn check_fn(ck: &Checker, id: FnId, work: &Work) -> Result<hir::Func>
         Work::Init { stmts } => {
             cx.init = Some(InitState { fn_id: id, declared: HashSet::new() });
             let mut out = Vec::new();
+            cx.block_defers.push(None);
             for s in stmts {
                 let after = cx.kill_before(s);
                 cx.top_stmt(s, &mut out)?;
                 cx.kill_after(&after);
+            }
+            // A top-level `defer` runs when the file's own code has finished.
+            if let Some(Some(mark)) = cx.block_defers.pop() {
+                out.push(cx.run_defers(mark)?);
             }
             Some(out)
         }
@@ -281,6 +286,8 @@ struct Frame {
     init: Option<InitState>,
     loops: u32,
     captures: Vec<hir::Capture>,
+    block_defers: Vec<Option<LocalId>>,
+    loop_bases: Vec<usize>,
 }
 
 /// A checked lambda waiting for the enclosing function to finish, which
@@ -314,6 +321,11 @@ struct Cx<'c, 'a> {
     outer: Vec<Frame>,
     vars: Vec<VarInfo>,
     lambdas: Vec<PendingLambda>,
+    /// One entry per open block of the current function: the local holding the
+    /// `defer` stack depth at its first `defer`, if it has one.
+    block_defers: Vec<Option<LocalId>>,
+    /// `block_defers.len()` at the start of each enclosing loop body.
+    loop_bases: Vec<usize>,
     /// Optional variables currently known to be non-null (see `narrow.rs`).
     narrowed: Vec<narrow::Narrow>,
     /// Names assigned inside lambdas of the function being checked: never narrowed.
@@ -371,6 +383,8 @@ impl<'c, 'a> Cx<'c, 'a> {
             outer: Vec::new(),
             vars: Vec::new(),
             lambdas: Vec::new(),
+            block_defers: Vec::new(),
+            loop_bases: Vec::new(),
             narrowed: Vec::new(),
             lambda_assigned: HashSet::new(),
         }
@@ -462,6 +476,8 @@ impl<'c, 'a> Cx<'c, 'a> {
             init: self.init.take(),
             loops: self.loops,
             captures: take(&mut self.captures),
+            block_defers: take(&mut self.block_defers),
+            loop_bases: take(&mut self.loop_bases),
         };
         self.outer.push(saved);
         (self.ret, self.in_ctor, self.loops) = (ret, false, 0);
@@ -473,6 +489,7 @@ impl<'c, 'a> Cx<'c, 'a> {
         let captures = replace(&mut self.captures, f.captures);
         (self.scopes, self.ret, self.this) = (f.scopes, f.ret, f.this);
         (self.in_ctor, self.init, self.loops) = (f.in_ctor, f.init, f.loops);
+        (self.block_defers, self.loop_bases) = (f.block_defers, f.loop_bases);
         (locals, captures)
     }
 
@@ -603,6 +620,8 @@ impl<'c, 'a> Cx<'c, 'a> {
     /// The statements of a lambda; the last expression is its result.
     fn lambda_body(&mut self, body: &[ast::Stmt], want_ret: Option<Ty>, span: Span) -> Result<(Vec<hir::Stmt>, Ty)> {
         self.scopes.push(HashMap::new());
+        self.block_defers.push(None);
+        let saved = self.narrowed.clone();
         let mut out = Vec::new();
         let mut result = (want_ret == Some(Ty::Void)).then_some(Ty::Void);
         for (i, s) in body.iter().enumerate() {
@@ -622,10 +641,20 @@ impl<'c, 'a> Cx<'c, 'a> {
                         None => v,
                     };
                     result = Some(v.ty);
-                    out.push(if v.ty == Ty::Void { hir::Stmt::Expr(v) } else { hir::Stmt::Return(Some(v)) });
+                    if v.ty == Ty::Void {
+                        out.push(hir::Stmt::Expr(v));
+                    } else {
+                        self.emit_return(Some(v), &mut out)?;
+                    }
                 }
-                _ => self.stmt(s, &mut out)?,
+                _ => self.stmt_narrowing(s, &mut out)?,
             }
+        }
+        self.narrowed = saved;
+        if let Some(Some(mark)) = self.block_defers.pop()
+            && !matches!(out.last(), Some(hir::Stmt::Return(_) | hir::Stmt::Break | hir::Stmt::Continue))
+        {
+            out.push(self.run_defers(mark)?);
         }
         self.scopes.pop();
         match (want_ret, result) {
@@ -656,12 +685,64 @@ impl<'c, 'a> Cx<'c, 'a> {
     /// Check statements in a fresh lexical scope.
     fn block(&mut self, stmts: &[ast::Stmt]) -> Result<Vec<hir::Stmt>> {
         self.scopes.push(HashMap::new());
+        self.block_defers.push(None);
         let saved = self.narrowed.clone();
         let mut out = Vec::new();
         let result = stmts.iter().try_for_each(|s| self.stmt_narrowing(s, &mut out));
         self.narrowed = saved;
+        let mark = self.block_defers.pop().flatten();
         self.scopes.pop();
-        result.map(|()| out)
+        result?;
+        if let Some(mark) = mark
+            && !matches!(out.last(), Some(hir::Stmt::Return(_) | hir::Stmt::Break | hir::Stmt::Continue))
+        {
+            out.push(self.run_defers(mark)?);
+        }
+        Ok(out)
+    }
+
+    /// Call a function declared in the prelude (the helpers behind `defer` and `try`).
+    fn prelude_call(&mut self, name: &str, args: Vec<hir::Expr>, span: Span) -> Result<hir::Expr> {
+        let Some(&Sym::Fn(id)) = self.ck.t.scopes[0].items.get(name) else {
+            return Err(Diagnostic::new(format!("the prelude has no `{name}`"), span));
+        };
+        self.call_values(id, None, args.into_iter().map(|a| (a, span)).collect(), span)
+    }
+
+    /// `__defer_run(mark)`: run the deferred closures registered since `mark`.
+    fn run_defers(&mut self, mark: LocalId) -> Result<hir::Stmt> {
+        let depth = self.local_expr(mark);
+        Ok(hir::Stmt::Expr(self.prelude_call("__defer_run", vec![depth], Span::default())?))
+    }
+
+    /// `return value`, first running every `defer` of the blocks being left.
+    fn emit_return(&mut self, value: Option<hir::Expr>, out: &mut Vec<hir::Stmt>) -> Result<()> {
+        let outermost = self.block_defers.iter().flatten().next().copied();
+        let Some(mark) = outermost else {
+            out.push(hir::Stmt::Return(value));
+            return Ok(());
+        };
+        // The value is computed before the deferred code runs.
+        let value = match value {
+            Some(v) => {
+                let tmp = self.new_local("$result", v.ty);
+                out.push(hir::Stmt::Let(tmp, Some(v)));
+                Some(self.local_expr(tmp))
+            }
+            None => None,
+        };
+        out.push(self.run_defers(mark)?);
+        out.push(hir::Stmt::Return(value));
+        Ok(())
+    }
+
+    /// Run the `defer`s of the blocks a `break` / `continue` leaves.
+    fn leave_loop_body(&mut self, out: &mut Vec<hir::Stmt>) -> Result<()> {
+        let base = self.loop_bases.last().copied().unwrap_or(0);
+        if let Some(&mark) = self.block_defers[base.min(self.block_defers.len())..].iter().flatten().next() {
+            out.push(self.run_defers(mark)?);
+        }
+        Ok(())
     }
 
     /// [`Self::stmt`], keeping the null-check knowledge of `narrow.rs` up to date.
@@ -724,7 +805,9 @@ impl<'c, 'a> Cx<'c, 'a> {
                 let cond = self.condition(test)?;
                 let facts = self.facts(test, true);
                 self.loops += 1;
+                self.loop_bases.push(self.block_defers.len());
                 let body = self.with_facts(facts, |cx| cx.block(body));
+                self.loop_bases.pop();
                 self.loops -= 1;
                 out.push(hir::Stmt::While { cond, body: body?, step: Vec::new() });
             }
@@ -736,7 +819,21 @@ impl<'c, 'a> Cx<'c, 'a> {
                     let word = if matches!(s.kind, StmtKind::Break) { "break" } else { "continue" };
                     return Err(Diagnostic::new(format!("`{word}` outside of a loop"), s.span));
                 }
+                self.leave_loop_body(out)?;
                 out.push(if matches!(s.kind, StmtKind::Break) { hir::Stmt::Break } else { hir::Stmt::Continue });
+            }
+
+            StmtKind::Defer(body) => {
+                let unit_fn = self.ck.t.intern_fn(Vec::new(), Ty::Void);
+                let closure = self.lambda(&[], true, body, Some(unit_fn), s.span)?;
+                if self.block_defers.last().is_some_and(Option::is_none) {
+                    let depth = self.prelude_call("__defer_mark", Vec::new(), s.span)?;
+                    let mark = self.new_local("$mark", Ty::Int);
+                    out.push(hir::Stmt::Let(mark, Some(depth)));
+                    *self.block_defers.last_mut().unwrap() = Some(mark);
+                }
+                let push = self.prelude_call("__defer_push", vec![closure], s.span)?;
+                out.push(hir::Stmt::Expr(push));
             }
 
             StmtKind::Return(value) => {
@@ -762,7 +859,7 @@ impl<'c, 'a> Cx<'c, 'a> {
                         Some(self.coerce(v, ret, e.span)?)
                     }
                 };
-                out.push(hir::Stmt::Return(value));
+                self.emit_return(value, out)?;
             }
         }
         Ok(())
@@ -817,7 +914,9 @@ impl<'c, 'a> Cx<'c, 'a> {
         let v = self.new_local(&var.name, Ty::Int);
         self.scopes.last_mut().unwrap().insert(var.name.clone(), v);
         self.loops += 1;
+        self.loop_bases.push(self.block_defers.len());
         let inner = self.block(body);
+        self.loop_bases.pop();
         self.loops -= 1;
         self.scopes.pop();
         self.scopes.pop();
@@ -870,7 +969,9 @@ impl<'c, 'a> Cx<'c, 'a> {
         let v = self.new_local(&var.name, item.ty);
         self.scopes.last_mut().unwrap().insert(var.name.clone(), v);
         self.loops += 1;
+        self.loop_bases.push(self.block_defers.len());
         let inner = self.block(body);
+        self.loop_bases.pop();
         self.loops -= 1;
         self.scopes.pop();
         self.scopes.pop();
@@ -1587,6 +1688,7 @@ impl<'c, 'a> Cx<'c, 'a> {
     /// Statements followed by a value: the last expression of the block.
     fn block_value(&mut self, stmts: &[ast::Stmt]) -> Result<hir::Expr> {
         self.scopes.push(HashMap::new());
+        self.block_defers.push(None);
         let saved = self.narrowed.clone();
         let result = (|| {
             let mut out = Vec::new();
@@ -1600,6 +1702,18 @@ impl<'c, 'a> Cx<'c, 'a> {
                     _ => self.stmt_narrowing(s, &mut out)?,
                 }
             }
+            // The block's value is computed before its deferred code runs.
+            if let Some(Some(mark)) = self.block_defers.last().copied() {
+                if tail.ty == Ty::Void {
+                    out.push(hir::Stmt::Expr(tail));
+                    tail = unit();
+                } else {
+                    let tmp = self.new_local("$tail", tail.ty);
+                    out.push(hir::Stmt::Let(tmp, Some(tail)));
+                    tail = self.local_expr(tmp);
+                }
+                out.push(self.run_defers(mark)?);
+            }
             Ok(if out.is_empty() {
                 tail
             } else {
@@ -1607,6 +1721,7 @@ impl<'c, 'a> Cx<'c, 'a> {
                 mk(K::Block(out, Box::new(tail)), ty)
             })
         })();
+        self.block_defers.pop();
         self.narrowed = saved;
         self.scopes.pop();
         result

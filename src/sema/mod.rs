@@ -571,10 +571,14 @@ impl<'a> Checker<'a> {
             None => Some(Ty::Void),
         };
         if matches!(decl.body, ast::FnBody::Extern { .. }) {
-            let c_types_only =
-                params.iter().map(|p| p.ty).chain(ret).all(|ty| !matches!(ty, Ty::Obj(_)));
-            if !c_types_only {
-                return Err(Diagnostic::new("`extern fn` can only use Int, Float, Bool and String", decl.span));
+            // Function values may be passed to C (as an opaque closure pointer), never returned.
+            let plain = |ty: Ty| !matches!(ty, Ty::Obj(_) | Ty::Opt(_) | Ty::Null);
+            let ok = params.iter().all(|p| plain(p.ty)) && ret.is_none_or(|r| plain(r) && !matches!(r, Ty::Fn(_)));
+            if !ok {
+                return Err(Diagnostic::new(
+                    "`extern fn` can only use Int, Float, Bool and String (and take function values)",
+                    decl.span,
+                ));
             }
         }
         Ok(FnInfo { name: decl.name.name.clone(), module: mi, symbol, kind, params, ret: Cell::new(ret) })

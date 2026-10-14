@@ -1,0 +1,24 @@
+start 1
+end of work
+cleanup 2
+cleanup 1
+1
+start 9
+inner cleanup
+cleanup 2
+cleanup 1
+18
+body 0
+  done with 0
+  done with 1
+body 2
+  done with 2
+  done with 3
+final count: 6
+leaving the if
+10
+lambda body
+lambda defer
+7
+script body
+end of script

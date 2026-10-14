@@ -1,0 +1,51 @@
+// defer: runs when the enclosing block is left (fall through, return, break, continue)
+fn work(n: Int) -> Int {
+    println("start", n)
+    defer println("cleanup 1")
+    defer {
+        println("cleanup 2")
+    }
+    if n > 5 {
+        defer println("inner cleanup")
+        return n * 2
+    }
+    println("end of work")
+    return n
+}
+println(work(1))
+println(work(9))
+
+// defers run once per iteration, and on break / continue
+for i in 0..4 {
+    defer println("  done with", i)
+    if i == 1 { continue }
+    if i == 3 { break }
+    println("body", i)
+}
+
+// a deferred closure sees later changes to variables
+fn counter() {
+    count := 0
+    defer println("final count:", count)
+    count += 5
+    count += 1
+}
+counter()
+
+// defer in a value-producing block and a lambda
+x := if true {
+    defer println("leaving the if")
+    10
+} else {
+    20
+}
+println(x)
+run := {
+    defer println("lambda defer")
+    println("lambda body")
+    7
+}
+println(run())
+
+defer println("end of script")
+println("script body")

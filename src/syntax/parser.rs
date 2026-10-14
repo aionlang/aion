@@ -442,6 +442,12 @@ impl<'a> Parser<'a> {
                 };
                 StmtKind::Return(value)
             }
+            Some(Token::Defer) => {
+                self.bump();
+                // `defer { … }` is a block of statements; otherwise one statement.
+                let body = if self.peek() == Some(Token::LBrace) { self.block()? } else { vec![self.stmt()?] };
+                StmtKind::Defer(body)
+            }
             Some(Token::While) => {
                 self.bump();
                 let cond = self.header_expr()?;

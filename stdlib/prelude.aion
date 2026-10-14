@@ -402,3 +402,9 @@ fn setOf<T>(items: List<T>) -> Set<T> {
     for x in items { out.add(x) }
     return out
 }
+
+// ── Support for `defer` and `try` (the compiler calls these; not for direct use) ──
+extern fn __defer_push(action: () -> Unit) = "aion_defer_push"
+extern fn __defer_mark() -> Int = "aion_defer_mark"
+extern fn __defer_run(mark: Int) = "aion_defer_run"
+extern fn __try(body: () -> Unit, handler: (String) -> Unit) = "aion_try"

@@ -83,6 +83,8 @@ pub(crate) fn walk_stmt<'a>(s: &'a ast::Stmt, lambda: bool, f: &mut dyn FnMut(As
             walk_stmts(body, lambda, f);
         }
         StmtKind::Return(Some(e)) => walk_expr(e, lambda, f),
+        // a deferred body runs later, like a lambda
+        StmtKind::Defer(body) => walk_stmts(body, true, f),
         StmtKind::Return(None) | StmtKind::Break | StmtKind::Continue => {}
     }
 }

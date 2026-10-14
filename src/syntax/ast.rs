@@ -129,6 +129,8 @@ pub enum StmtKind {
     Break,
     Continue,
     Return(Option<Expr>),
+    /// `defer cleanup()` / `defer { … }`: runs when the enclosing block is left.
+    Defer(Vec<Stmt>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
