@@ -1,0 +1,15 @@
+// `panic(…)` never returns, so it ends a function and works as a null-check guard.
+fn must(n: Int?) -> Int {
+    if n == null { panic("missing") }
+    return n
+}
+fn never() -> Int {
+    panic("never returns")
+}
+fn pick(flag: Bool) -> Int {
+    if flag { return 1 } else { panic("no") }
+}
+println(must(3))
+println(try { must(null) } catch e { -1 })
+println(try { never() } catch e { -2 })
+println(pick(true), try { pick(false) } catch e { 0 })

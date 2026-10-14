@@ -157,9 +157,13 @@ pub(crate) fn lambda_assigned<'a>(visit: impl FnOnce(&mut dyn FnMut(Assign<'a>))
     names
 }
 
-/// Does a block of checked statements always leave (`return`, `break`, `continue`)?
-fn diverges(stmts: &[hir::Stmt]) -> bool {
-    matches!(stmts.last(), Some(hir::Stmt::Return(_) | hir::Stmt::Break | hir::Stmt::Continue))
+/// Does a block of checked statements always leave (`return`, `break`, `continue`, `panic`)?
+fn diverges(ck: &crate::sema::Checker, stmts: &[hir::Stmt]) -> bool {
+    match stmts.last() {
+        Some(hir::Stmt::Return(_) | hir::Stmt::Break | hir::Stmt::Continue) => true,
+        Some(hir::Stmt::Expr(e)) => super::expr_returns(ck, e),
+        _ => false,
+    }
 }
 
 impl Cx<'_, '_> {
@@ -276,7 +280,7 @@ impl Cx<'_, '_> {
         let A::If { cond, otherwise: None, .. } = &e.kind else { return };
         let hir::Stmt::Expr(hir::Expr { kind: K::Cond { then, .. }, .. }) = checked else { return };
         let hir::Expr { kind: K::Block(stmts, _), .. } = &**then else { return };
-        if diverges(stmts) {
+        if diverges(self.ck, stmts) {
             let facts = self.facts(cond, false);
             self.narrowed.extend(facts);
         }

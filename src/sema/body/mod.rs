@@ -53,7 +53,7 @@ pub(super) fn check_fn(ck: &Checker, id: FnId, work: &Work) -> Result<hir::Func>
                 FnBody::Block(stmts) => {
                     let body = cx.block(stmts)?;
                     let ret = info.ret.get().expect("block bodies never infer");
-                    if ret != Ty::Void && !always_returns(&body) {
+                    if ret != Ty::Void && !always_returns(ck, &body) {
                         return Err(Diagnostic::new(
                             format!("`{}` may reach its end without returning a {}", info.name, ck.t.ty_name(ret)),
                             decl.name.span,
@@ -231,20 +231,26 @@ impl Checker<'_> {
 }
 
 /// Does every path through `stmts` end in a `return`?
-fn always_returns(stmts: &[hir::Stmt]) -> bool {
+fn always_returns(ck: &Checker, stmts: &[hir::Stmt]) -> bool {
     match stmts.last() {
         Some(hir::Stmt::Return(_)) => true,
-        Some(hir::Stmt::Expr(e)) => expr_returns(e),
+        Some(hir::Stmt::Expr(e)) => expr_returns(ck, e),
         _ => false,
     }
 }
 
-fn expr_returns(e: &hir::Expr) -> bool {
+fn expr_returns(ck: &Checker, e: &hir::Expr) -> bool {
     match &e.kind {
-        K::Cond { then, otherwise, .. } => expr_returns(then) && expr_returns(otherwise),
-        K::Block(stmts, tail) => always_returns(stmts) || expr_returns(tail),
-        _ => false,
+        K::Cond { then, otherwise, .. } => expr_returns(ck, then) && expr_returns(ck, otherwise),
+        K::Block(stmts, tail) => always_returns(ck, stmts) || expr_returns(ck, tail),
+        _ => is_panic(ck, e),
     }
+}
+
+/// A call to `panic(…)`, which never comes back.
+fn is_panic(ck: &Checker, e: &hir::Expr) -> bool {
+    let K::Call { func, .. } = &e.kind else { return false };
+    ck.fns.borrow()[*func].info.as_ref().is_some_and(|i| i.symbol == "aion_panic")
 }
 
 struct InitState {
