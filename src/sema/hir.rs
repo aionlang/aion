@@ -10,7 +10,7 @@ pub type LocalId = usize;
 pub type GlobalId = usize;
 pub type FnTyId = usize;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Ty {
     Int,
     Float,
@@ -59,6 +59,7 @@ pub struct TypeDef {
     pub fields: Vec<Field>,
 }
 
+#[derive(Clone)]
 pub struct Field {
     pub name: String,
     pub ty: Ty,

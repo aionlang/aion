@@ -1,0 +1,3 @@
+// error: `f` is not generic, so it takes no type arguments
+fn f(x: Int) = x
+println(f<Int>(1))

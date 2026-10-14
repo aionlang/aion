@@ -56,6 +56,10 @@ pub enum Token {
     LParen,
     #[token(")")]
     RParen,
+    #[token("[")]
+    LBracket,
+    #[token("]")]
+    RBracket,
     #[token("{")]
     LBrace,
     #[token("}")]
@@ -154,6 +158,8 @@ impl Token {
             Token::Ident => "an identifier",
             Token::LParen => "`(`",
             Token::RParen => "`)`",
+            Token::LBracket => "`[`",
+            Token::RBracket => "`]`",
             Token::LBrace => "`{`",
             Token::RBrace => "`}`",
             Token::DotDot => "`..`",

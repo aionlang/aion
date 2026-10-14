@@ -1,0 +1,3 @@
+// error: cannot infer the type parameter `T` of `make`
+fn make<T>() = 1
+println(make())

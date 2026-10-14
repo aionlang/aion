@@ -61,7 +61,10 @@ pub fn load(map: &mut SourceMap, entry: &Path, packages: Vec<Package>) -> Result
         packages,
     };
 
-    let (prelude, _) = embedded::stdlib_module("prelude").expect("stdlib/prelude.aion exists");
+    let (prelude, prelude_c) = embedded::stdlib_module("prelude").expect("stdlib/prelude.aion exists");
+    if let Some(c) = prelude_c {
+        loader.c_sources.push(("prelude.c".into(), c));
+    }
     loader.add("std:prelude".into(), "<std>/prelude.aion", prelude, "prelude".into(), None, 0)?;
 
     let key = std::fs::canonicalize(entry).unwrap_or_else(|_| entry.to_path_buf());

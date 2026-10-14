@@ -154,6 +154,12 @@ const char *aion_concat(const char *a, const char *b) {
 
 int64_t aion_str_eq(const char *a, const char *b) { return strcmp(a, b) == 0; }
 
+/* -1, 0 or 1 by byte order (UTF-8 order matches code-point order). */
+int64_t aion_str_cmp(const char *a, const char *b) {
+    int c = strcmp(a, b);
+    return c < 0 ? -1 : c > 0;
+}
+
 const char *aion_int_to_str(int64_t n) {
     char buf[32];
     snprintf(buf, sizeof buf, "%" PRId64, n);

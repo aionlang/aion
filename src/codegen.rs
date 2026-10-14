@@ -35,6 +35,7 @@ declare ptr @aion_int_to_str(i64)
 declare ptr @aion_float_to_str(double)
 declare ptr @aion_bool_to_str(i64)
 declare i64 @aion_str_eq(ptr, ptr)
+declare i64 @aion_str_cmp(ptr, ptr)
 declare void @aion_print_str(ptr, i64)
 declare void @aion_print_int(i64, i64)
 declare void @aion_print_float(double, i64)
@@ -47,7 +48,7 @@ declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
 /// Symbols declared by [`RUNTIME_DECLS`]; externs must not redeclare them.
 const RUNTIME_SYMBOLS: &[&str] = &[
     "aion_new_object", "aion_concat", "aion_int_to_str", "aion_float_to_str", "aion_bool_to_str",
-    "aion_str_eq", "aion_print_str", "aion_print_int", "aion_print_float", "aion_print_bool",
+    "aion_str_eq", "aion_str_cmp", "aion_print_str", "aion_print_int", "aion_print_float", "aion_print_bool",
     "aion_panic_null", "aion_panic_div_zero", "aion_frame_top",
 ];
 
@@ -607,7 +608,7 @@ impl<'a> FnGen<'a> {
                     let v = self.expr(a);
                     ops.push((a.ty, v));
                 }
-                if callee.kind == FuncKind::Method {
+                if callee.kind == FuncKind::Method && matches!(ops[0].0, Ty::Obj(_)) {
                     self.null_check(&ops[0].1.clone());
                 }
                 let rendered: Vec<String> = ops
@@ -841,6 +842,18 @@ impl<'a> FnGen<'a> {
             Ty::Str if op == Add => {
                 let t = self.call_value("ptr", &format!("@aion_concat(ptr {a}, ptr {b})"));
                 self.root(&t);
+                t
+            }
+            Ty::Str if matches!(op, Lt | Le | Gt | Ge) => {
+                let c = self.call_value("i64", &format!("@aion_str_cmp(ptr {a}, ptr {b})"));
+                let cmp = match op {
+                    Lt => "slt",
+                    Le => "sle",
+                    Gt => "sgt",
+                    _ => "sge",
+                };
+                let t = self.tmp();
+                self.line(format!("{t} = icmp {cmp} i64 {c}, 0"));
                 t
             }
             Ty::Str => {

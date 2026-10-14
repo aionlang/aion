@@ -1,0 +1,55 @@
+// Generic functions, types and methods; methods on built-in types.
+
+fn identity<T>(x: T) = x
+fn first<A, B>(a: A, b: B) = a
+fn pairText<A, B>(a: A, b: B) = "$a/$b"
+fn apply<T, R>(x: T, f: (T) -> R) = f(x)
+fn biggest<T>(a: T, b: T) = if a > b { a } else { b }
+
+println(identity(5), identity("s"), identity(2.5), identity(true))
+println(first(1, "x"), first("y", 2))
+println(pairText(1, "a"), pairText(2.5, true))
+println(apply(21, { it * 2 }), apply("hi", { it + "!" }), apply(3, { "n=$it" }))
+println(biggest(3, 9), biggest("apple", "pear"), biggest(1.5, 0.5))
+println(identity<Int>(7))
+
+type Box<T>(value: T) {
+    fn get() = value
+    fn map<R>(f: (T) -> R) = Box(f(value))
+    fn show() = "Box($value)"
+}
+
+b := Box(41)
+println(b.get(), b.show())
+println(b.map { it + 1 }.show())
+println(b.map { "v$it" }.show())
+println(Box("text").map { it.length() }.show())
+
+// Instances nest: a Box of Boxes.
+nested := Box(Box("inner"))
+println(nested.get().get(), nested.show())
+
+type Pair<A, B>(left: A, right: B) {
+    fn swap() = Pair(right, left)
+    fn show() = "($left, $right)"
+}
+p := Pair(1, "one")
+println(p.show(), p.swap().show(), p.swap().swap().show())
+
+// Generic code that allocates and captures, to give the collector work.
+fn repeat<T>(x: T, n: Int, f: (T) -> T) -> T {
+    cur := x
+    for i in 0..n { cur = f(cur) }
+    return cur
+}
+println(repeat("a", 5, { it + "b" }))
+println(repeat(Box(0), 100, { Box(it.get() + 1) }).get())
+
+// Methods on built-in types.
+fn String.shout() = "$this!"
+fn Int.double() = this * 2
+fn Int.isEven() = this % 2 == 0
+fn String.twice() = shout() + shout()
+
+println("hi".shout(), 21.double(), 4.isEven(), 7.isEven(), "ab".twice())
+println("héllo".length(), "banana".contains("nan"), "shout".upper(), "ABC".lower(), "abc".startsWith("ab"))

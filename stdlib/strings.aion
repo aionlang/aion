@@ -5,7 +5,7 @@
 //   strings.upper("shout")            // SHOUT
 //
 // A small example of an `extern fn` module: one line per function here,
-// the implementations live in strings.c.
+// the implementations live in prelude.c, next to the String methods.
 
 // Length in bytes.
 extern fn length(s: String) -> Int = "aion_strings_length"

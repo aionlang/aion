@@ -1,0 +1,2 @@
+// error: a String has no method `bogus`
+println("a".bogus())

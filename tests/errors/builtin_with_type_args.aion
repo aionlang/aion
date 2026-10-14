@@ -1,0 +1,2 @@
+// error: `Int` takes no type arguments
+fn f(x: Int<String>) = 1

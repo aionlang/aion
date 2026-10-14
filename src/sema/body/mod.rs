@@ -2,16 +2,19 @@
 
 use std::collections::{HashMap, HashSet};
 use std::mem::{replace, take};
+use std::rc::Rc;
 
 use super::hir::{self, ExprKind as K, FnId, GlobalId, LocalId, Ty, TypeId};
-use super::{Checker, Const, Sym, Work};
+use super::{Checker, Const, Subst, Sym, Work};
 use crate::diag::{Diagnostic, Result, Span};
 use crate::syntax::ast::{self, AssignOp, ExprKind as A, FnBody, InterpPart, StmtKind};
+
+mod generic_calls;
 
 const MAX_CAPTURES: usize = 63;
 
 pub(super) fn check_fn(ck: &Checker, id: FnId, work: &Work) -> Result<hir::Func> {
-    let info = &ck.t.funcs[id];
+    let info = ck.func(id);
     let mut cx = Cx::new(ck, info.module);
     for p in &info.params {
         let local = cx.new_local(&p.name, p.ty);
@@ -20,8 +23,9 @@ pub(super) fn check_fn(ck: &Checker, id: FnId, work: &Work) -> Result<hir::Func>
     cx.ret = info.ret.get();
 
     let body = match work {
-        Work::Fn(decl) | Work::Method(decl) => {
-            if matches!(work, Work::Method(_))
+        Work::Fn { decl, subst } | Work::Method { decl, subst } => {
+            cx.subst = subst.clone();
+            if matches!(work, Work::Method { .. })
                 && let Ty::Obj(ty) = info.params[0].ty
             {
                 cx.this = Some(ty);
@@ -54,7 +58,8 @@ pub(super) fn check_fn(ck: &Checker, id: FnId, work: &Work) -> Result<hir::Func>
             }
         }
 
-        Work::Ctor { ty, decl } => {
+        Work::Ctor { ty, decl, subst } => {
+            cx.subst = subst.clone();
             let this = cx.new_local("this", Ty::Obj(*ty));
             cx.scopes[0].insert("this".into(), this);
             cx.this = Some(*ty);
@@ -68,8 +73,8 @@ pub(super) fn check_fn(ck: &Checker, id: FnId, work: &Work) -> Result<hir::Func>
             // Field initialisers, then `init` blocks, then an explicit constructor body.
             for f in &decl.fields {
                 if let Some(init) = &f.init {
-                    let index = ck.t.types[*ty].fields.iter().position(|g| g.name == f.name.name).unwrap();
-                    let want = ck.t.types[*ty].fields[index].ty;
+                    let index = ck.t.ty(*ty).fields.iter().position(|g| g.name == f.name.name).unwrap();
+                    let want = ck.t.ty(*ty).fields[index].ty;
                     let v = cx.value_expected(init, Some(want))?;
                     let value = cx.coerce(v, want, init.span)?;
                     body.push(hir::Stmt::SetField { obj: cx.local_expr(this), index, value });
@@ -117,7 +122,7 @@ impl Checker<'_> {
         let thunk = self.reserve_fn();
         self.thunks.borrow_mut().insert(id, thunk);
 
-        let info = &self.t.funcs[id];
+        let info = self.func(id);
         let locals: Vec<hir::Local> = info
             .params
             .iter()
@@ -138,7 +143,7 @@ impl Checker<'_> {
             body: Some(vec![if ret == Ty::Void { hir::Stmt::Expr(call) } else { hir::Stmt::Return(Some(call)) }]),
             captures: Vec::new(),
         };
-        self.out.borrow_mut()[thunk] = Some(func);
+        self.set_func(thunk, func);
         thunk
     }
 
@@ -149,8 +154,8 @@ impl Checker<'_> {
         if let Some(&f) = self.tostring.borrow().get(&ty) {
             return Ok(f);
         }
-        if let Some(&m) = self.t.types[ty].methods.get("toString")
-            && self.t.funcs[m].params.len() == 1
+        if let Some(&m) = self.t.ty(ty).methods.get("toString")
+            && self.func(m).params.len() == 1
             && self.ret_of(m, Span::default())? == Ty::Str
         {
             self.tostring.borrow_mut().insert(ty, m);
@@ -158,14 +163,10 @@ impl Checker<'_> {
         }
 
         // Reserve the id first so self-referential types find themselves.
-        let id = {
-            let mut out = self.out.borrow_mut();
-            out.push(None);
-            out.len() - 1
-        };
+        let id = self.reserve_fn();
         self.tostring.borrow_mut().insert(ty, id);
 
-        let info = &self.t.types[ty];
+        let info = self.t.ty(ty);
         let mut cx = Cx::new(self, 0);
         let this = cx.new_local("this", Ty::Obj(ty));
         let text = |s: String| mk(K::Str(s), Ty::Str);
@@ -194,7 +195,7 @@ impl Checker<'_> {
             body: Some(vec![hir::Stmt::Return(Some(acc))]),
             captures: Vec::new(),
         };
-        self.out.borrow_mut()[id] = Some(func);
+        self.set_func(id, func);
         Ok(id)
     }
 }
@@ -220,6 +221,13 @@ struct InitState {
     fn_id: FnId,
     /// Globals whose definition has been passed (for use-before-definition errors).
     declared: HashSet<GlobalId>,
+}
+
+/// What a lambda is known to have to look like.
+struct LamSig {
+    params: Vec<Ty>,
+    /// `None` while still unknown (it is inferred from the body).
+    ret: Option<Ty>,
 }
 
 /// A local variable while checking (becomes a [`hir::Local`]).
@@ -275,6 +283,8 @@ struct Cx<'c, 'a> {
     loops: u32,
     /// Variables this function copies out of its closure object.
     captures: Vec<hir::Capture>,
+    /// Type parameters of the generic instance being checked, bound to concrete types.
+    subst: Subst,
     /// The functions enclosing the one being checked (innermost last).
     outer: Vec<Frame>,
     vars: Vec<VarInfo>,
@@ -297,6 +307,8 @@ enum Named {
     Global(GlobalId),
     Fn(FnId),
     Type(TypeId),
+    /// A generic function or type, which can't be used without arguments.
+    Generic,
     Module(usize),
 }
 
@@ -324,6 +336,7 @@ impl<'c, 'a> Cx<'c, 'a> {
             init: None,
             loops: 0,
             captures: Vec::new(),
+            subst: ck.empty.clone(),
             outer: Vec::new(),
             vars: Vec::new(),
             lambdas: Vec::new(),
@@ -391,14 +404,15 @@ impl<'c, 'a> Cx<'c, 'a> {
             return Some(Named::Local(id));
         }
         if let Some(ty) = self.this
-            && let Some(i) = self.ck.t.types[ty].fields.iter().position(|f| f.name == n)
+            && let Some(i) = self.ck.t.ty(ty).fields.iter().position(|f| f.name == n)
         {
-            return Some(Named::Field(i, self.ck.t.types[ty].fields[i].ty));
+            return Some(Named::Field(i, self.ck.t.ty(ty).fields[i].ty));
         }
         match self.ck.t.lookup(self.module, n) {
             Some(Sym::Fn(id)) => Some(Named::Fn(id)),
             Some(Sym::Type(id)) => Some(Named::Type(id)),
             Some(Sym::Global(id)) => Some(Named::Global(id)),
+            Some(Sym::GenericFn(_) | Sym::GenericType(_)) => Some(Named::Generic),
             None => self.ck.t.scopes[self.module].modules.get(n).map(|&m| Named::Module(m)),
         }
     }
@@ -457,7 +471,7 @@ impl<'c, 'a> Cx<'c, 'a> {
                 body: Some(l.body),
                 captures: l.captures,
             };
-            self.ck.out.borrow_mut()[l.id] = Some(func);
+            self.ck.set_func(l.id, func);
         }
     }
 
@@ -471,9 +485,25 @@ impl<'c, 'a> Cx<'c, 'a> {
         span: Span,
     ) -> Result<hir::Expr> {
         let sig = match expected {
-            Some(Ty::Fn(id)) => Some(self.ck.t.fn_sig(id)),
+            Some(Ty::Fn(id)) => {
+                let s = self.ck.t.fn_sig(id);
+                Some(LamSig { params: s.params, ret: Some(s.ret) })
+            }
             _ => None,
         };
+        self.lambda_sig(params, explicit, body, sig, span)
+    }
+
+    /// Like [`Self::lambda`], with what is known about the expected type: the
+    /// parameter types, and the result type if it is known yet.
+    fn lambda_sig(
+        &mut self,
+        params: &[ast::LambdaParam],
+        explicit: bool,
+        body: &[ast::Stmt],
+        sig: Option<LamSig>,
+        span: Span,
+    ) -> Result<hir::Expr> {
 
         let mut ps: Vec<(String, Ty)> = Vec::new();
         if explicit {
@@ -490,7 +520,7 @@ impl<'c, 'a> Cx<'c, 'a> {
                 ));
             }
             for (i, p) in params.iter().enumerate() {
-                let written = p.ty.as_ref().map(|t| self.ck.t.resolve_value_type(self.module, t)).transpose()?;
+                let written = p.ty.as_ref().map(|t| self.ck.resolve_value_type(self.module, t, &self.subst)).transpose()?;
                 let wanted = sig.as_ref().map(|s| s.params[i]);
                 let ty = match (written, wanted) {
                     (Some(w), Some(e)) if w != e => {
@@ -517,7 +547,7 @@ impl<'c, 'a> Cx<'c, 'a> {
                 }
             }
         }
-        let want_ret = sig.as_ref().map(|s| s.ret);
+        let want_ret = sig.as_ref().and_then(|s| s.ret);
 
         let id = self.ck.reserve_fn();
         self.enter_frame(want_ret);
@@ -623,7 +653,7 @@ impl<'c, 'a> Cx<'c, 'a> {
     fn stmt(&mut self, s: &ast::Stmt, out: &mut Vec<hir::Stmt>) -> Result<()> {
         match &s.kind {
             StmtKind::Let { name, ty, init } => {
-                let declared = ty.as_ref().map(|t| self.ck.t.resolve_value_type(self.module, t)).transpose()?;
+                let declared = ty.as_ref().map(|t| self.ck.resolve_value_type(self.module, t, &self.subst)).transpose()?;
                 let init_span = init.as_ref().map(|e| e.span);
                 let init = init.as_ref().map(|e| self.value_expected(e, declared)).transpose()?;
                 let (local_ty, init) = match (declared, init) {
@@ -871,6 +901,7 @@ impl<'c, 'a> Cx<'c, 'a> {
     fn expr_expected(&mut self, e: &ast::Expr, expected: Option<Ty>) -> Result<hir::Expr> {
         match &e.kind {
             A::Lambda { params, explicit, body } => self.lambda(params, *explicit, body, expected, e.span),
+            A::Call { callee, type_args, args } => self.call(callee, type_args, args, e.span, expected),
             _ => self.expr(e),
         }
     }
@@ -952,8 +983,12 @@ impl<'c, 'a> Cx<'c, 'a> {
                     let ty = self.global_use(g, e.span)?;
                     mk(K::Global(g), ty)
                 }
+                Some(Named::Generic) => {
+                    return Err(Diagnostic::new(format!("`{n}` is generic, so it can't be used without arguments"), e.span)
+                        .hint(format!("call it, e.g. `{n}(…)`, or give its type arguments: `{n}<Int>(…)`")));
+                }
                 Some(Named::Fn(id)) => self.fn_value(id, e.span)?,
-                Some(Named::Type(ty)) => self.fn_value(self.ck.t.types[ty].ctor, e.span)?,
+                Some(Named::Type(ty)) => self.fn_value(self.ck.t.ty(ty).ctor, e.span)?,
                 Some(Named::Module(_)) => {
                     return Err(Diagnostic::new(format!("`{n}` is a module, not a value"), e.span)
                         .hint(format!("call one of its functions, e.g. `{n}.name(...)`")));
@@ -978,7 +1013,7 @@ impl<'c, 'a> Cx<'c, 'a> {
                 {
                     return match self.ck.t.scopes[m].items.get(&field.name) {
                         Some(&Sym::Fn(id)) => self.fn_value(id, e.span),
-                        Some(&Sym::Type(ty)) => self.fn_value(self.ck.t.types[ty].ctor, e.span),
+                        Some(&Sym::Type(ty)) => self.fn_value(self.ck.t.ty(ty).ctor, e.span),
                         _ => Err(Diagnostic::new(format!("module `{a}` has no `{}`", field.name), field.span)),
                     };
                 }
@@ -987,7 +1022,7 @@ impl<'c, 'a> Cx<'c, 'a> {
                 mk(K::Field { obj: Box::new(obj), index }, ty)
             }
 
-            A::Call { callee, args } => self.call(callee, args, e.span)?,
+            A::Call { callee, type_args, args } => self.call(callee, type_args, args, e.span, None)?,
 
             A::Unary(op, inner) => {
                 let v = self.value(inner)?;
@@ -1017,6 +1052,10 @@ impl<'c, 'a> Cx<'c, 'a> {
             A::If { cond, then, otherwise } => self.if_value(cond, then, otherwise.as_deref(), e.span)?,
 
             A::Block(stmts) => self.block_value(stmts)?,
+
+            A::Index { .. } | A::List(_) | A::Map(_) => {
+                return Err(Diagnostic::new("collections are not available yet", e.span));
+            }
 
             A::Range { .. } => {
                 return Err(Diagnostic::new("a range can only be used in a `for` loop or after `in`", e.span));
@@ -1095,7 +1134,7 @@ impl<'c, 'a> Cx<'c, 'a> {
                 field.span,
             ));
         };
-        let info = &self.ck.t.types[id];
+        let info = self.ck.t.ty(id);
         match info.fields.iter().position(|f| f.name == field.name) {
             Some(i) => Ok((i, info.fields[i].ty)),
             None => Err(Diagnostic::new(format!("`{}` has no field `{}`", info.name, field.name), field.span)),
@@ -1141,7 +1180,7 @@ impl<'c, 'a> Cx<'c, 'a> {
                 },
                 l.ty,
             ),
-            B::Lt | B::Le | B::Gt | B::Ge if matches!(l.ty, Ty::Int | Ty::Float) => (
+            B::Lt | B::Le | B::Gt | B::Ge if matches!(l.ty, Ty::Int | Ty::Float | Ty::Str) => (
                 match op {
                     B::Lt => hir::BinOp::Lt,
                     B::Le => hir::BinOp::Le,
@@ -1165,7 +1204,17 @@ impl<'c, 'a> Cx<'c, 'a> {
 
     // ── calls ───────────────────────────────────────────────────
 
-    fn call(&mut self, callee: &ast::Expr, args: &[ast::Arg], span: Span) -> Result<hir::Expr> {
+    fn call(
+        &mut self,
+        callee: &ast::Expr,
+        type_args: &[ast::TypeRef],
+        args: &[ast::Arg],
+        span: Span,
+        expected: Option<Ty>,
+    ) -> Result<hir::Expr> {
+        let not_generic = |what: &str| {
+            Diagnostic::new(format!("`{what}` is not generic, so it takes no type arguments"), callee.span)
+        };
         match &callee.kind {
             A::Name(n) => {
                 // A variable holding a function.
@@ -1175,20 +1224,42 @@ impl<'c, 'a> Cx<'c, 'a> {
                 }
                 if let Some(ty) = self.this {
                     // A method of the current object can be called bare…
-                    if let Some(&m) = self.ck.t.types[ty].methods.get(n) {
+                    let info = self.ck.t.ty(ty);
+                    if let Some(&m) = info.methods.get(n) {
+                        if !type_args.is_empty() {
+                            return Err(not_generic(n));
+                        }
                         let recv = self.this_expr();
                         return self.call_fn(m, recv, args, span);
                     }
+                    if let Some(&g) = info.generic_methods.get(n) {
+                        let recv = self.this_expr();
+                        return self.call_generic_fn(g, recv, type_args, args, span, expected);
+                    }
                     // …and so can a field that holds a function.
-                    if let Some(i) = self.ck.t.types[ty].fields.iter().position(|f| f.name == *n) {
+                    if let Some(i) = info.fields.iter().position(|f| f.name == *n) {
                         let obj = self.this_expr().expect("fields imply `this`");
-                        let f = mk(K::Field { obj: Box::new(obj), index: i }, self.ck.t.types[ty].fields[i].ty);
+                        let f = mk(K::Field { obj: Box::new(obj), index: i }, info.fields[i].ty);
                         return self.call_value(f, args, span, n);
                     }
                 }
+                // Inside a method added to a built-in type, its siblings can be called bare.
+                if self.this.is_none()
+                    && let Some(this) = self.find_local("this")
+                    && let Some(m) = self.ck.ext_method(self.locals[this].ty, n)
+                {
+                    let recv = self.local_expr(this);
+                    return self.call_fn(m, Some(recv), args, span);
+                }
                 match self.ck.t.lookup(self.module, n) {
-                    Some(Sym::Fn(id)) => self.call_fn(id, None, args, span),
-                    Some(Sym::Type(ty)) => self.call_fn(self.ck.t.types[ty].ctor, None, args, span),
+                    Some(Sym::Fn(id)) if type_args.is_empty() => self.call_fn(id, None, args, span),
+                    Some(Sym::Type(ty)) if type_args.is_empty() => {
+                        let ctor = self.ck.t.ty(ty).ctor;
+                        self.call_fn(ctor, None, args, span)
+                    }
+                    Some(Sym::Fn(_) | Sym::Type(_)) => Err(not_generic(n)),
+                    Some(Sym::GenericFn(g)) => self.call_generic_fn(g, None, type_args, args, span, expected),
+                    Some(Sym::GenericType(g)) => self.call_generic_type(g, type_args, args, span, expected),
                     Some(Sym::Global(g)) => {
                         let ty = self.global_use(g, callee.span)?;
                         self.call_value(mk(K::Global(g), ty), args, span, n)
@@ -1203,12 +1274,23 @@ impl<'c, 'a> Cx<'c, 'a> {
                 if let A::Name(a) = &obj.kind {
                     match self.resolve(a) {
                         Some(Named::Module(target)) => {
-                            return match self.ck.t.scopes[target].items.get(&member.name) {
-                                Some(&Sym::Fn(id)) => self.call_fn(id, None, args, span),
-                                Some(&Sym::Type(ty)) => self.call_fn(self.ck.t.types[ty].ctor, None, args, span),
-                                Some(&Sym::Global(g)) => {
+                            let what = format!("{a}.{}", member.name);
+                            return match self.ck.t.scopes[target].items.get(&member.name).copied() {
+                                Some(Sym::Fn(id)) if type_args.is_empty() => self.call_fn(id, None, args, span),
+                                Some(Sym::Type(ty)) if type_args.is_empty() => {
+                                    let ctor = self.ck.t.ty(ty).ctor;
+                                    self.call_fn(ctor, None, args, span)
+                                }
+                                Some(Sym::Fn(_) | Sym::Type(_)) => Err(not_generic(&what)),
+                                Some(Sym::GenericFn(g)) => {
+                                    self.call_generic_fn(g, None, type_args, args, span, expected)
+                                }
+                                Some(Sym::GenericType(g)) => {
+                                    self.call_generic_type(g, type_args, args, span, expected)
+                                }
+                                Some(Sym::Global(g)) => {
                                     let ty = self.global_use(g, member.span)?;
-                                    self.call_value(mk(K::Global(g), ty), args, span, &format!("{a}.{}", member.name))
+                                    self.call_value(mk(K::Global(g), ty), args, span, &what)
                                 }
                                 None => Err(Diagnostic::new(
                                     format!("module `{a}` has no function or type `{}`", member.name),
@@ -1226,22 +1308,34 @@ impl<'c, 'a> Cx<'c, 'a> {
 
                 // `value.method(...)`, or a function stored in a field: `value.callback(...)`
                 let recv = self.value(obj)?;
+                if let Some(id) = self.ck.ext_method(recv.ty, &member.name) {
+                    if !type_args.is_empty() {
+                        return Err(not_generic(&member.name));
+                    }
+                    return self.call_fn(id, Some(recv), args, span);
+                }
                 let Ty::Obj(ty) = recv.ty else {
                     return Err(Diagnostic::new(
                         format!("a {} has no method `{}`", self.name(recv.ty), member.name),
                         member.span,
                     ));
                 };
-                if let Some(&id) = self.ck.t.types[ty].methods.get(&member.name) {
+                let info = self.ck.t.ty(ty);
+                if let Some(&id) = info.methods.get(&member.name) {
+                    if !type_args.is_empty() {
+                        return Err(not_generic(&member.name));
+                    }
                     return self.call_fn(id, Some(recv), args, span);
                 }
-                if let Some(i) = self.ck.t.types[ty].fields.iter().position(|f| f.name == member.name) {
-                    let fty = self.ck.t.types[ty].fields[i].ty;
-                    let f = mk(K::Field { obj: Box::new(recv), index: i }, fty);
+                if let Some(&g) = info.generic_methods.get(&member.name) {
+                    return self.call_generic_fn(g, Some(recv), type_args, args, span, expected);
+                }
+                if let Some(i) = info.fields.iter().position(|f| f.name == member.name) {
+                    let f = mk(K::Field { obj: Box::new(recv), index: i }, info.fields[i].ty);
                     return self.call_value(f, args, span, &member.name);
                 }
                 Err(Diagnostic::new(
-                    format!("`{}` has no method `{}`", self.ck.t.types[ty].name, member.name),
+                    format!("`{}` has no method `{}`", info.name, member.name),
                     member.span,
                 ))
             }
@@ -1285,31 +1379,18 @@ impl<'c, 'a> Cx<'c, 'a> {
     fn fn_value(&mut self, id: FnId, span: Span) -> Result<hir::Expr> {
         let ck = self.ck;
         let ret = ck.ret_of(id, span)?;
-        let params: Vec<Ty> = ck.t.funcs[id].params.iter().map(|p| p.ty).collect();
+        let params: Vec<Ty> = ck.func(id).params.iter().map(|p| p.ty).collect();
         let thunk = ck.thunk_for(id, ret);
         Ok(mk(K::Closure { func: thunk }, ck.t.intern_fn(params, ret)))
     }
 
-    /// Call `id`, matching arguments to parameters by position and name and
-    /// filling in defaults.
-    fn call_fn(&mut self, id: FnId, recv: Option<hir::Expr>, args: &[ast::Arg], span: Span) -> Result<hir::Expr> {
-        let ck = self.ck;
-        let info = &ck.t.funcs[id];
-        let ret = ck.ret_of(id, span)?;
-        let params = &info.params[usize::from(recv.is_some())..];
-        let too_many = || {
-            Diagnostic::new(
-                format!("`{}` takes {} argument(s) but {} were given", info.name, params.len(), args.len()),
-                span,
-            )
-        };
-
-        // Which parameter does each argument fill?
-        let mut filled: Vec<Option<usize>> = vec![None; params.len()];
+    /// For each argument, the index of the parameter it fills (by position or name).
+    fn map_args(&self, fname: &str, params: &[&str], args: &[ast::Arg], span: Span) -> Result<Vec<usize>> {
+        let mut filled = vec![false; params.len()];
         let mut order = Vec::with_capacity(args.len());
         let mut positional = 0;
         let mut named_seen = false;
-        for (ai, a) in args.iter().enumerate() {
+        for a in args {
             let pi = match &a.name {
                 None => {
                     if named_seen {
@@ -1317,42 +1398,74 @@ impl<'c, 'a> Cx<'c, 'a> {
                     }
                     positional += 1;
                     if positional > params.len() {
-                        return Err(too_many());
+                        return Err(Diagnostic::new(
+                            format!("`{fname}` takes {} argument(s) but {} were given", params.len(), args.len()),
+                            span,
+                        ));
                     }
                     positional - 1
                 }
                 Some(n) => {
                     named_seen = true;
-                    let Some(pi) = params.iter().position(|p| p.name == n.name) else {
+                    let Some(pi) = params.iter().position(|p| *p == n.name) else {
                         return Err(Diagnostic::new(
-                            format!("`{}` has no parameter named `{}`", info.name, n.name),
+                            format!("`{fname}` has no parameter named `{}`", n.name),
                             n.span,
                         ));
                     };
                     pi
                 }
             };
-            if filled[pi].is_some() {
-                return Err(Diagnostic::new(format!("`{}` is given twice", params[pi].name), a.value.span));
+            if filled[pi] {
+                return Err(Diagnostic::new(format!("`{}` is given twice", params[pi]), a.value.span));
             }
-            filled[pi] = Some(ai);
+            filled[pi] = true;
             order.push(pi);
         }
+        Ok(order)
+    }
+
+    /// Call `id`, matching arguments to parameters by position and name and
+    /// filling in defaults.
+    fn call_fn(&mut self, id: FnId, recv: Option<hir::Expr>, args: &[ast::Arg], span: Span) -> Result<hir::Expr> {
+        self.call_fn_pre(id, recv, args, span, Vec::new())
+    }
+
+    /// [`Self::call_fn`], where some arguments (by position in `args`) were
+    /// already evaluated — type inference does that.
+    fn call_fn_pre(
+        &mut self,
+        id: FnId,
+        recv: Option<hir::Expr>,
+        args: &[ast::Arg],
+        span: Span,
+        mut pre: Vec<Option<hir::Expr>>,
+    ) -> Result<hir::Expr> {
+        let ck = self.ck;
+        let info = ck.func(id);
+        let ret = ck.ret_of(id, span)?;
+        let params = &info.params[usize::from(recv.is_some())..];
+        let names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+        let order = self.map_args(&info.name, &names, args, span)?;
+        pre.resize_with(args.len(), || None);
 
         // Evaluate arguments in the order they were written.
         let mut values: Vec<Option<hir::Expr>> = (0..params.len()).map(|_| None).collect();
-        for (a, &pi) in args.iter().zip(&order) {
-            let v = self.value_expected(&a.value, Some(params[pi].ty))?;
+        for (ai, (a, &pi)) in args.iter().zip(&order).enumerate() {
+            let v = match pre[ai].take() {
+                Some(v) => v,
+                None => self.value_expected(&a.value, Some(params[pi].ty))?,
+            };
             values[pi] = Some(self.coerce(v, params[pi].ty, a.value.span)?);
         }
 
         // If named arguments reorder evaluation, pin each to a temporary first.
-        let mut pre = Vec::new();
+        let mut pins = Vec::new();
         if !order.windows(2).all(|w| w[0] < w[1]) {
             for &pi in &order {
                 let v = values[pi].take().unwrap();
                 let tmp = self.new_local("$arg", v.ty);
-                pre.push(hir::Stmt::Let(tmp, Some(v)));
+                pins.push(hir::Stmt::Let(tmp, Some(v)));
                 values[pi] = Some(self.local_expr(tmp));
             }
         }
@@ -1371,7 +1484,7 @@ impl<'c, 'a> Cx<'c, 'a> {
             });
         }
         let call = mk(K::Call { func: id, args: call_args }, ret);
-        Ok(if pre.is_empty() { call } else { mk(K::Block(pre, Box::new(call)), ret) })
+        Ok(if pins.is_empty() { call } else { mk(K::Block(pins, Box::new(call)), ret) })
     }
 
     /// The built-in, type-polymorphic `print` / `println`.

@@ -1,0 +1,4 @@
+// error: `String` already has a method `shout`
+fn String.shout() = "$this!"
+fn String.shout() = "$this?"
+println("a".shout())

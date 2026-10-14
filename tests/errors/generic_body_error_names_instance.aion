@@ -1,0 +1,3 @@
+// error: while checking the instance with T = String
+fn bad<T>(x: T) = x + 1
+println(bad("s"))

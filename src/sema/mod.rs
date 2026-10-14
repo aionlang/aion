@@ -11,21 +11,53 @@
 //! the defining body right then (and reports a cycle if it depends on itself).
 
 mod body;
+mod generics;
 pub mod hir;
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use crate::diag::{Diagnostic, Result, Span};
 use crate::loader::Loaded;
-use crate::syntax::ast::{self, ExprKind, Item, StmtKind, TypeKind};
+use crate::syntax::ast::{self, ExprKind, Item, StmtKind};
 use hir::{FnId, FnSig, FuncKind, GlobalId, Ty, TypeId};
 
+/// Type parameters bound to concrete types, e.g. `{T → Int}`.
+pub type Subst = Rc<HashMap<String, Ty>>;
+
+#[derive(Clone)]
 pub struct TypeInfo {
     pub name: String,
     pub fields: Vec<hir::Field>,
     pub methods: HashMap<String, FnId>,
+    /// Methods with their own type parameters, by name → index into the checker's templates.
+    pub generic_methods: HashMap<String, usize>,
     pub ctor: FnId,
+}
+
+/// A generic function (or a generic method of a generic type's instance):
+/// a template checked afresh for each combination of type arguments.
+pub struct GenericFn<'a> {
+    pub module: usize,
+    pub decl: &'a ast::FnDecl,
+    /// Parameters of the enclosing generic type, already bound.
+    pub base: Subst,
+    pub tparams: Vec<String>,
+    /// The type whose method this is.
+    pub owner: Option<TypeId>,
+    pub instances: RefCell<HashMap<Vec<Ty>, FnId>>,
+}
+
+/// A generic type: a template instantiated per list of type arguments.
+pub struct GenericType<'a> {
+    pub module: usize,
+    pub decl: &'a ast::TypeDecl,
+    pub tparams: Vec<String>,
+    /// `fn List<T>.first()` written outside the type: (module it is written in,
+    /// names for the type's parameters, declaration).
+    pub extra_methods: RefCell<Vec<(usize, Vec<String>, &'a ast::FnDecl)>>,
+    pub instances: RefCell<HashMap<Vec<Ty>, TypeId>>,
 }
 
 /// A literal usable as a default argument.
@@ -37,12 +69,14 @@ pub enum Const {
     Str(String),
 }
 
+#[derive(Clone)]
 pub struct ParamInfo {
     pub name: String,
     pub ty: Ty,
     pub default: Option<Const>,
 }
 
+#[derive(Clone)]
 pub struct FnInfo {
     pub name: String,
     pub module: usize,
@@ -68,6 +102,10 @@ pub enum Sym {
     Fn(FnId),
     Type(TypeId),
     Global(GlobalId),
+    /// Index into the checker's generic function templates.
+    GenericFn(usize),
+    /// Index into the checker's generic type templates.
+    GenericType(usize),
 }
 
 /// Everything visible inside one module.
@@ -82,8 +120,8 @@ pub struct Scope {
 
 #[derive(Default)]
 pub struct Tables {
-    pub types: Vec<TypeInfo>,
-    pub funcs: Vec<FnInfo>,
+    /// Growable: generic instantiation adds types while bodies are checked.
+    types: RefCell<Vec<Rc<TypeInfo>>>,
     pub globals: Vec<GlobalInfo>,
     pub scopes: Vec<Scope>,
     /// Interned function types, so equal signatures have equal `Ty`s.
@@ -91,10 +129,11 @@ pub struct Tables {
 }
 
 /// What a declared function needs when its body is checked.
+#[derive(Clone)]
 pub enum Work<'a> {
-    Fn(&'a ast::FnDecl),
-    Method(&'a ast::FnDecl),
-    Ctor { ty: TypeId, decl: &'a ast::TypeDecl },
+    Fn { decl: &'a ast::FnDecl, subst: Subst },
+    Method { decl: &'a ast::FnDecl, subst: Subst },
+    Ctor { ty: TypeId, decl: &'a ast::TypeDecl, subst: Subst },
     /// A module's top-level statements.
     Init { stmts: Vec<&'a ast::Stmt> },
 }
@@ -106,18 +145,35 @@ enum State {
     Done,
 }
 
+/// Everything known about one function id.  Declared functions have `info` and
+/// `work`; lambdas and generated adapters only get a finished `func`.
+struct FnSlot<'a> {
+    info: Option<Rc<FnInfo>>,
+    work: Option<Work<'a>>,
+    state: State,
+    func: Option<hir::Func>,
+}
+
 pub struct Checker<'a> {
     t: Tables,
-    work: Vec<Work<'a>>,
-    state: RefCell<Vec<State>>,
-    /// Checked functions by id.  Grows past `work` with synthesised helpers.
-    out: RefCell<Vec<Option<hir::Func>>>,
+    /// One slot per function id; grows as lambdas, adapters and instances appear.
+    fns: RefCell<Vec<FnSlot<'a>>>,
     /// Module initialisers in dependency order.
     inits: Vec<FnId>,
     /// Generated `toString` functions by type.
     tostring: RefCell<HashMap<TypeId, FnId>>,
     /// Adapters that let a plain function be used as a function value.
     thunks: RefCell<HashMap<FnId, FnId>>,
+    generic_fns: RefCell<Vec<Rc<GenericFn<'a>>>>,
+    generic_types: RefCell<Vec<Rc<GenericType<'a>>>>,
+    /// For a type that is an instance of a generic one: which, and with what arguments.
+    instance_of: RefCell<HashMap<TypeId, (usize, Vec<Ty>)>>,
+    module_names: Vec<String>,
+    empty: Subst,
+    /// Nesting depth of generic instantiation, to stop runaway recursion.
+    depth: Cell<u32>,
+    /// Methods added to the built-in types: `fn String.shout() = …`.
+    ext_methods: RefCell<HashMap<(u8, String), FnId>>,
 }
 
 impl Tables {
@@ -129,36 +185,6 @@ impl Tables {
             .or_else(|| s.imported.get(name))
             .or_else(|| self.scopes[0].items.get(name))
             .copied()
-    }
-
-    /// Resolve a written type.  `Unit` (no value) is only meaningful as a return type.
-    pub fn resolve_type(&self, module: usize, ty: &ast::TypeRef) -> Result<Ty> {
-        match &ty.kind {
-            TypeKind::Named(name) => Ok(match name.as_str() {
-                "Int" => Ty::Int,
-                "Float" => Ty::Float,
-                "Bool" => Ty::Bool,
-                "String" => Ty::Str,
-                "Unit" => Ty::Void,
-                name => match self.lookup(module, name) {
-                    Some(Sym::Type(id)) => Ty::Obj(id),
-                    _ => return Err(Diagnostic::new(format!("unknown type `{name}`"), ty.span)),
-                },
-            }),
-            TypeKind::Fn { params, ret } => {
-                let params = params.iter().map(|p| self.resolve_value_type(module, p)).collect::<Result<Vec<_>>>()?;
-                let ret = self.resolve_type(module, ret)?;
-                Ok(self.intern_fn(params, ret))
-            }
-        }
-    }
-
-    /// Like [`Self::resolve_type`], for places that hold a value (variables, fields, parameters).
-    pub fn resolve_value_type(&self, module: usize, ty: &ast::TypeRef) -> Result<Ty> {
-        match self.resolve_type(module, ty)? {
-            Ty::Void => Err(Diagnostic::new("`Unit` means \"no value\"; it can only be a return type", ty.span)),
-            t => Ok(t),
-        }
     }
 
     pub fn intern_fn(&self, params: Vec<Ty>, ret: Ty) -> Ty {
@@ -181,7 +207,7 @@ impl Tables {
             Ty::Float => "Float".into(),
             Ty::Bool => "Bool".into(),
             Ty::Str => "String".into(),
-            Ty::Obj(id) => self.types[id].name.clone(),
+            Ty::Obj(id) => self.ty(id).name.clone(),
             Ty::Fn(id) => {
                 let sig = self.fn_sig(id);
                 let params: Vec<String> = sig.params.iter().map(|&p| self.ty_name(p)).collect();
@@ -192,9 +218,18 @@ impl Tables {
         }
     }
 
-    fn add_fn(&mut self, info: FnInfo) -> FnId {
-        self.funcs.push(info);
-        self.funcs.len() - 1
+    pub fn ty(&self, id: TypeId) -> Rc<TypeInfo> {
+        self.types.borrow()[id].clone()
+    }
+
+    fn add_type(&self, info: TypeInfo) -> TypeId {
+        let mut types = self.types.borrow_mut();
+        types.push(Rc::new(info));
+        types.len() - 1
+    }
+
+    fn update_type(&self, id: TypeId, f: impl FnOnce(&mut TypeInfo)) {
+        f(Rc::make_mut(&mut self.types.borrow_mut()[id]));
     }
 
     fn define(&mut self, module: usize, name: &ast::Ident, sym: Sym) -> Result<()> {
@@ -211,8 +246,11 @@ pub fn analyze(loaded: &Loaded) -> Result<hir::Program> {
     for &id in &ck.inits {
         ck.ensure(id)?;
     }
-    for id in 0..ck.work.len() {
+    // Checking can create more functions (lambdas, instances), so the list grows.
+    let mut id = 0;
+    while id < ck.fns.borrow().len() {
         ck.ensure(id)?;
+        id += 1;
     }
     ck.finish(loaded.modules.len() - 1)
 }
@@ -221,39 +259,63 @@ impl<'a> Checker<'a> {
     fn declare(loaded: &'a Loaded) -> Result<Self> {
         let mut ck = Checker {
             t: Tables::default(),
-            work: Vec::new(),
-            state: RefCell::new(Vec::new()),
-            out: RefCell::new(Vec::new()),
+            fns: RefCell::new(Vec::new()),
             inits: Vec::new(),
             tostring: RefCell::new(HashMap::new()),
             thunks: RefCell::new(HashMap::new()),
+            generic_fns: RefCell::new(Vec::new()),
+            generic_types: RefCell::new(Vec::new()),
+            instance_of: RefCell::new(HashMap::new()),
+            module_names: loaded.modules.iter().map(|m| m.name.clone()).collect(),
+            empty: Rc::new(HashMap::new()),
+            depth: Cell::new(0),
+            ext_methods: RefCell::new(HashMap::new()),
         };
         for module in 0..loaded.modules.len() {
             ck.declare_module(loaded, module)?;
         }
-        let n = ck.work.len();
-        *ck.state.borrow_mut() = vec![State::New; n];
-        *ck.out.borrow_mut() = (0..n).map(|_| None).collect();
         Ok(ck)
     }
 
     fn declare_module(&mut self, loaded: &'a Loaded, mi: usize) -> Result<()> {
         let module = &loaded.modules[mi];
+        let empty = self.empty.clone();
         self.t.scopes.push(Scope::default());
 
-        // 1. Type names, so signatures and fields can refer to any of them.
+        // 1. Names of types and generic items, so any signature or field can mention them.
         let mut own_types: Vec<(TypeId, &ast::TypeDecl)> = Vec::new();
         for item in &module.ast.items {
-            if let Item::Type(td) = item {
-                let id = self.t.types.len();
-                self.t.types.push(TypeInfo {
-                    name: td.name.name.clone(),
-                    fields: Vec::new(),
-                    methods: HashMap::new(),
-                    ctor: usize::MAX,
-                });
-                self.t.define(mi, &td.name, Sym::Type(id))?;
-                own_types.push((id, td));
+            match item {
+                Item::Type(td) if td.type_params.is_empty() => {
+                    let id = self.t.add_type(TypeInfo {
+                        name: td.name.name.clone(),
+                        fields: Vec::new(),
+                        methods: HashMap::new(),
+                        generic_methods: HashMap::new(),
+                        ctor: usize::MAX,
+                    });
+                    self.t.define(mi, &td.name, Sym::Type(id))?;
+                    own_types.push((id, td));
+                }
+                Item::Type(td) => {
+                    let g = self.add_generic_type(mi, td);
+                    self.t.define(mi, &td.name, Sym::GenericType(g))?;
+                }
+                Item::Fn(decl) if !decl.type_params.is_empty() => {
+                    if matches!(decl.body, ast::FnBody::Extern { .. }) {
+                        return Err(Diagnostic::new("an `extern fn` cannot be generic", decl.name.span));
+                    }
+                    let g = self.add_generic_fn(GenericFn {
+                        module: mi,
+                        decl,
+                        base: empty.clone(),
+                        tparams: decl.type_params.iter().map(|t| t.name.clone()).collect(),
+                        owner: None,
+                        instances: RefCell::new(HashMap::new()),
+                    });
+                    self.t.define(mi, &decl.name, Sym::GenericFn(g))?;
+                }
+                _ => {}
             }
         }
 
@@ -281,76 +343,77 @@ impl<'a> Checker<'a> {
             }
         }
 
+        // Methods written outside a generic type join its template (and its existing instances).
+        for item in &module.ast.items {
+            if let Item::Method { owner, owner_params, decl } = item
+                && let Some(Sym::GenericType(g)) = self.t.lookup(mi, &owner.name)
+            {
+                self.add_extra_method(g, mi, owner, owner_params, decl)?;
+            }
+        }
+
         // 3. Field types: primary-constructor parameters first, then body fields.
         for &(id, td) in &own_types {
-            let mut fields: Vec<hir::Field> = Vec::new();
-            let declared = td
-                .primary
-                .iter()
-                .flatten()
-                .map(|p| (&p.name, &p.ty))
-                .chain(td.fields.iter().map(|f| (&f.name, &f.ty)));
-            for (name, ty) in declared {
-                if fields.iter().any(|g| g.name == name.name) {
-                    return Err(Diagnostic::new(format!("duplicate field `{}`", name.name), name.span));
-                }
-                fields.push(hir::Field { name: name.name.clone(), ty: self.t.resolve_value_type(mi, ty)? });
-            }
-            if fields.len() > 64 {
-                return Err(Diagnostic::new("a type can have at most 64 fields", td.name.span));
-            }
-            if td.primary.is_some()
-                && let Some(c) = &td.ctor
-            {
-                return Err(Diagnostic::new(
-                    "a type with a primary constructor cannot also declare `constructor`",
-                    c.params.first().map_or(td.name.span, |p| p.name.span),
-                ));
-            }
-            self.t.types[id].fields = fields;
+            let fields = self.type_fields(mi, td, &empty)?;
+            self.t.update_type(id, |ti| ti.fields = fields);
         }
 
         // 4. Functions, methods and constructors.
         let mut top: Vec<&'a ast::Stmt> = Vec::new();
         for item in &module.ast.items {
             match item {
-                Item::Fn(decl) => {
-                    let info = self.signature(mi, decl, FuncKind::Free, None, symbol_for(&module.name, None, decl))?;
-                    let id = self.t.add_fn(info);
-                    self.work.push(Work::Fn(decl));
+                Item::Fn(decl) if decl.type_params.is_empty() => {
+                    let info =
+                        self.signature(mi, decl, FuncKind::Free, None, symbol_for(&module.name, None, decl), &empty)?;
+                    let id = self.declare_fn(info, Work::Fn { decl, subst: empty.clone() });
                     self.t.define(mi, &decl.name, Sym::Fn(id))?;
                 }
-                Item::Method { owner, decl } => {
-                    let ty = match self.t.lookup(mi, &owner.name) {
-                        Some(Sym::Type(id)) => id,
-                        _ => return Err(Diagnostic::new(format!("unknown type `{}`", owner.name), owner.span)),
-                    };
-                    self.declare_method(&module.name, mi, ty, decl)?;
+                Item::Method { owner, owner_params, decl } if builtin_type(&owner.name).is_some() => {
+                    if let Some(p) = owner_params.first() {
+                        return Err(Diagnostic::new(format!("`{}` is not generic", owner.name), p.span));
+                    }
+                    self.declare_builtin_method(&module.name, mi, builtin_type(&owner.name).unwrap(), decl)?;
                 }
+                Item::Method { owner, owner_params, decl } => match self.t.lookup(mi, &owner.name) {
+                    Some(Sym::Type(ty)) => {
+                        if let Some(p) = owner_params.first() {
+                            return Err(Diagnostic::new(
+                                format!("`{}` is not generic", owner.name),
+                                p.span,
+                            ));
+                        }
+                        self.declare_method(&module.name, mi, ty, decl, &empty)?;
+                    }
+                    Some(Sym::GenericType(_)) => {} // attached above
+                    _ => return Err(Diagnostic::new(format!("unknown type `{}`", owner.name), owner.span)),
+                },
                 Item::Stmt(s) => top.push(s),
-                Item::Type(_) => {}
+                _ => {}
             }
         }
         for &(id, td) in &own_types {
             for m in &td.methods {
-                self.declare_method(&module.name, mi, id, m)?;
+                self.declare_method(&module.name, mi, id, m, &empty)?;
             }
-            self.declare_ctor(&module.name, mi, id, td)?;
+            self.declare_ctor(&module.name, mi, id, td, &empty)?;
         }
 
         // 5. Top-level statements: an initialiser function plus a global per `x := …`.
         if !top.is_empty() {
-            let init_fn = self.t.add_fn(FnInfo {
-                name: "<init>".into(),
-                module: mi,
-                symbol: format!("{}__init", module.name),
-                kind: FuncKind::Free,
-                params: Vec::new(),
-                ret: Cell::new(Some(Ty::Void)),
-            });
+            let init_fn = self.declare_fn(
+                FnInfo {
+                    name: "<init>".into(),
+                    module: mi,
+                    symbol: format!("{}__init", module.name),
+                    kind: FuncKind::Free,
+                    params: Vec::new(),
+                    ret: Cell::new(Some(Ty::Void)),
+                },
+                Work::Init { stmts: top.clone() },
+            );
             for s in &top {
                 if let StmtKind::Let { name, ty, .. } = &s.kind {
-                    let declared = ty.as_ref().map(|t| self.t.resolve_value_type(mi, t)).transpose()?;
+                    let declared = ty.as_ref().map(|t| self.resolve_value_type(mi, t, &empty)).transpose()?;
                     let gid = self.t.globals.len();
                     self.t.globals.push(GlobalInfo {
                         name: name.name.clone(),
@@ -361,28 +424,62 @@ impl<'a> Checker<'a> {
                     self.t.define(mi, name, Sym::Global(gid))?;
                 }
             }
-            self.work.push(Work::Init { stmts: top });
             self.inits.push(init_fn);
         }
         Ok(())
     }
 
-    fn param_info(&self, mi: usize, p: &ast::Param) -> Result<ParamInfo> {
-        let ty = self.t.resolve_value_type(mi, &p.ty)?;
+    /// The fields of a type declaration: primary-constructor parameters, then body fields.
+    fn type_fields(&self, mi: usize, td: &ast::TypeDecl, subst: &Subst) -> Result<Vec<hir::Field>> {
+        let mut fields: Vec<hir::Field> = Vec::new();
+        let declared = td
+            .primary
+            .iter()
+            .flatten()
+            .map(|p| (&p.name, &p.ty))
+            .chain(td.fields.iter().map(|f| (&f.name, &f.ty)));
+        for (name, ty) in declared {
+            if fields.iter().any(|g| g.name == name.name) {
+                return Err(Diagnostic::new(format!("duplicate field `{}`", name.name), name.span));
+            }
+            fields.push(hir::Field { name: name.name.clone(), ty: self.resolve_value_type(mi, ty, subst)? });
+        }
+        if fields.len() > 64 {
+            return Err(Diagnostic::new("a type can have at most 64 fields", td.name.span));
+        }
+        if td.primary.is_some()
+            && let Some(c) = &td.ctor
+        {
+            return Err(Diagnostic::new(
+                "a type with a primary constructor cannot also declare `constructor`",
+                c.params.first().map_or(td.name.span, |p| p.name.span),
+            ));
+        }
+        Ok(fields)
+    }
+
+    fn param_info(&self, mi: usize, p: &ast::Param, subst: &Subst) -> Result<ParamInfo> {
+        let ty = self.resolve_value_type(mi, &p.ty, subst)?;
         let default = p.default.as_ref().map(|e| const_default(e, ty, &self.t)).transpose()?;
         Ok(ParamInfo { name: p.name.name.clone(), ty, default })
     }
 
-    fn params(&self, mi: usize, params: &[ast::Param], receiver: Option<TypeId>) -> Result<Vec<ParamInfo>> {
+    fn params(
+        &self,
+        mi: usize,
+        params: &[ast::Param],
+        receiver: Option<Ty>,
+        subst: &Subst,
+    ) -> Result<Vec<ParamInfo>> {
         let mut out: Vec<ParamInfo> = Vec::new();
         if let Some(ty) = receiver {
-            out.push(ParamInfo { name: "this".into(), ty: Ty::Obj(ty), default: None });
+            out.push(ParamInfo { name: "this".into(), ty, default: None });
         }
         for p in params {
             if out.iter().any(|q| q.name == p.name.name) {
                 return Err(Diagnostic::new(format!("duplicate parameter `{}`", p.name.name), p.name.span));
             }
-            out.push(self.param_info(mi, p)?);
+            out.push(self.param_info(mi, p, subst)?);
         }
         Ok(out)
     }
@@ -393,12 +490,13 @@ impl<'a> Checker<'a> {
         mi: usize,
         decl: &ast::FnDecl,
         kind: FuncKind,
-        receiver: Option<TypeId>,
+        receiver: Option<Ty>,
         symbol: String,
+        subst: &Subst,
     ) -> Result<FnInfo> {
-        let params = self.params(mi, &decl.params, receiver)?;
+        let params = self.params(mi, &decl.params, receiver, subst)?;
         let ret = match &decl.ret {
-            Some(r) => Some(self.t.resolve_type(mi, r)?),
+            Some(r) => Some(self.resolve_type(mi, r, subst)?),
             // Only `fn f() = expr` can infer its return type; anything else returns nothing.
             None if matches!(decl.body, ast::FnBody::Expr(_)) => None,
             None => Some(Ty::Void),
@@ -413,41 +511,148 @@ impl<'a> Checker<'a> {
         Ok(FnInfo { name: decl.name.name.clone(), module: mi, symbol, kind, params, ret: Cell::new(ret) })
     }
 
-    fn declare_method(&mut self, module_name: &str, mi: usize, ty: TypeId, decl: &'a ast::FnDecl) -> Result<()> {
+    /// Declare method `decl` on type `ty`.  Under `subst` for instances of generic types.
+    fn declare_method(
+        &self,
+        module_name: &str,
+        mi: usize,
+        ty: TypeId,
+        decl: &'a ast::FnDecl,
+        subst: &Subst,
+    ) -> Result<()> {
         if matches!(decl.body, ast::FnBody::Extern { .. }) {
             return Err(Diagnostic::new("methods cannot be `extern`", decl.span));
         }
-        let owner = self.t.types[ty].name.clone();
-        let symbol = symbol_for(module_name, Some(&owner), decl);
-        let info = self.signature(mi, decl, FuncKind::Method, Some(ty), symbol)?;
-        let id = self.t.add_fn(info);
-        if self.t.types[ty].methods.insert(decl.name.name.clone(), id).is_some() {
+        let owner = self.t.ty(ty).name.clone();
+        let existing = self.t.ty(ty);
+        if existing.methods.contains_key(&decl.name.name) || existing.generic_methods.contains_key(&decl.name.name) {
             return Err(Diagnostic::new(
                 format!("`{owner}` already has a method `{}`", decl.name.name),
                 decl.name.span,
             ));
         }
-        self.work.push(Work::Method(decl));
+        // A method with its own type parameters is a template.
+        if !decl.type_params.is_empty() {
+            let g = self.add_generic_fn(GenericFn {
+                module: mi,
+                decl,
+                base: subst.clone(),
+                tparams: decl.type_params.iter().map(|t| t.name.clone()).collect(),
+                owner: Some(ty),
+                instances: RefCell::new(HashMap::new()),
+            });
+            self.t.update_type(ty, |ti| {
+                ti.generic_methods.insert(decl.name.name.clone(), g);
+            });
+            return Ok(());
+        }
+        let symbol = method_symbol(module_name, &owner, ty, &decl.name.name);
+        let info = self.signature(mi, decl, FuncKind::Method, Some(Ty::Obj(ty)), symbol, subst)?;
+        let id = self.declare_fn(info, Work::Method { decl, subst: subst.clone() });
+        self.t.update_type(ty, |ti| {
+            ti.methods.insert(decl.name.name.clone(), id);
+        });
         Ok(())
     }
 
-    fn declare_ctor(&mut self, module_name: &str, mi: usize, ty: TypeId, td: &'a ast::TypeDecl) -> Result<()> {
+    fn declare_ctor(
+        &self,
+        module_name: &str,
+        mi: usize,
+        ty: TypeId,
+        td: &'a ast::TypeDecl,
+        subst: &Subst,
+    ) -> Result<()> {
         let params = match (&td.ctor, &td.primary) {
-            (Some(c), _) => self.params(mi, &c.params, None)?,
-            (None, Some(p)) => self.params(mi, p, None)?,
+            (Some(c), _) => self.params(mi, &c.params, None, subst)?,
+            (None, Some(p)) => self.params(mi, p, None, subst)?,
             (None, None) => Vec::new(),
         };
-        let id = self.t.add_fn(FnInfo {
-            name: td.name.name.clone(),
-            module: mi,
-            symbol: format!("{module_name}__{}__new", td.name.name),
-            kind: FuncKind::Constructor,
-            params,
-            ret: Cell::new(Some(Ty::Obj(ty))),
-        });
-        self.t.types[ty].ctor = id;
-        self.work.push(Work::Ctor { ty, decl: td });
+        let owner = self.t.ty(ty).name.clone();
+        let id = self.declare_fn(
+            FnInfo {
+                name: td.name.name.clone(),
+                module: mi,
+                symbol: method_symbol(module_name, &owner, ty, "new"),
+                kind: FuncKind::Constructor,
+                params,
+                ret: Cell::new(Some(Ty::Obj(ty))),
+            },
+            Work::Ctor { ty, decl: td, subst: subst.clone() },
+        );
+        self.t.update_type(ty, |ti| ti.ctor = id);
         Ok(())
+    }
+
+    /// `fn String.shout() = …` / `extern fn String.length() -> Int`: a method on a built-in type.
+    fn declare_builtin_method(&self, module_name: &str, mi: usize, ty: Ty, decl: &'a ast::FnDecl) -> Result<()> {
+        let key = (builtin_key(ty), decl.name.name.clone());
+        if self.ext_methods.borrow().contains_key(&key) {
+            return Err(Diagnostic::new(
+                format!("`{}` already has a method `{}`", self.t.ty_name(ty), decl.name.name),
+                decl.name.span,
+            ));
+        }
+        if !decl.type_params.is_empty() {
+            return Err(Diagnostic::new("methods on built-in types cannot be generic", decl.name.span));
+        }
+        let symbol = symbol_for(module_name, Some(&self.t.ty_name(ty)), decl);
+        let info = self.signature(mi, decl, FuncKind::Method, Some(ty), symbol, &self.empty)?;
+        let id = self.declare_fn(info, Work::Method { decl, subst: self.empty.clone() });
+        self.ext_methods.borrow_mut().insert(key, id);
+        Ok(())
+    }
+
+    /// The method `name` that was added to built-in type `ty`, if any.
+    pub fn ext_method(&self, ty: Ty, name: &str) -> Option<FnId> {
+        self.ext_methods.borrow().get(&(builtin_key(ty), name.to_string())).copied()
+    }
+
+    fn add_generic_fn(&self, g: GenericFn<'a>) -> usize {
+        let mut v = self.generic_fns.borrow_mut();
+        v.push(Rc::new(g));
+        v.len() - 1
+    }
+
+    fn add_generic_type(&self, module: usize, td: &'a ast::TypeDecl) -> usize {
+        let mut v = self.generic_types.borrow_mut();
+        v.push(Rc::new(GenericType {
+            module,
+            decl: td,
+            tparams: td.type_params.iter().map(|t| t.name.clone()).collect(),
+            extra_methods: RefCell::new(Vec::new()),
+            instances: RefCell::new(HashMap::new()),
+        }));
+        v.len() - 1
+    }
+
+    // ── function table ──────────────────────────────────────────
+
+    /// Register a function that has a declaration and a body to check.
+    fn declare_fn(&self, info: FnInfo, work: Work<'a>) -> FnId {
+        let mut fns = self.fns.borrow_mut();
+        fns.push(FnSlot { info: Some(Rc::new(info)), work: Some(work), state: State::New, func: None });
+        fns.len() - 1
+    }
+
+    /// Allocate an id for a function created while checking another (a lambda or adapter).
+    fn reserve_fn(&self) -> FnId {
+        let mut fns = self.fns.borrow_mut();
+        fns.push(FnSlot { info: None, work: None, state: State::Done, func: None });
+        fns.len() - 1
+    }
+
+    fn set_func(&self, id: FnId, func: hir::Func) {
+        self.fns.borrow_mut()[id].func = Some(func);
+    }
+
+    /// The declaration of a function (panics for lambdas and adapters, which have none).
+    pub fn func(&self, id: FnId) -> Rc<FnInfo> {
+        self.fns.borrow()[id].info.clone().expect("only declared functions have a declaration")
+    }
+
+    fn state(&self, id: FnId) -> State {
+        self.fns.borrow()[id].state
     }
 
     // ── on-demand checking ──────────────────────────────────────
@@ -456,30 +661,47 @@ impl<'a> Checker<'a> {
     /// currently being checked return immediately; callers that need its
     /// result use [`Self::ret_of`], which reports the cycle.
     fn ensure(&self, id: FnId) -> Result<()> {
-        if self.state.borrow()[id] != State::New {
-            return Ok(());
-        }
-        self.state.borrow_mut()[id] = State::InProgress;
-        let func = body::check_fn(self, id, &self.work[id])?;
-        self.out.borrow_mut()[id] = Some(func);
-        self.state.borrow_mut()[id] = State::Done;
+        let work = {
+            let mut fns = self.fns.borrow_mut();
+            if fns[id].state != State::New {
+                return Ok(());
+            }
+            fns[id].state = State::InProgress;
+            fns[id].work.clone().expect("a function awaiting a check has work")
+        };
+        let func = body::check_fn(self, id, &work).map_err(|d| self.note_instance(d, &work))?;
+        let mut fns = self.fns.borrow_mut();
+        fns[id].func = Some(func);
+        fns[id].state = State::Done;
         Ok(())
     }
 
-    /// Allocate an id for a function created while checking another (a lambda or adapter).
-    fn reserve_fn(&self) -> FnId {
-        let mut out = self.out.borrow_mut();
-        out.push(None);
-        out.len() - 1
+    /// An error inside an instance of a generic function should say which one.
+    fn note_instance(&self, mut d: Diagnostic, work: &Work) -> Diagnostic {
+        let subst = match work {
+            Work::Fn { subst, .. } | Work::Method { subst, .. } | Work::Ctor { subst, .. } => subst,
+            Work::Init { .. } => return d,
+        };
+        if subst.is_empty() {
+            return d;
+        }
+        let mut bound: Vec<String> = subst.iter().map(|(n, &t)| format!("{n} = {}", self.t.ty_name(t))).collect();
+        bound.sort();
+        let note = format!("while checking the instance with {}", bound.join(", "));
+        d.hint = Some(match d.hint.take() {
+            Some(h) => format!("{h}\n{note}"),
+            None => note,
+        });
+        d
     }
 
     /// The return type of `id`, inferring it from the body if necessary.
     fn ret_of(&self, id: FnId, span: Span) -> Result<Ty> {
-        let info = &self.t.funcs[id];
+        let info = self.func(id);
         if let Some(ty) = info.ret.get() {
             return Ok(ty);
         }
-        if self.state.borrow()[id] == State::InProgress {
+        if self.state(id) == State::InProgress {
             return Err(Diagnostic::new(
                 format!("cannot infer the return type of `{}`: it depends on itself", info.name),
                 span,
@@ -496,9 +718,9 @@ impl<'a> Checker<'a> {
         if let Some(ty) = g.ty.get() {
             return Ok(ty);
         }
-        if self.state.borrow()[g.init_fn] == State::InProgress {
+        if self.state(g.init_fn) == State::InProgress {
             return Err(Diagnostic::new(format!("cannot infer the type of `{}` here", g.name), span)
-                .hint("it is used before its definition has been seen; annotate it, e.g. `name: Int := …`"));
+                .hint("it is used before its definition has been seen; annotate it, e.g. `name: Int = …`"));
         }
         self.ensure(g.init_fn)?;
         Ok(g.ty.get().expect("checking the initialiser fixes global types"))
@@ -510,12 +732,12 @@ impl<'a> Checker<'a> {
             _ => None,
         };
         if let Some(id) = main {
-            let m = &self.t.funcs[id];
+            let m = self.func(id);
             if !m.params.is_empty() || !matches!(m.ret.get(), Some(Ty::Void | Ty::Int)) {
                 return Err(Diagnostic::general("`main` must take no parameters and return nothing or Int"));
             }
         }
-        let entry_has_script = self.inits.iter().any(|&i| self.t.funcs[i].module == entry_module);
+        let entry_has_script = self.inits.iter().any(|&i| self.func(i).module == entry_module);
         if main.is_none() && !entry_has_script {
             return Err(Diagnostic::general("the program has no `fn main()` and no top-level statements to run")
                 .hint("write statements directly in the file, or define `fn main() { … }`"));
@@ -531,9 +753,48 @@ impl<'a> Checker<'a> {
                 ty: g.ty.get().expect("every global is typed by its initialiser"),
             })
             .collect();
-        let types = self.t.types.into_iter().map(|ti| hir::TypeDef { name: ti.name, fields: ti.fields }).collect();
-        let funcs = self.out.into_inner().into_iter().map(|f| f.expect("every function was checked")).collect();
+        let types = self
+            .t
+            .types
+            .into_inner()
+            .into_iter()
+            .map(|ti| hir::TypeDef { name: ti.name.clone(), fields: ti.fields.clone() })
+            .collect();
+        let funcs = self
+            .fns
+            .into_inner()
+            .into_iter()
+            .map(|slot| slot.func.expect("every function was checked"))
+            .collect();
         Ok(hir::Program { types, globals, funcs, inits: self.inits, main })
+    }
+}
+
+/// A linker-safe symbol for a method of `owner`; the type id keeps instances of
+/// generic types (`List<Int>` vs `List<String>`) apart.
+fn method_symbol(module: &str, owner: &str, ty: TypeId, method: &str) -> String {
+    let clean: String = owner.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+    format!("{module}__{clean}_{ty}__{method}")
+}
+
+/// The built-in type named `name`, if it is one that can have methods added.
+fn builtin_type(name: &str) -> Option<Ty> {
+    Some(match name {
+        "Int" => Ty::Int,
+        "Float" => Ty::Float,
+        "Bool" => Ty::Bool,
+        "String" => Ty::Str,
+        _ => return None,
+    })
+}
+
+fn builtin_key(ty: Ty) -> u8 {
+    match ty {
+        Ty::Int => 0,
+        Ty::Float => 1,
+        Ty::Bool => 2,
+        Ty::Str => 3,
+        _ => u8::MAX,
     }
 }
 

@@ -9,3 +9,10 @@
 
 // Stop the program with `[aion] panic: <message>` on stderr and exit code 1.
 extern fn panic(message: String) = "aion_panic"
+
+// Methods on the built-in types.  "héllo".length() counts bytes.
+extern fn String.length() -> Int = "aion_strings_length"
+extern fn String.contains(needle: String) -> Bool = "aion_strings_contains"
+extern fn String.startsWith(prefix: String) -> Bool = "aion_strings_starts_with"
+extern fn String.upper() -> String = "aion_strings_upper"
+extern fn String.lower() -> String = "aion_strings_lower"

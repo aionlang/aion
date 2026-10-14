@@ -8,7 +8,7 @@ pub struct Ident {
     pub span: Span,
 }
 
-/// A type written in source: `Int`, `Animal`, `(Int, String) -> Bool`.
+/// A type written in source: `Int`, `List<Int>`, `(Int, String) -> Bool`.
 #[derive(Debug, Clone)]
 pub struct TypeRef {
     pub kind: TypeKind,
@@ -17,7 +17,8 @@ pub struct TypeRef {
 
 #[derive(Debug, Clone)]
 pub enum TypeKind {
-    Named(String),
+    /// `Int`, `Animal`, `List<Int>`, or a type parameter such as `T`.
+    Named { name: String, args: Vec<TypeRef> },
     /// `(A, B) -> R`
     Fn { params: Vec<TypeRef>, ret: Box<TypeRef> },
 }
@@ -44,7 +45,8 @@ pub enum Item {
     Fn(FnDecl),
     Type(TypeDecl),
     /// `fn Animal.speak() { ... }` — a method declared outside its type.
-    Method { owner: Ident, decl: FnDecl },
+    /// For a generic type, `fn List<T>.first()` names the type's parameters.
+    Method { owner: Ident, owner_params: Vec<Ident>, decl: FnDecl },
     /// A top-level statement: runs when the module is loaded.
     Stmt(Stmt),
 }
@@ -60,6 +62,8 @@ pub struct Param {
 #[derive(Debug)]
 pub struct FnDecl {
     pub name: Ident,
+    /// `fn map<T, R>(…)`
+    pub type_params: Vec<Ident>,
     pub params: Vec<Param>,
     pub ret: Option<TypeRef>,
     pub body: FnBody,
@@ -92,6 +96,8 @@ pub struct CtorDecl {
 #[derive(Debug)]
 pub struct TypeDecl {
     pub name: Ident,
+    /// `type Box<T>(…)`
+    pub type_params: Vec<Ident>,
     /// `type User(name: String, age: Int = 0)` — each parameter is also a field.
     pub primary: Option<Vec<Param>>,
     pub fields: Vec<FieldDecl>,
@@ -156,7 +162,14 @@ pub enum ExprKind {
     Name(String),
     /// `obj.field` — also `module.name` before name resolution.
     Field(Box<Expr>, Ident),
-    Call { callee: Box<Expr>, args: Vec<Arg> },
+    /// `f(x)`, `List<Int>()`: explicit type arguments are optional.
+    Call { callee: Box<Expr>, type_args: Vec<TypeRef>, args: Vec<Arg> },
+    /// `xs[i]`
+    Index { obj: Box<Expr>, index: Box<Expr> },
+    /// `[1, 2, 3]`
+    List(Vec<Expr>),
+    /// `{"a": 1, "b": 2}`
+    Map(Vec<(Expr, Expr)>),
     Unary(UnOp, Box<Expr>),
     Binary(BinOp, Box<Expr>, Box<Expr>),
     /// `if c { a } else { b }`; the value of a branch is its last expression.

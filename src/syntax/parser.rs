@@ -126,8 +126,58 @@ impl<'a> Parser<'a> {
             return Ok(TypeRef { kind: TypeKind::Fn { params, ret: Box::new(ret) }, span });
         }
         let id = self.ident()?;
+        let mut span = id.span;
+        let mut args = Vec::new();
+        if self.peek() == Some(Token::Lt) && !self.nl() {
+            self.bump();
+            loop {
+                args.push(self.type_ref()?);
+                if !self.eat(Token::Comma) {
+                    break;
+                }
+            }
+            span = span.to(self.expect(Token::Gt)?.span);
+        }
         self.eat(Token::Question); // nullability is not tracked yet
-        Ok(TypeRef { kind: TypeKind::Named(id.name), span: id.span })
+        Ok(TypeRef { kind: TypeKind::Named { name: id.name, args }, span })
+    }
+
+    /// `<T, R>` after a declaration's name (empty if absent).
+    fn type_params(&mut self) -> Result<Vec<Ident>> {
+        let mut params = Vec::new();
+        if self.peek() == Some(Token::Lt) {
+            self.bump();
+            loop {
+                params.push(self.ident()?);
+                if !self.eat(Token::Comma) {
+                    break;
+                }
+            }
+            self.expect(Token::Gt)?;
+        }
+        Ok(params)
+    }
+
+    /// `<Int, String>` in an expression, if that is what follows; otherwise
+    /// nothing is consumed (it was a less-than sign).
+    fn try_type_args(&mut self) -> Option<Vec<TypeRef>> {
+        let save = self.pos;
+        let attempt = (|p: &mut Self| -> Result<Vec<TypeRef>> {
+            p.expect(Token::Lt)?;
+            let mut args = Vec::new();
+            loop {
+                args.push(p.type_ref()?);
+                if !p.eat(Token::Comma) {
+                    break;
+                }
+            }
+            p.expect(Token::Gt)?;
+            Ok(args)
+        })(self);
+        if attempt.is_err() {
+            self.pos = save;
+        }
+        attempt.ok()
     }
 
     /// Run `f` with the given newline / brace context, restoring it afterwards.
@@ -161,23 +211,42 @@ impl<'a> Parser<'a> {
                 Token::Extern => {
                     let start = self.bump().span;
                     self.expect(Token::Fn)?;
-                    items.push(Item::Fn(self.fn_decl(start, true)?));
+                    items.push(self.fn_item(start, true)?);
                 }
                 Token::Fn => {
                     let start = self.bump().span;
-                    if self.peek() == Some(Token::Ident) && self.peek_at(1) == Some(Token::Dot) {
-                        let owner = self.ident()?;
-                        self.bump();
-                        let decl = self.fn_decl(start, false)?;
-                        items.push(Item::Method { owner, decl });
-                    } else {
-                        items.push(Item::Fn(self.fn_decl(start, false)?));
-                    }
+                    items.push(self.fn_item(start, false)?);
                 }
                 _ => items.push(Item::Stmt(self.stmt()?)),
             }
         }
         Ok(Module { imports, items })
+    }
+
+    /// After `fn` / `extern fn`: a function, or a method if it is written
+    /// `Owner.name(…)` / `Owner<T>.name(…)`.
+    fn fn_item(&mut self, start: Span, is_extern: bool) -> Result<Item> {
+        let save = self.pos;
+        let owner = if self.peek() == Some(Token::Ident) {
+            let owner = self.ident()?;
+            match self.type_params() {
+                Ok(owner_params) if self.peek() == Some(Token::Dot) => Some((owner, owner_params)),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        match owner {
+            Some((owner, owner_params)) => {
+                self.bump(); // the `.`
+                let decl = self.fn_decl(start, is_extern)?;
+                Ok(Item::Method { owner, owner_params, decl })
+            }
+            None => {
+                self.pos = save;
+                Ok(Item::Fn(self.fn_decl(start, is_extern)?))
+            }
+        }
     }
 
     fn import(&mut self) -> Result<Import> {
@@ -256,6 +325,7 @@ impl<'a> Parser<'a> {
     /// Parse after `fn` (and the optional `Type.`): name, signature, body.
     fn fn_decl(&mut self, start: Span, is_extern: bool) -> Result<FnDecl> {
         let name = self.ident()?;
+        let type_params = self.type_params()?;
         let params = self.params()?;
         let ret = if self.eat(Token::Arrow) { Some(self.type_ref()?) } else { None };
         let body = if is_extern {
@@ -277,12 +347,13 @@ impl<'a> Parser<'a> {
         } else {
             return Err(self.expected("`{` or `=`"));
         };
-        Ok(FnDecl { name, params, ret, body, span: start.to(self.prev_span()) })
+        Ok(FnDecl { name, type_params, params, ret, body, span: start.to(self.prev_span()) })
     }
 
     fn type_decl(&mut self) -> Result<TypeDecl> {
         self.bump(); // `type`
         let name = self.ident()?;
+        let type_params = self.type_params()?;
         if self.peek() == Some(Token::Colon) {
             return Err(Diagnostic::new("type inheritance is not supported", self.here()));
         }
@@ -330,7 +401,7 @@ impl<'a> Parser<'a> {
             })?;
             self.expect(Token::RBrace)?;
         }
-        Ok(TypeDecl { name, primary, fields, ctor, inits, methods })
+        Ok(TypeDecl { name, type_params, primary, fields, ctor, inits, methods })
     }
 
     // ── statements ──────────────────────────────────────────────
@@ -411,7 +482,7 @@ impl<'a> Parser<'a> {
                 match op {
                     None => StmtKind::Expr(lhs),
                     Some(op) => {
-                        if !matches!(lhs.kind, ExprKind::Name(_) | ExprKind::Field(..)) {
+                        if !matches!(lhs.kind, ExprKind::Name(_) | ExprKind::Field(..) | ExprKind::Index { .. }) {
                             return Err(Diagnostic::new("cannot assign to this expression", lhs.span));
                         }
                         self.bump();
@@ -530,24 +601,52 @@ impl<'a> Parser<'a> {
                     let args = self.scoped(true, false, |p| p.args())?;
                     let close = self.expect(Token::RParen)?;
                     let span = e.span.to(close.span);
-                    e = Expr { kind: ExprKind::Call { callee: Box::new(e), args }, span };
+                    e = Expr { kind: ExprKind::Call { callee: Box::new(e), type_args: Vec::new(), args }, span };
+                }
+                Some(Token::LBracket) if !self.nl() => {
+                    self.bump();
+                    let index = self.scoped(true, false, |p| p.expr())?;
+                    let close = self.expect(Token::RBracket)?;
+                    let span = e.span.to(close.span);
+                    e = Expr { kind: ExprKind::Index { obj: Box::new(e), index: Box::new(index) }, span };
+                }
+                // `List<Int>(…)`, `identity<Int>(3)`; otherwise `<` is a comparison.
+                Some(Token::Lt) if !self.nl() && matches!(e.kind, ExprKind::Name(_) | ExprKind::Field(..)) => {
+                    let save = self.pos;
+                    match self.try_type_args() {
+                        Some(type_args) if self.peek() == Some(Token::LParen) && !self.nl() => {
+                            self.bump();
+                            let args = self.scoped(true, false, |p| p.args())?;
+                            let close = self.expect(Token::RParen)?;
+                            let span = e.span.to(close.span);
+                            e = Expr { kind: ExprKind::Call { callee: Box::new(e), type_args, args }, span };
+                        }
+                        _ => {
+                            self.pos = save;
+                            return Ok(e);
+                        }
+                    }
                 }
                 // A trailing lambda: `repeat(3) { … }`, `run { … }`, `xs.each { … }`.
                 Some(Token::LBrace)
                     if !self.nl()
                         && !self.no_brace
-                        && matches!(e.kind, ExprKind::Name(_) | ExprKind::Field(..) | ExprKind::Call { .. }) =>
+                        && matches!(e.kind, ExprKind::Name(_) | ExprKind::Field(..) | ExprKind::Call { .. } | ExprKind::Index { .. }) =>
                 {
                     let lambda = self.lambda()?;
                     let span = e.span.to(lambda.span);
                     let arg = Arg { name: None, value: lambda };
                     e = match e.kind {
-                        ExprKind::Call { callee, mut args } => {
+                        ExprKind::Call { callee, type_args, mut args } => {
                             args.push(arg);
-                            Expr { kind: ExprKind::Call { callee, args }, span }
+                            Expr { kind: ExprKind::Call { callee, type_args, args }, span }
                         }
                         kind => Expr {
-                            kind: ExprKind::Call { callee: Box::new(Expr { kind, span: e.span }), args: vec![arg] },
+                            kind: ExprKind::Call {
+                                callee: Box::new(Expr { kind, span: e.span }),
+                                type_args: Vec::new(),
+                                args: vec![arg],
+                            },
                             span,
                         },
                     };
@@ -612,10 +711,64 @@ impl<'a> Parser<'a> {
             }
             Token::If => return self.if_expr(),
             Token::When => return self.when_expr(),
-            Token::LBrace => return self.lambda(),
+            Token::LBrace => return self.brace_expr(),
+            Token::LBracket => {
+                let start = self.bump().span;
+                let items = self.scoped(true, false, |p| {
+                    let mut items = Vec::new();
+                    while p.peek() != Some(Token::RBracket) {
+                        items.push(p.expr()?);
+                        if !p.eat(Token::Comma) {
+                            break;
+                        }
+                    }
+                    Ok(items)
+                })?;
+                let end = self.expect(Token::RBracket)?.span;
+                return Ok(Expr { kind: ExprKind::List(items), span: start.to(end) });
+            }
             _ => return Err(self.expected("an expression")),
         };
         Ok(Expr { kind, span })
+    }
+
+    /// `{ … }` in expression position: a lambda, or a map literal `{ "a": 1 }`.
+    fn brace_expr(&mut self) -> Result<Expr> {
+        let save = self.pos;
+        self.bump();
+        // `{ x -> … }` and `{ x: Int -> … }` are lambdas.
+        let is_lambda = self.peek() == Some(Token::RBrace) || self.lambda_params().is_some();
+        self.pos = save + 1;
+        if !is_lambda && let Ok(entries) = self.try_map_entries() {
+            let end = self.expect(Token::RBrace)?.span;
+            return Ok(Expr { kind: ExprKind::Map(entries), span: self.toks[save].span.to(end) });
+        }
+        self.pos = save;
+        self.lambda()
+    }
+
+    /// `key: value, …` up to (not including) the closing brace.
+    fn try_map_entries(&mut self) -> Result<Vec<(Expr, Expr)>> {
+        let start = self.pos;
+        let result = self.scoped(true, false, |p| {
+            let mut entries = Vec::new();
+            while p.peek() != Some(Token::RBrace) {
+                let key = p.expr()?;
+                p.expect(Token::Colon)?;
+                entries.push((key, p.expr()?));
+                if !p.eat(Token::Comma) {
+                    break;
+                }
+            }
+            if entries.is_empty() || p.peek() != Some(Token::RBrace) {
+                return Err(p.expected("`}`"));
+            }
+            Ok(entries)
+        });
+        if result.is_err() {
+            self.pos = start;
+        }
+        result
     }
 
     /// `{ params -> body }` or `{ body }`.
@@ -907,7 +1060,7 @@ mod tests {
             ExprKind::Unary(UnOp::Neg, x) => format!("(-{})", show(x)),
             ExprKind::Unary(UnOp::Not, x) => format!("(!{})", show(x)),
             ExprKind::Field(o, f) => format!("{}.{}", show(o), f.name),
-            ExprKind::Call { callee, args } => {
+            ExprKind::Call { callee, args, .. } => {
                 let args: Vec<String> = args
                     .iter()
                     .map(|a| match &a.name {

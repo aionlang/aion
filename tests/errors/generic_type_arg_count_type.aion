@@ -1,0 +1,3 @@
+// error: `Box` takes 1 type argument(s) but 2 were given
+type Box<T>(value: T)
+fn show(b: Box<Int, Int>) = 1
