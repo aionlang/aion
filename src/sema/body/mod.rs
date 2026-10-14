@@ -177,7 +177,12 @@ impl Checker<'_> {
             let label = if i == 0 { format!("{}=", f.name) } else { format!(", {}=", f.name) };
             acc = concat(acc, text(label));
             let field = mk(K::Field { obj: Box::new(cx.local_expr(this)), index: i }, f.ty);
-            let piece = if matches!(f.ty, Ty::Fn(_)) {
+            let is_fn = match f.ty {
+                Ty::Fn(_) => true,
+                Ty::Opt(o) => matches!(self.t.opt_inner(o), Ty::Fn(_)),
+                _ => false,
+            };
+            let piece = if is_fn {
                 text("<function>".into())
             } else {
                 cx.stringify(field, Span::default())?
@@ -1264,6 +1269,11 @@ impl<'c, 'a> Cx<'c, 'a> {
         if v.ty == Ty::Void {
             return Err(Diagnostic::new("this expression does not produce a value", e.span));
         }
+        // `null` only means something where an optional is expected.
+        if v.ty == Ty::Null && expected.is_none() {
+            return Err(Diagnostic::new("cannot tell what type this `null` has", e.span)
+                .hint("give the variable a type: `x: Int? = null`"));
+        }
         Ok(v)
     }
 
@@ -1283,10 +1293,38 @@ impl<'c, 'a> Cx<'c, 'a> {
         match (e.ty, to) {
             (a, b) if a == b => Ok(e),
             (Ty::Int, Ty::Float) => Ok(mk(K::IntToFloat(Box::new(e)), Ty::Float)),
-            (found, _) => Err(Diagnostic::new(
-                format!("expected {}, found {}", self.name(to), self.name(found)),
-                span,
-            )),
+            (Ty::Null, Ty::Opt(_)) => Ok(mk(K::Null, to)),
+            // `T` → `T?` (and `Int` → `Float?`)
+            (found, Ty::Opt(id)) if !matches!(found, Ty::Opt(_) | Ty::Null | Ty::Void) => {
+                let inner = self.ck.t.opt_inner(id);
+                match self.coerce(e, inner, span) {
+                    Ok(v) => Ok(mk(K::Wrap(Box::new(v)), to)),
+                    Err(_) => Err(self.mismatch(to, found, span)),
+                }
+            }
+            (found, _) => Err(self.mismatch(to, found, span)),
+        }
+    }
+
+    fn mismatch(&self, expected: Ty, found: Ty, span: Span) -> Diagnostic {
+        let d = Diagnostic::new(format!("expected {}, found {}", self.name(expected), self.name(found)), span);
+        match found {
+            Ty::Opt(id) if self.ck.t.opt_inner(id) == expected => {
+                d.hint("it might be null: check for null first, or use `!!`, `?:` or `?.`")
+            }
+            _ => d,
+        }
+    }
+
+    /// The type of an `if` whose branches have types `a` and `b`, if there is one.
+    fn join(&self, a: Ty, b: Ty) -> Option<Ty> {
+        let t = &self.ck.t;
+        match (a, b) {
+            (a, b) if a == b => Some(a),
+            (Ty::Int, Ty::Float) | (Ty::Float, Ty::Int) => Some(Ty::Float),
+            (Ty::Null, x) | (x, Ty::Null) if x != Ty::Void => Some(t.opt_of(x)),
+            (Ty::Opt(o), x) | (x, Ty::Opt(o)) if x != Ty::Void && t.opt_inner(o) == x => Some(Ty::Opt(o)),
+            _ => None,
         }
     }
 
@@ -1318,6 +1356,23 @@ impl<'c, 'a> Cx<'c, 'a> {
                 );
                 Ok(mk(K::Block(vec![hir::Stmt::Let(tmp, Some(e))], Box::new(cond)), Ty::Str))
             }
+            Ty::Opt(id) => {
+                let inner = self.ck.t.opt_inner(id);
+                let tmp = self.new_local("$opt", e.ty);
+                let is_null = mk(K::IsNull(Box::new(self.local_expr(tmp))), Ty::Bool);
+                let value = mk(K::Unwrap(Box::new(self.local_expr(tmp))), inner);
+                let text = self.stringify(value, span)?;
+                let cond = mk(
+                    K::Cond {
+                        cond: Box::new(is_null),
+                        then: Box::new(mk(K::Str("null".into()), Ty::Str)),
+                        otherwise: Box::new(text),
+                    },
+                    Ty::Str,
+                );
+                Ok(mk(K::Block(vec![hir::Stmt::Let(tmp, Some(e))], Box::new(cond)), Ty::Str))
+            }
+            Ty::Null => Ok(mk(K::Str("null".into()), Ty::Str)),
             Ty::Fn(_) => Err(Diagnostic::new("cannot turn a function into text", span)),
             Ty::Void => Err(Diagnostic::new("cannot turn nothing into text", span)),
         }
@@ -1436,8 +1491,10 @@ impl<'c, 'a> Cx<'c, 'a> {
                 self.get_element(o, i, e.span)?
             }
 
-            A::Null | A::SafeField(..) | A::NotNull(_) | A::Elvis(..) => {
-                return Err(Diagnostic::new("nullable values are not available yet", e.span));
+            A::Null => mk(K::Null, Ty::Null),
+
+            A::SafeField(..) | A::NotNull(_) | A::Elvis(..) => {
+                return Err(Diagnostic::new("this null-handling operator is not available yet", e.span));
             }
 
             A::List(items) => self.list_literal(items, None, e.span)?,
@@ -1493,23 +1550,18 @@ impl<'c, 'a> Cx<'c, 'a> {
             return Err(Diagnostic::new("an `if` that produces a value needs an `else`", span)
                 .hint("for `when`, add an `else ->` branch"));
         }
-        let ty = match (then.ty, other.ty) {
-            (a, b) if a == b => a,
-            (Ty::Int, Ty::Float) => {
-                then = self.coerce(then, Ty::Float, span)?;
-                Ty::Float
-            }
-            (Ty::Float, Ty::Int) => {
-                other = self.coerce(other, Ty::Float, span)?;
-                Ty::Float
-            }
-            (a, b) => {
-                return Err(Diagnostic::new(
-                    format!("the branches have different types: {} and {}", self.name(a), self.name(b)),
-                    span,
-                ));
-            }
+        let Some(ty) = self.join(then.ty, other.ty) else {
+            return Err(Diagnostic::new(
+                format!(
+                    "the branches have different types: {} and {}",
+                    self.name(then.ty),
+                    self.name(other.ty)
+                ),
+                span,
+            ));
         };
+        then = self.coerce(then, ty, span)?;
+        other = self.coerce(other, ty, span)?;
         Ok(mk(K::Cond { cond: Box::new(cond), then: Box::new(then), otherwise: Box::new(other) }, ty))
     }
 
@@ -1891,9 +1943,10 @@ impl<'c, 'a> Cx<'c, 'a> {
             if let Some(n) = &a.name {
                 return Err(Diagnostic::new("`print` doesn't take named arguments", n.span));
             }
-            let v = self.value(&a.value)?;
+            // `println(null)` is fine: it prints "null".
+            let v = if matches!(a.value.kind, A::Null) { mk(K::Null, Ty::Null) } else { self.value(&a.value)? };
             out.push(match v.ty {
-                Ty::Obj(_) => self.stringify(v, a.value.span)?,
+                Ty::Obj(_) | Ty::Opt(_) | Ty::Null => self.stringify(v, a.value.span)?,
                 Ty::Fn(_) => return Err(Diagnostic::new("cannot print a function", a.value.span)),
                 _ => v,
             });
@@ -1908,7 +1961,7 @@ fn default_expr(ty: Ty) -> hir::Expr {
         Ty::Float => mk(K::Float(0.0), Ty::Float),
         Ty::Bool => mk(K::Bool(false), Ty::Bool),
         Ty::Str => mk(K::Str(String::new()), Ty::Str),
-        Ty::Obj(_) | Ty::Fn(_) => mk(K::Null, ty),
+        Ty::Obj(_) | Ty::Fn(_) | Ty::Opt(_) | Ty::Null => mk(K::Null, ty),
         Ty::Void => unit(),
     }
 }

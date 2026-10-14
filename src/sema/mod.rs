@@ -130,6 +130,8 @@ pub struct Tables {
     fn_types: RefCell<Vec<FnSig>>,
     /// The `Array<T>` type for each element type.
     arrays: RefCell<HashMap<Ty, TypeId>>,
+    /// Interned inner types of optionals: `Ty::Opt(i)` is `opt_types[i]?`.
+    opt_types: RefCell<Vec<Ty>>,
 }
 
 /// What a declared function needs when its body is checked.
@@ -222,6 +224,24 @@ impl Tables {
         Ty::Obj(id)
     }
 
+    /// `inner?`.  An optional of an optional is the same optional.
+    pub fn opt_of(&self, inner: Ty) -> Ty {
+        if matches!(inner, Ty::Opt(_)) {
+            return inner;
+        }
+        let mut types = self.opt_types.borrow_mut();
+        let id = types.iter().position(|&t| t == inner).unwrap_or_else(|| {
+            types.push(inner);
+            types.len() - 1
+        });
+        Ty::Opt(id)
+    }
+
+    /// The `T` of `T?`.
+    pub fn opt_inner(&self, id: hir::OptId) -> Ty {
+        self.opt_types.borrow()[id]
+    }
+
     pub fn fn_sig(&self, id: hir::FnTyId) -> FnSig {
         self.fn_types.borrow()[id].clone()
     }
@@ -239,6 +259,11 @@ impl Tables {
                 let ret = if sig.ret == Ty::Void { "Unit".to_string() } else { self.ty_name(sig.ret) };
                 format!("({}) -> {ret}", params.join(", "))
             }
+            Ty::Opt(id) => match self.opt_inner(id) {
+                inner @ Ty::Fn(_) => format!("({})?", self.ty_name(inner)),
+                inner => format!("{}?", self.ty_name(inner)),
+            },
+            Ty::Null => "null".into(),
             Ty::Void => "nothing".into(),
         }
     }

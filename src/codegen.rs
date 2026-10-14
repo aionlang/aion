@@ -43,6 +43,7 @@ declare void @aion_print_bool(i64, i64)
 declare void @aion_panic_null() noreturn
 declare void @aion_panic_div_zero() noreturn
 declare void @aion_panic_index(i64, i64) noreturn
+declare void @aion_panic_unwrap() noreturn
 declare ptr @aion_array_new(i64, i64, i64)
 declare i64 @aion_hash_int(i64)
 declare i64 @aion_hash_str(ptr)
@@ -53,7 +54,7 @@ declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
 const RUNTIME_SYMBOLS: &[&str] = &[
     "aion_new_object", "aion_concat", "aion_int_to_str", "aion_float_to_str", "aion_bool_to_str",
     "aion_str_eq", "aion_str_cmp", "aion_print_str", "aion_print_int", "aion_print_float", "aion_print_bool",
-    "aion_panic_null", "aion_panic_div_zero", "aion_panic_index", "aion_array_new", "aion_hash_int", "aion_hash_str", "aion_frame_top",
+    "aion_panic_null", "aion_panic_div_zero", "aion_panic_index", "aion_panic_unwrap", "aion_array_new", "aion_hash_int", "aion_hash_str", "aion_frame_top",
 ];
 
 pub fn emit(p: &Program) -> String {
@@ -130,7 +131,7 @@ fn ir(ty: Ty) -> &'static str {
         Ty::Int => "i64",
         Ty::Float => "double",
         Ty::Bool => "i1",
-        Ty::Str | Ty::Obj(_) | Ty::Fn(_) => "ptr",
+        Ty::Str | Ty::Obj(_) | Ty::Fn(_) | Ty::Opt(_) | Ty::Null => "ptr",
         Ty::Void => "void",
     }
 }
@@ -610,11 +611,16 @@ impl<'a> FnGen<'a> {
     }
 
     fn null_check(&mut self, v: &str) {
+        self.null_check_with(v, "aion_panic_null");
+    }
+
+    /// Branch to a call of `panic` (which never returns) if `v` is null.
+    fn null_check_with(&mut self, v: &str, panic: &str) {
         let (isnull, bad, ok) = (self.tmp(), self.label("null"), self.label("nonnull"));
         self.line(format!("{isnull} = icmp eq ptr {v}, null"));
         self.term(format!("br i1 {isnull}, label %{bad}, label %{ok}"));
         self.begin(&bad);
-        self.line("call void @aion_panic_null()");
+        self.line(format!("call void @{panic}()"));
         self.term("unreachable");
         self.begin(&ok);
     }
@@ -774,6 +780,30 @@ impl<'a> FnGen<'a> {
             ExprKind::ArrayLen(array) => {
                 let a = self.expr(array);
                 self.array_len(&a)
+            }
+
+            ExprKind::Wrap(inner) => {
+                let v = self.expr(inner);
+                if inner.ty.is_gc() {
+                    return v; // an optional pointer is the pointer itself
+                }
+                let b = self.call_value("ptr", "@aion_new_object(i64 1, i64 0)");
+                self.root(&b);
+                self.store_cell(&b, inner.ty, &v);
+                b
+            }
+
+            ExprKind::Unwrap(inner) => {
+                let v = self.expr(inner);
+                self.null_check_with(&v, "aion_panic_unwrap");
+                if e.ty.is_gc() { v } else { self.load_cell(&v, e.ty) }
+            }
+
+            ExprKind::IsNull(inner) => {
+                let v = self.expr(inner);
+                let t = self.tmp();
+                self.line(format!("{t} = icmp eq ptr {v}, null"));
+                t
             }
 
             ExprKind::New(ty) => {

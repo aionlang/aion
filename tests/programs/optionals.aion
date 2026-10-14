@@ -1,0 +1,39 @@
+// Optional types: T?, null, boxing of Int?/Float?/Bool?, printing.
+
+a: Int? = 5
+b: Int? = null
+c: String? = "hi"
+d: String? = null
+e: Float? = 2
+f: Bool? = false
+println(a, b, c, d, e, f)
+println(null)
+
+type Node(value: Int) {
+    next: Node?
+    tag: String?
+}
+n := Node(1)
+println(n)
+n.next = Node(2)
+n.tag = "x"
+println(n.next, n.tag)
+
+fn maybe(flag: Bool) -> Int? = if flag { 42 } else { null }
+println(maybe(true), maybe(false))
+fn describe(x: String?) = "got $x"
+println(describe("a"), describe(null))
+
+xs: List<Int?> = [1, null, 3]
+println(xs, xs.size())
+m := Map<String, Int?>()
+m["a"] = 1
+m["b"] = null
+println(m)
+
+// an if may mix a value and null
+g := if xs.size() > 2 { "set" } else { null }
+println(g)
+words := Array<String?>(2)
+words[1] = "x"
+println(words[0], words[1])

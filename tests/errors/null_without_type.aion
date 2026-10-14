@@ -1,0 +1,2 @@
+// error: cannot tell what type this `null` has
+x := null

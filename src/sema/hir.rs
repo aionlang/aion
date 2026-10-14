@@ -9,6 +9,7 @@ pub type TypeId = usize;
 pub type LocalId = usize;
 pub type GlobalId = usize;
 pub type FnTyId = usize;
+pub type OptId = usize;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Ty {
@@ -20,13 +21,19 @@ pub enum Ty {
     Obj(TypeId),
     /// A function value (a closure), identified by its interned signature.
     Fn(FnTyId),
+    /// `T?`: a `T` or null, identified by its interned inner type.  A pointer
+    /// type's optional is the same pointer (null = absent); `Int?`, `Float?` and
+    /// `Bool?` point to a one-slot box.
+    Opt(OptId),
+    /// The type of the `null` literal; it converts to any `T?` and is never stored.
+    Null,
     Void,
 }
 
 impl Ty {
     /// Values of this type live on the garbage-collected heap.
     pub fn is_gc(self) -> bool {
-        matches!(self, Ty::Str | Ty::Obj(_) | Ty::Fn(_))
+        matches!(self, Ty::Str | Ty::Obj(_) | Ty::Fn(_) | Ty::Opt(_))
     }
 }
 
@@ -168,6 +175,12 @@ pub enum ExprKind {
     Closure { func: FnId },
     /// Allocate a zeroed instance (string fields start as `""`).
     New(TypeId),
+    /// `T` → `T?` (boxes an Int, Float or Bool).
+    Wrap(Box<Expr>),
+    /// `T?` → `T`; panics if it is null.
+    Unwrap(Box<Expr>),
+    /// Is the optional null?
+    IsNull(Box<Expr>),
     /// A new `Array<elem>` of `len` slots, each set to `fill`.
     ArrayNew { elem: Ty, len: Box<Expr>, fill: Box<Expr> },
     /// `array[index]`, with a bounds check.

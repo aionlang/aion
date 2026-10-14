@@ -40,6 +40,7 @@ void aion_panic(const char *msg) {
 
 void aion_panic_null(void) { aion_panic("null reference"); }
 void aion_panic_div_zero(void) { aion_panic("division by zero"); }
+void aion_panic_unwrap(void) { aion_panic("unexpected null value"); }
 
 void aion_panic_index(int64_t index, int64_t len) {
     char msg[96];
