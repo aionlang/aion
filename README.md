@@ -33,7 +33,25 @@ println(twice { it * 3 }(2))        // 18
 ```
 
 No `main`, no semicolons, no type noise: types are only written on parameters and
-fields.
+fields.  Generics, collections, nullable types, interfaces, `defer` and `try` are
+there when you need them:
+
+```aion
+interface Shape { fn area() -> Float }
+type Circle(r: Float) { fn area() = 3.14159 * r * r }
+type Rect(w: Float, h: Float) { fn area() = w * h }
+
+shapes: List<Shape> = [Circle(1), Rect(2, 3)]
+println(shapes.map { it.area() })
+
+ages := {"ann": 31, "bob": 25}
+println(ages.entries().filter { it.value > 30 }.map { it.key })
+
+fn lookup(name: String) -> Int? = ages.getOrNull(name)
+println(lookup("bob") ?: -1, lookup("zed") ?: -1)
+
+try { println(10 / (ages["bob"] - 25)) } catch e { println("oops:", e) }
+```
 
 ## Quick start
 

@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0 — scripting syntax, closures, projects
+## 0.3.0 — scripting syntax, closures, generics, collections, nullability, interfaces, projects
 
 A new surface syntax (Kotlin / Go / Python flavoured), first-class functions, and
 project files with dependencies.  **Source-incompatible with 0.2**: see the
