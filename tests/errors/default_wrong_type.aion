@@ -1,0 +1,3 @@
+// error: expected a Int default, found String
+fn f(a: Int = "x") {}
+fn main() {}

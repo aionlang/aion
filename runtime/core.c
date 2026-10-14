@@ -4,8 +4,8 @@
  * The collector is a precise, non-moving mark-sweep.  Roots are the slots of
  * every frame on the `aion_frame_top` chain (see aion.h); objects are traced
  * through their `ptr_mask`.  Collection only ever happens inside an
- * allocation, and compiled code keeps every live pointer in a frame slot, so
- * no live value can be missed.
+ * allocation, and compiled code keeps every live pointer in a frame slot or a
+ * global variable, so no live value can be missed.
  */
 
 #include "aion.h"
@@ -16,6 +16,11 @@
 #include <string.h>
 
 AionFrame *aion_frame_top = NULL;
+
+/* Module-level variables holding pointers: the compiler emits a table of their
+ * addresses into every program (possibly empty). */
+extern void **const aion_roots[];
+extern const int64_t aion_roots_len;
 
 #define MIN_THRESHOLD ((size_t)4 << 20)
 
@@ -75,6 +80,7 @@ static void drain(void) {
 }
 
 void aion_gc_collect(void) {
+    for (int64_t i = 0; i < aion_roots_len; i++) mark(*aion_roots[i]);
     for (AionFrame *f = aion_frame_top; f; f = f->prev)
         for (uint64_t i = 0; i < f->n; i++) mark(f->slots[i]);
     drain();

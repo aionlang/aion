@@ -1,4 +1,4 @@
-// import std.gc;
+// import gc
 //
 // Inspect and drive the garbage collector.  These are implemented in
 // runtime/core.c.

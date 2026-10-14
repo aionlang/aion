@@ -1,4 +1,4 @@
-// import std.name;
+// import name
 
 fn name() {
     println("valera")

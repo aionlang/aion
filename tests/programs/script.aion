@@ -1,0 +1,43 @@
+// A script: top-level statements run in order; functions see top-level variables.
+
+import counter_mod
+
+greeting := "hello"
+count := 0
+limit: Int = 3
+
+fn bump() {
+    count += 1
+}
+
+fn describe() = "$greeting x$count"       // return type inferred: String
+
+println("start:", describe())
+
+while count < limit {
+    bump()
+}
+println(describe())
+
+// Forward references to functions are fine; variables must be defined first.
+println(twice(count))
+fn twice(n: Int) = n * 2
+
+greeting = "bye"
+println(describe())
+
+// Variables from other modules are reachable and assignable.
+counter_mod.bump()
+counter_mod.bump()
+counter_mod.label = "renamed"
+println(counter_mod.label, counter_mod.total)
+
+// Objects and strings held in globals survive collections.
+type Box(text: String)
+box := Box("kept " + "alive")
+i := 0
+while i < 60000 {
+    junk := "garbage ${i} padding padding padding"
+    i += 1
+}
+println(box.text, greeting)

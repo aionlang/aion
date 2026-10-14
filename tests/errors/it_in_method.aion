@@ -1,0 +1,5 @@
+// error: undefined variable `it`
+type P(x: Int) {
+    fn get() = it.x
+}
+fn main() {}

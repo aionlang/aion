@@ -1,6 +1,6 @@
 // String literals, escapes, interpolation, concatenation, equality, unicode.
 
-fn shout(s: String) -> String => "${s}!"
+fn shout(s: String) -> String = "${s}!"
 
 fn main() {
     name := "Aion"

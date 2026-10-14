@@ -1,0 +1,5 @@
+// error: cannot assign to `f`
+fn f() {}
+fn main() {
+    f = 3
+}

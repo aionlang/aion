@@ -1,5 +1,5 @@
-// error: `add` takes 2 argument(s) but 1 were given
-fn add(a: Int, b: Int) -> Int => a + b
+// error: `add` is missing the argument `b`
+fn add(a: Int, b: Int) -> Int = a + b
 fn main() {
     println(add(1))
 }

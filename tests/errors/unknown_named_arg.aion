@@ -1,0 +1,5 @@
+// error: `f` has no parameter named `z`
+fn f(a: Int) {}
+fn main() {
+    f(z: 1)
+}

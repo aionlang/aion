@@ -1,0 +1,2 @@
+// error: the program has no `fn main()` and no top-level statements to run
+fn helper() {}

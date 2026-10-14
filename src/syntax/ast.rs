@@ -21,10 +21,14 @@ pub struct Module {
     pub items: Vec<Item>,
 }
 
-/// `import aion.math;` / `import aion.sockets.TcpListener;` / `import utils;`
+/// `import math`, `import utils as u`, `from sockets import TcpListener, TcpStream`
 #[derive(Debug, Clone)]
 pub struct Import {
     pub path: Vec<Ident>,
+    /// `from <path> import a, b` — the names to bring in (the module itself isn't bound).
+    pub names: Option<Vec<Ident>>,
+    /// `import <path> as alias`
+    pub alias: Option<Ident>,
     pub span: Span,
 }
 
@@ -32,14 +36,18 @@ pub struct Import {
 pub enum Item {
     Fn(FnDecl),
     Type(TypeDecl),
-    /// `fn Animal::speak() { ... }` — a method declared outside its type.
+    /// `fn Animal.speak() { ... }` — a method declared outside its type.
     Method { owner: Ident, decl: FnDecl },
+    /// A top-level statement: runs when the module is loaded.
+    Stmt(Stmt),
 }
 
 #[derive(Debug)]
 pub struct Param {
     pub name: Ident,
     pub ty: TypeRef,
+    /// `x: Int = 0`
+    pub default: Option<Expr>,
 }
 
 #[derive(Debug)]
@@ -54,8 +62,8 @@ pub struct FnDecl {
 #[derive(Debug)]
 pub enum FnBody {
     Block(Vec<Stmt>),
-    /// `fn f() => expr`
-    Arrow(Expr),
+    /// `fn f() = expr`
+    Expr(Expr),
     /// `extern fn f(...) -> T` or `... = "c_symbol"`; implemented in C.
     Extern { symbol: Option<String> },
 }
@@ -64,6 +72,8 @@ pub enum FnBody {
 pub struct FieldDecl {
     pub name: Ident,
     pub ty: TypeRef,
+    /// `count: Int = 0`
+    pub init: Option<Expr>,
 }
 
 #[derive(Debug)]
@@ -75,10 +85,13 @@ pub struct CtorDecl {
 #[derive(Debug)]
 pub struct TypeDecl {
     pub name: Ident,
-    /// `type Animal(it.name, it.age) { ... }` shorthand constructor.
-    pub ctor_fields: Option<Vec<Ident>>,
+    /// `type User(name: String, age: Int = 0)` — each parameter is also a field.
+    pub primary: Option<Vec<Param>>,
     pub fields: Vec<FieldDecl>,
+    /// An explicit `constructor(...) { ... }` (only without a primary one).
     pub ctor: Option<CtorDecl>,
+    /// `init { ... }` blocks, run after the fields are set up.
+    pub inits: Vec<Vec<Stmt>>,
     pub methods: Vec<FnDecl>,
 }
 
@@ -92,11 +105,14 @@ pub struct Stmt {
 pub enum StmtKind {
     /// `a := 1`, `a: Int := 1`, `a: Int`
     Let { name: Ident, ty: Option<TypeRef>, init: Option<Expr> },
-    /// `a = 1`, `it.age += 1`
+    /// `a = 1`, `this.age += 1`
     Assign { target: Expr, op: AssignOp, value: Expr },
     Expr(Expr),
-    If { cond: Expr, then: Vec<Stmt>, otherwise: Option<Vec<Stmt>> },
     While { cond: Expr, body: Vec<Stmt> },
+    /// `for i in 0..10 { ... }`
+    For { var: Ident, iter: Expr, body: Vec<Stmt> },
+    Break,
+    Continue,
     Return(Option<Expr>),
 }
 
@@ -115,20 +131,34 @@ pub struct Expr {
     pub span: Span,
 }
 
+/// A call argument, optionally named: `f(1, flag: true)`.
+#[derive(Debug)]
+pub struct Arg {
+    pub name: Option<Ident>,
+    pub value: Expr,
+}
+
 #[derive(Debug)]
 pub enum ExprKind {
     Int(i64),
     Float(f64),
     Bool(bool),
     Str(String),
-    /// `"hi ${name}!"`
+    /// `"hi ${name} and $other"`
     Interp(Vec<InterpPart>),
     Name(String),
     /// `obj.field` — also `module.name` before name resolution.
     Field(Box<Expr>, Ident),
-    Call { callee: Box<Expr>, args: Vec<Expr> },
+    Call { callee: Box<Expr>, args: Vec<Arg> },
     Unary(UnOp, Box<Expr>),
     Binary(BinOp, Box<Expr>, Box<Expr>),
+    /// `if c { a } else { b }`; the value of a branch is its last expression.
+    If { cond: Box<Expr>, then: Vec<Stmt>, otherwise: Option<Vec<Stmt>> },
+    /// A sequence of statements whose value is the last expression
+    /// (produced by desugaring `when`).
+    Block(Vec<Stmt>),
+    /// `a..b` (exclusive) or `a..=b` (inclusive).
+    Range { start: Box<Expr>, end: Box<Expr>, inclusive: bool },
 }
 
 #[derive(Debug)]

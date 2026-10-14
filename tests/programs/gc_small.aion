@@ -7,13 +7,13 @@ type Node {
     next: Node
 
     constructor(value: Int) {
-        it.value = value
-        it.text = "node ${value}"
+        this.value = value
+        this.text = "node ${value}"
     }
 
     fn push(value: Int) -> Node {
         n := Node(value)
-        n.next = it
+        n.next = this
         return n
     }
 }

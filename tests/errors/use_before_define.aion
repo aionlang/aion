@@ -1,0 +1,3 @@
+// error: `later` is used before it is defined
+println(later)
+later := 1

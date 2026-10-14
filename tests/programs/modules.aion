@@ -1,9 +1,11 @@
 // Imports: user modules (same dir and lib/), selective imports, stdlib.
 
-import helpers;
-import shapes.Square;
-import std.math;
-import std.io;
+import helpers
+import helpers as h              // another name for the same module
+import shapes.Square             // Square on its own (and `shapes.…`)
+import math                      // the standard library, by bare name
+import std.io                    // …or with an explicit prefix
+from strings import upper, length
 
 fn main() {
     helpers.greet("modules")
@@ -25,4 +27,6 @@ fn main() {
     println(math.fmax(1.5, 2.5))
 
     io.separator()
+
+    println(h.twice(5), upper("shout"), length("four"))
 }

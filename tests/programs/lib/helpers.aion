@@ -4,4 +4,4 @@ fn greet(who: String) {
     println("hello, ${who}")
 }
 
-fn twice(n: Int) -> Int => n * 2
+fn twice(n: Int) -> Int = n * 2

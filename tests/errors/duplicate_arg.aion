@@ -1,0 +1,5 @@
+// error: `a` is given twice
+fn f(a: Int, b: Int = 0) {}
+fn main() {
+    f(1, a: 2)
+}

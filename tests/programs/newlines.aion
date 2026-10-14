@@ -1,0 +1,58 @@
+// Line breaks end statements, with a few deliberate exceptions.
+
+x := 10
+-3                       // a separate (discarded) statement, not `10 - 3`
+println(x)
+
+y := x
+(x + 1)                  // a new statement, not a call of `x`
+println(y)
+
+// Inside parentheses, and after an operator, a line may continue.
+sum := 1 +
+    2 +
+    3
+println(sum)
+println(
+    "multi",
+    "line",
+    sum
+)
+
+// `&&` and `||` may start the next line.
+ok := x > 5
+    && x < 20
+    || false
+println(ok)
+
+// So may a `.` — chains read top to bottom.
+type Acc(v: Int) {
+    fn add(n: Int) = Acc(v + n)
+    fn show() = "Acc($v)"
+}
+r := Acc(1)
+    .add(2)
+    .add(3)
+println(r.show())
+
+// `else` may follow a closing brace on its own line.
+if x > 50 {
+    println("big")
+}
+else {
+    println("small")
+}
+
+// A bare `return` followed by a line break returns nothing.
+fn early(n: Int) {
+    if n > 0 {
+        return
+    }
+    println("not early")
+}
+early(1)
+early(0)
+
+// Statements may share a line.
+a := 1; b := 2
+println(a + b)

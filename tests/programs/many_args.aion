@@ -4,14 +4,12 @@ fn mix(a: Int, b: Float, c: Bool, d: String, e: Int) -> String {
     return "${a} ${b} ${c} ${d} ${e}"
 }
 
-fn flip(b: Bool) -> Bool => !b
+fn flip(b: Bool) -> Bool = !b
 
-fn to_float(i: Int) -> Float => i
+fn to_float(i: Int) -> Float = i
 
-type Pair(it.a, it.b) {
-    a: Float
-    b: Bool
-    fn describe() -> String => "${it.a}/${it.b}"
+type Pair(a: Float, b: Bool) {
+    fn describe() -> String = "${this.a}/${this.b}"
 }
 
 fn main() {

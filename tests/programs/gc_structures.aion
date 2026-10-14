@@ -8,7 +8,7 @@ type Cell {
     value: Int
     next: Cell
     constructor(value: Int) {
-        it.value = value
+        this.value = value
     }
 }
 
@@ -18,20 +18,20 @@ type Tree {
     value: Int
     label: String
     constructor(depth: Int, value: Int) {
-        it.value = value
-        it.label = "t${value}"
+        this.value = value
+        this.label = "t${value}"
         if (depth > 0) {
-            it.left = Tree(depth - 1, value * 2)
-            it.right = Tree(depth - 1, value * 2 + 1)
+            this.left = Tree(depth - 1, value * 2)
+            this.right = Tree(depth - 1, value * 2 + 1)
         }
     }
 
     // Sum of values in a tree of the given depth.
     fn sum(depth: Int) -> Int {
-        total := it.value
+        total := this.value
         if (depth > 0) {
-            total += it.left.sum(depth - 1)
-            total += it.right.sum(depth - 1)
+            total += this.left.sum(depth - 1)
+            total += this.right.sum(depth - 1)
         }
         return total
     }

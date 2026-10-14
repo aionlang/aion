@@ -1,6 +1,6 @@
 // Arithmetic, precedence, Int/Float mixing, compound assignment.
 
-fn add(a: Int, b: Int) -> Int => a + b
+fn add(a: Int, b: Int) -> Int = a + b
 
 fn fact(n: Int) -> Int {
     if (n <= 1) {
@@ -9,7 +9,7 @@ fn fact(n: Int) -> Int {
     return n * fact(n - 1)
 }
 
-fn half(x: Float) -> Float => x / 2
+fn half(x: Float) -> Float = x / 2
 
 fn main() {
     println(1 + 2 * 3)

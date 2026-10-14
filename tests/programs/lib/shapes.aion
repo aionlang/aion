@@ -1,9 +1,8 @@
 import helpers;
 
-type Square(it.side) {
-    side: Int
+type Square(side: Int) {
 
-    fn area() -> Int => it.side * it.side
+    fn area() -> Int = this.side * this.side
 }
 
 fn double_area(s: Square) -> Int {

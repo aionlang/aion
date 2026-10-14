@@ -1,0 +1,4 @@
+// error: `for` needs a range such as `0..10`
+fn main() {
+    for x in 5 {}
+}

@@ -1,0 +1,5 @@
+// error: a positional argument can't follow a named one
+fn f(a: Int, b: Int) {}
+fn main() {
+    f(a: 1, 2)
+}

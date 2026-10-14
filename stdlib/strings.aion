@@ -1,4 +1,4 @@
-// import std.strings;
+// import strings
 //
 //   strings.length("héllo")           // 6 (bytes)
 //   strings.contains("banana", "nan") // true

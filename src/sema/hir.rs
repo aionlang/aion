@@ -7,6 +7,7 @@
 pub type FnId = usize;
 pub type TypeId = usize;
 pub type LocalId = usize;
+pub type GlobalId = usize;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ty {
@@ -28,9 +29,19 @@ impl Ty {
 
 pub struct Program {
     pub types: Vec<TypeDef>,
+    pub globals: Vec<Global>,
     pub funcs: Vec<Func>,
-    /// The user's `fn main()`.
-    pub entry: FnId,
+    /// Module initialisers (top-level statements), in dependency order.
+    pub inits: Vec<FnId>,
+    /// The entry module's `fn main()`, run after all initialisers.
+    pub main: Option<FnId>,
+}
+
+/// A module-level variable.
+pub struct Global {
+    pub name: String,
+    pub symbol: String,
+    pub ty: Ty,
 }
 
 pub struct TypeDef {
@@ -78,10 +89,13 @@ pub enum Stmt {
     /// Declare a local; `None` means "zero value of its type".
     Let(LocalId, Option<Expr>),
     Set(LocalId, Expr),
+    SetGlobal(GlobalId, Expr),
     SetField { obj: Expr, index: usize, value: Expr },
     Expr(Expr),
-    If { cond: Expr, then: Vec<Stmt>, otherwise: Vec<Stmt> },
-    While { cond: Expr, body: Vec<Stmt> },
+    /// `step` runs after the body and is where `continue` jumps to.
+    While { cond: Expr, body: Vec<Stmt>, step: Vec<Stmt> },
+    Break,
+    Continue,
     Return(Option<Expr>),
 }
 
@@ -111,6 +125,11 @@ pub enum ExprKind {
     Bool(bool),
     Str(String),
     Local(LocalId),
+    Global(GlobalId),
+    /// The null reference.
+    Null,
+    /// Nothing (the value of a block that ends in a statement).
+    Unit,
     Field { obj: Box<Expr>, index: usize },
     Call { func: FnId, args: Vec<Expr> },
     /// Allocate a zeroed instance (string fields start as `""`).
@@ -122,7 +141,12 @@ pub enum ExprKind {
     /// Short-circuiting `&&` / `||`.
     Logical { and: bool, lhs: Box<Expr>, rhs: Box<Expr> },
     IntToFloat(Box<Expr>),
+    /// Run the statements, then yield the value of the last expression.
+    Block(Vec<Stmt>, Box<Expr>),
+    /// `if`/`else`; both branches have the expression's type (or it is `Void`).
+    Cond { cond: Box<Expr>, then: Box<Expr>, otherwise: Box<Expr> },
     /// Render an Int/Float/Bool as a String.
     ToStr(Box<Expr>),
-    Print { newline: bool, arg: Option<Box<Expr>> },
+    /// Prints the arguments separated by spaces (each Int, Float, Bool or String).
+    Print { newline: bool, args: Vec<Expr> },
 }

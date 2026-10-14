@@ -1,0 +1,4 @@
+// error: cannot infer the return type of `a`: it depends on itself
+fn a() = b()
+fn b() = a()
+a()

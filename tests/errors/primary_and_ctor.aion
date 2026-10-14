@@ -1,0 +1,5 @@
+// error: a type with a primary constructor cannot also declare `constructor`
+type P(x: Int) {
+    constructor(a: Int, b: Int) {}
+}
+fn main() {}

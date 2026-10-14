@@ -67,9 +67,9 @@ type Wide {
     f63: String
 
     constructor(n: Int) {
-        it.f00 = "first ${n}"
-        it.f63 = "last ${n}"
-        it.f31 = n
+        this.f00 = "first ${n}"
+        this.f63 = "last ${n}"
+        this.f31 = n
     }
 }
 

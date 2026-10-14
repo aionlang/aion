@@ -5,7 +5,7 @@ type Animal {
     age: Int
 
     constructor(name: String) {
-        it.name = name
+        this.name = name
     }
 
     fn bark() -> String {
@@ -13,12 +13,12 @@ type Animal {
     }
 }
 
-fn Animal::animalToString() -> String {
-    return "Animal(${it.name}, ${it.age})"
+fn Animal.animalToString() -> String {
+    return "Animal(${this.name}, ${this.age})"
 }
 
-fn Animal::setAge(age: Int) {
-    it.age = age
+fn Animal.setAge(age: Int) {
+    this.age = age
 }
 
 fn main() {

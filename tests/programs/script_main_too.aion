@@ -1,0 +1,8 @@
+// Top-level statements run first, then `fn main()`.
+println("one")
+
+fn main() {
+    println("three")
+}
+
+println("two")

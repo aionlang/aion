@@ -1,103 +1,235 @@
 //! Type-checking of function bodies.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use super::hir::{self, ExprKind as K, FnId, LocalId, Ty};
-use super::{Sym, Tables, Work};
+use super::hir::{self, ExprKind as K, FnId, GlobalId, LocalId, Ty, TypeId};
+use super::{Checker, Const, Sym, Work};
 use crate::diag::{Diagnostic, Result, Span};
-use crate::syntax::ast::{self, AssignOp, FnBody, InterpPart, StmtKind};
+use crate::syntax::ast::{self, AssignOp, ExprKind as A, FnBody, InterpPart, StmtKind};
 
-pub fn check_fn(t: &Tables, id: FnId, work: &Work) -> Result<hir::Func> {
-    let info = &t.funcs[id];
-    let mut cx = Cx::new(t, info.module, info.ret);
-    for (name, ty) in &info.params {
-        let local = cx.new_local(name, *ty);
-        cx.scopes[0].insert(name.clone(), local);
+pub(super) fn check_fn(ck: &Checker, id: FnId, work: &Work) -> Result<hir::Func> {
+    let info = &ck.t.funcs[id];
+    let mut cx = Cx::new(ck, info.module);
+    for p in &info.params {
+        let local = cx.new_local(&p.name, p.ty);
+        cx.scopes[0].insert(p.name.clone(), local);
     }
+    cx.ret = info.ret.get();
 
     let body = match work {
-        Work::Fn(decl) | Work::Method(decl) => match &decl.body {
-            FnBody::Extern { .. } => None,
-            FnBody::Block(stmts) => {
-                let body = cx.block(stmts)?;
-                if info.ret != Ty::Void && !always_returns(&body) {
-                    return Err(Diagnostic::new(
-                        format!("`{}` may reach its end without returning a {}", info.name, t.ty_name(info.ret)),
-                        decl.name.span,
-                    ));
-                }
-                Some(body)
+        Work::Fn(decl) | Work::Method(decl) => {
+            if matches!(work, Work::Method(_))
+                && let Ty::Obj(ty) = info.params[0].ty
+            {
+                cx.this = Some((0, ty));
             }
-            FnBody::Arrow(e) => {
-                let e = cx.expr(e)?;
-                Some(if info.ret == Ty::Void {
-                    vec![hir::Stmt::Expr(e)]
-                } else {
-                    let e = cx.coerce(e, info.ret, decl.span)?;
-                    vec![hir::Stmt::Return(Some(e))]
-                })
-            }
-        },
-        Work::Ctor { ty, decl, shorthand } => {
-            let it = cx.new_local("it", Ty::Obj(*ty));
-            cx.scopes[0].insert("it".into(), it);
-            cx.ctor_it = Some(it);
-            let mut body = vec![hir::Stmt::Let(it, Some(hir::Expr { kind: K::New(*ty), ty: Ty::Obj(*ty) }))];
-            match decl {
-                Some(c) => body.extend(cx.block(&c.body)?),
-                None => {
-                    for (param, &field) in shorthand.iter().enumerate() {
-                        body.push(hir::Stmt::SetField {
-                            obj: cx.local_expr(it),
-                            index: field,
-                            value: cx.local_expr(param),
-                        });
+            match &decl.body {
+                FnBody::Extern { .. } => None,
+                FnBody::Block(stmts) => {
+                    let body = cx.block(stmts)?;
+                    let ret = info.ret.get().expect("block bodies never infer");
+                    if ret != Ty::Void && !always_returns(&body) {
+                        return Err(Diagnostic::new(
+                            format!("`{}` may reach its end without returning a {}", info.name, ck.t.ty_name(ret)),
+                            decl.name.span,
+                        ));
                     }
+                    Some(body)
+                }
+                FnBody::Expr(e) => Some(match info.ret.get() {
+                    Some(ret) => {
+                        let v = cx.value(e)?;
+                        vec![hir::Stmt::Return(Some(cx.coerce(v, ret, e.span)?))]
+                    }
+                    None => {
+                        // Infer the return type from the expression.
+                        let v = cx.expr(e)?;
+                        info.ret.set(Some(v.ty));
+                        if v.ty == Ty::Void { vec![hir::Stmt::Expr(v)] } else { vec![hir::Stmt::Return(Some(v))] }
+                    }
+                }),
+            }
+        }
+
+        Work::Ctor { ty, decl } => {
+            let this = cx.new_local("this", Ty::Obj(*ty));
+            cx.scopes[0].insert("this".into(), this);
+            cx.this = Some((this, *ty));
+            cx.in_ctor = true;
+            let mut body = vec![hir::Stmt::Let(this, Some(mk(K::New(*ty), Ty::Obj(*ty))))];
+
+            // Primary-constructor parameters initialise the leading fields.
+            for (i, _) in decl.primary.iter().flatten().enumerate() {
+                body.push(hir::Stmt::SetField { obj: cx.local_expr(this), index: i, value: cx.local_expr(i) });
+            }
+            // Field initialisers, then `init` blocks, then an explicit constructor body.
+            for f in &decl.fields {
+                if let Some(init) = &f.init {
+                    let index = ck.t.types[*ty].fields.iter().position(|g| g.name == f.name.name).unwrap();
+                    let v = cx.value(init)?;
+                    let value = cx.coerce(v, ck.t.types[*ty].fields[index].ty, init.span)?;
+                    body.push(hir::Stmt::SetField { obj: cx.local_expr(this), index, value });
                 }
             }
-            body.push(hir::Stmt::Return(Some(cx.local_expr(it))));
+            for blk in &decl.inits {
+                body.extend(cx.block(blk)?);
+            }
+            if let Some(c) = &decl.ctor {
+                body.extend(cx.block(&c.body)?);
+            }
+            body.push(hir::Stmt::Return(Some(cx.local_expr(this))));
             Some(body)
+        }
+
+        Work::Init { stmts } => {
+            cx.init = Some(InitState { fn_id: id, declared: HashSet::new() });
+            let mut out = Vec::new();
+            for s in stmts {
+                cx.top_stmt(s, &mut out)?;
+            }
+            Some(out)
         }
     };
 
     Ok(hir::Func {
         symbol: info.symbol.clone(),
         kind: info.kind,
-        ret: info.ret,
+        ret: info.ret.get().unwrap_or(Ty::Void),
         n_params: info.params.len(),
         locals: cx.locals,
         body,
     })
 }
 
+impl Checker<'_> {
+    /// The `toString` used when an object is printed or interpolated: the
+    /// type's own `toString()` if it has one, otherwise a generated
+    /// `Name(field=value, …)`.
+    fn tostring_fn(&self, ty: TypeId) -> Result<FnId> {
+        if let Some(&f) = self.tostring.borrow().get(&ty) {
+            return Ok(f);
+        }
+        if let Some(&m) = self.t.types[ty].methods.get("toString")
+            && self.t.funcs[m].params.len() == 1
+            && self.ret_of(m, Span::default())? == Ty::Str
+        {
+            self.tostring.borrow_mut().insert(ty, m);
+            return Ok(m);
+        }
+
+        // Reserve the id first so self-referential types find themselves.
+        let id = {
+            let mut out = self.out.borrow_mut();
+            out.push(None);
+            out.len() - 1
+        };
+        self.tostring.borrow_mut().insert(ty, id);
+
+        let info = &self.t.types[ty];
+        let mut cx = Cx::new(self, 0);
+        let this = cx.new_local("this", Ty::Obj(ty));
+        let text = |s: String| mk(K::Str(s), Ty::Str);
+        let concat = |a: hir::Expr, b: hir::Expr| mk(K::Binary(hir::BinOp::Add, Box::new(a), Box::new(b)), Ty::Str);
+
+        let mut acc = text(format!("{}(", info.name));
+        for (i, f) in info.fields.iter().enumerate() {
+            let label = if i == 0 { format!("{}=", f.name) } else { format!(", {}=", f.name) };
+            acc = concat(acc, text(label));
+            let field = mk(K::Field { obj: Box::new(cx.local_expr(this)), index: i }, f.ty);
+            let piece = cx.stringify(field, Span::default())?;
+            acc = concat(acc, piece);
+        }
+        acc = concat(acc, text(")".into()));
+
+        let func = hir::Func {
+            symbol: format!("tostring__{}__{ty}", info.name),
+            kind: hir::FuncKind::Method,
+            ret: Ty::Str,
+            n_params: 1,
+            locals: cx.locals,
+            body: Some(vec![hir::Stmt::Return(Some(acc))]),
+        };
+        self.out.borrow_mut()[id] = Some(func);
+        Ok(id)
+    }
+}
+
 /// Does every path through `stmts` end in a `return`?
 fn always_returns(stmts: &[hir::Stmt]) -> bool {
     match stmts.last() {
         Some(hir::Stmt::Return(_)) => true,
-        Some(hir::Stmt::If { then, otherwise, .. }) => {
-            !otherwise.is_empty() && always_returns(then) && always_returns(otherwise)
-        }
+        Some(hir::Stmt::Expr(e)) => expr_returns(e),
         _ => false,
     }
 }
 
-struct Cx<'t> {
-    t: &'t Tables,
+fn expr_returns(e: &hir::Expr) -> bool {
+    match &e.kind {
+        K::Cond { then, otherwise, .. } => expr_returns(then) && expr_returns(otherwise),
+        K::Block(stmts, tail) => always_returns(stmts) || expr_returns(tail),
+        _ => false,
+    }
+}
+
+struct InitState {
+    fn_id: FnId,
+    /// Globals whose definition has been passed (for use-before-definition errors).
+    declared: HashSet<GlobalId>,
+}
+
+struct Cx<'c, 'a> {
+    ck: &'c Checker<'a>,
     module: usize,
     locals: Vec<hir::Local>,
     scopes: Vec<HashMap<String, LocalId>>,
-    ret: Ty,
-    /// Inside a constructor: the object being built.
-    ctor_it: Option<LocalId>,
+    /// `None` while the return type is still being inferred.
+    ret: Option<Ty>,
+    /// Inside a method or constructor: the receiver and its type.
+    this: Option<(LocalId, TypeId)>,
+    in_ctor: bool,
+    init: Option<InitState>,
+    loops: u32,
 }
 
 fn mk(kind: K, ty: Ty) -> hir::Expr {
     hir::Expr { kind, ty }
 }
 
-impl<'t> Cx<'t> {
-    fn new(t: &'t Tables, module: usize, ret: Ty) -> Self {
-        Cx { t, module, locals: Vec::new(), scopes: vec![HashMap::new()], ret, ctor_it: None }
+fn unit() -> hir::Expr {
+    mk(K::Unit, Ty::Void)
+}
+
+/// What a bare name refers to.
+enum Named {
+    Local(LocalId),
+    /// A field of `this`.
+    Field(usize, Ty),
+    Global(GlobalId),
+    Fn,
+    Type,
+    Module(usize),
+}
+
+/// Somewhere a value can be stored.
+enum Target {
+    Local(LocalId),
+    Global(GlobalId),
+    Field { obj: hir::Expr, index: usize },
+}
+
+impl<'c, 'a> Cx<'c, 'a> {
+    fn new(ck: &'c Checker<'a>, module: usize) -> Self {
+        Cx {
+            ck,
+            module,
+            locals: Vec::new(),
+            scopes: vec![HashMap::new()],
+            ret: Some(Ty::Void),
+            this: None,
+            in_ctor: false,
+            init: None,
+            loops: 0,
+        }
     }
 
     fn new_local(&mut self, name: &str, ty: Ty) -> LocalId {
@@ -114,7 +246,42 @@ impl<'t> Cx<'t> {
     }
 
     fn name(&self, ty: Ty) -> String {
-        self.t.ty_name(ty)
+        self.ck.t.ty_name(ty)
+    }
+
+    fn this_expr(&self) -> Option<hir::Expr> {
+        self.this.map(|(id, _)| self.local_expr(id))
+    }
+
+    /// Resolve a bare name: locals, then fields of `this`, then the module.
+    fn resolve(&self, n: &str) -> Option<Named> {
+        if let Some(id) = self.find_local(n) {
+            return Some(Named::Local(id));
+        }
+        if let Some((_, ty)) = self.this
+            && let Some(i) = self.ck.t.types[ty].fields.iter().position(|f| f.name == n)
+        {
+            return Some(Named::Field(i, self.ck.t.types[ty].fields[i].ty));
+        }
+        match self.ck.t.lookup(self.module, n) {
+            Some(Sym::Fn(_)) => Some(Named::Fn),
+            Some(Sym::Type(_)) => Some(Named::Type),
+            Some(Sym::Global(id)) => Some(Named::Global(id)),
+            None => self.ck.t.scopes[self.module].modules.get(n).map(|&m| Named::Module(m)),
+        }
+    }
+
+    /// A reference to a global, checking that top-level code doesn't use one
+    /// before the line that defines it.
+    fn global_use(&self, g: GlobalId, span: Span) -> Result<Ty> {
+        let info = &self.ck.t.globals[g];
+        if let Some(init) = &self.init
+            && init.fn_id == info.init_fn
+            && !init.declared.contains(&g)
+        {
+            return Err(Diagnostic::new(format!("`{}` is used before it is defined", info.name), span));
+        }
+        self.ck.global_ty(g, span)
     }
 
     // ── statements ──────────────────────────────────────────────
@@ -128,10 +295,31 @@ impl<'t> Cx<'t> {
         result.map(|()| out)
     }
 
+    /// A top-level statement of a module: `x := …` defines a global.
+    fn top_stmt(&mut self, s: &ast::Stmt, out: &mut Vec<hir::Stmt>) -> Result<()> {
+        let StmtKind::Let { name, init, .. } = &s.kind else { return self.stmt(s, out) };
+        let Some(Sym::Global(gid)) = self.ck.t.scopes[self.module].items.get(&name.name).copied() else {
+            unreachable!("declare registered every top-level `:=` as a global")
+        };
+        let declared = self.ck.t.globals[gid].ty.get();
+        let init_span = init.as_ref().map(|e| e.span);
+        let init = init.as_ref().map(|e| self.value(e)).transpose()?;
+        let value = match (declared, init) {
+            (Some(ty), Some(v)) => self.coerce(v, ty, init_span.unwrap())?,
+            (Some(ty), None) => default_expr(ty),
+            (None, Some(v)) => v,
+            (None, None) => unreachable!("the parser requires a type or an initialiser"),
+        };
+        self.ck.t.globals[gid].ty.set(Some(value.ty));
+        self.init.as_mut().unwrap().declared.insert(gid);
+        out.push(hir::Stmt::SetGlobal(gid, value));
+        Ok(())
+    }
+
     fn stmt(&mut self, s: &ast::Stmt, out: &mut Vec<hir::Stmt>) -> Result<()> {
         match &s.kind {
             StmtKind::Let { name, ty, init } => {
-                let declared = ty.as_ref().map(|t| self.t.resolve_type(self.module, t)).transpose()?;
+                let declared = ty.as_ref().map(|t| self.ck.t.resolve_type(self.module, t)).transpose()?;
                 let init_span = init.as_ref().map(|e| e.span);
                 let init = init.as_ref().map(|e| self.value(e)).transpose()?;
                 let (local_ty, init) = match (declared, init) {
@@ -150,41 +338,47 @@ impl<'t> Cx<'t> {
 
             StmtKind::Assign { target, op, value } => self.assign(target, *op, value, s.span, out)?,
 
-            StmtKind::Expr(e) => out.push(hir::Stmt::Expr(self.expr(e)?)),
-
-            StmtKind::If { cond, then, otherwise } => {
-                let cond = self.condition(cond)?;
-                let then = self.block(then)?;
-                let otherwise = match otherwise {
-                    Some(b) => self.block(b)?,
-                    None => Vec::new(),
-                };
-                out.push(hir::Stmt::If { cond, then, otherwise });
-            }
+            StmtKind::Expr(e) => out.push(self.stmt_expr(e)?),
 
             StmtKind::While { cond, body } => {
                 let cond = self.condition(cond)?;
-                let body = self.block(body)?;
-                out.push(hir::Stmt::While { cond, body });
+                self.loops += 1;
+                let body = self.block(body);
+                self.loops -= 1;
+                out.push(hir::Stmt::While { cond, body: body?, step: Vec::new() });
+            }
+
+            StmtKind::For { var, iter, body } => self.for_loop(var, iter, body, out)?,
+
+            StmtKind::Break | StmtKind::Continue => {
+                if self.loops == 0 {
+                    let word = if matches!(s.kind, StmtKind::Break) { "break" } else { "continue" };
+                    return Err(Diagnostic::new(format!("`{word}` outside of a loop"), s.span));
+                }
+                out.push(if matches!(s.kind, StmtKind::Break) { hir::Stmt::Break } else { hir::Stmt::Continue });
             }
 
             StmtKind::Return(value) => {
-                let value = match (value, self.ctor_it) {
-                    (None, Some(it)) => Some(self.local_expr(it)),
-                    (Some(_), Some(_)) => {
-                        return Err(Diagnostic::new("a constructor cannot return a value", s.span));
+                let value = match (value, self.in_ctor, self.ret) {
+                    (None, true, _) => self.this_expr(),
+                    (Some(e), true, _) => {
+                        return Err(Diagnostic::new("a constructor cannot return a value", e.span));
                     }
-                    (None, None) if self.ret == Ty::Void => None,
-                    (None, None) => {
-                        return Err(Diagnostic::new(format!("expected a {} to return", self.name(self.ret)), s.span));
+                    (_, _, None) => {
+                        return Err(Diagnostic::new("`return` needs the function to declare its return type", s.span)
+                            .hint("write `-> Type` on the function, or drop `return` and use `= expr`"));
                     }
-                    (Some(e), None) if self.ret == Ty::Void => {
+                    (None, _, Some(Ty::Void)) => None,
+                    (None, _, Some(ret)) => {
+                        return Err(Diagnostic::new(format!("expected a {} to return", self.name(ret)), s.span));
+                    }
+                    (Some(e), _, Some(Ty::Void)) => {
                         return Err(Diagnostic::new("this function does not return a value", e.span)
                             .hint("add `-> Type` to the signature"));
                     }
-                    (Some(e), None) => {
+                    (Some(e), _, Some(ret)) => {
                         let v = self.value(e)?;
-                        Some(self.coerce(v, self.ret, e.span)?)
+                        Some(self.coerce(v, ret, e.span)?)
                     }
                 };
                 out.push(hir::Stmt::Return(value));
@@ -193,9 +387,94 @@ impl<'t> Cx<'t> {
         Ok(())
     }
 
+    /// An expression used as a statement: its value (if any) is discarded.
+    fn stmt_expr(&mut self, e: &ast::Expr) -> Result<hir::Stmt> {
+        Ok(hir::Stmt::Expr(match &e.kind {
+            A::If { cond, then, otherwise } => {
+                let cond = self.condition(cond)?;
+                let then = mk(K::Block(self.block(then)?, Box::new(unit())), Ty::Void);
+                let otherwise = match otherwise {
+                    Some(b) => mk(K::Block(self.block(b)?, Box::new(unit())), Ty::Void),
+                    None => unit(),
+                };
+                mk(K::Cond { cond: Box::new(cond), then: Box::new(then), otherwise: Box::new(otherwise) }, Ty::Void)
+            }
+            A::Block(stmts) => mk(K::Block(self.block(stmts)?, Box::new(unit())), Ty::Void),
+            _ => self.expr(e)?,
+        }))
+    }
+
+    fn for_loop(&mut self, var: &ast::Ident, iter: &ast::Expr, body: &[ast::Stmt], out: &mut Vec<hir::Stmt>) -> Result<()> {
+        let A::Range { start, end, inclusive } = &iter.kind else {
+            return Err(Diagnostic::new("`for` needs a range such as `0..10`", iter.span)
+                .hint("looping over collections is not available yet"));
+        };
+        let int = |cx: &mut Self, e: &ast::Expr| -> Result<hir::Expr> {
+            let v = cx.value(e)?;
+            cx.coerce(v, Ty::Int, e.span)
+        };
+        let start = int(self, start)?;
+        let end = int(self, end)?;
+
+        // for i in a..b { body }  ⇒  $i := a; $end := b; while $i < $end { i := $i; body; $i += 1 }
+        self.scopes.push(HashMap::new());
+        let counter = self.new_local("$i", Ty::Int);
+        let limit = self.new_local("$end", Ty::Int);
+        out.push(hir::Stmt::Let(counter, Some(start)));
+        out.push(hir::Stmt::Let(limit, Some(end)));
+        let cmp = if *inclusive { hir::BinOp::Le } else { hir::BinOp::Lt };
+        let cond = mk(
+            K::Binary(cmp, Box::new(self.local_expr(counter)), Box::new(self.local_expr(limit))),
+            Ty::Bool,
+        );
+
+        self.scopes.push(HashMap::new());
+        let v = self.new_local(&var.name, Ty::Int);
+        self.scopes.last_mut().unwrap().insert(var.name.clone(), v);
+        self.loops += 1;
+        let inner = self.block(body);
+        self.loops -= 1;
+        self.scopes.pop();
+        self.scopes.pop();
+
+        let mut full = vec![hir::Stmt::Let(v, Some(self.local_expr(counter)))];
+        full.extend(inner?);
+        let bump = mk(
+            K::Binary(hir::BinOp::Add, Box::new(self.local_expr(counter)), Box::new(mk(K::Int(1), Ty::Int))),
+            Ty::Int,
+        );
+        out.push(hir::Stmt::While { cond, body: full, step: vec![hir::Stmt::Set(counter, bump)] });
+        Ok(())
+    }
+
     fn condition(&mut self, e: &ast::Expr) -> Result<hir::Expr> {
         let v = self.value(e)?;
         self.coerce(v, Ty::Bool, e.span)
+    }
+
+    // ── assignment ──────────────────────────────────────────────
+
+    fn target(&mut self, target: &ast::Expr) -> Result<(Target, Ty)> {
+        match &target.kind {
+            A::Name(n) => match self.resolve(n) {
+                Some(Named::Local(id)) => Ok((Target::Local(id), self.locals[id].ty)),
+                Some(Named::Field(index, ty)) => {
+                    Ok((Target::Field { obj: self.this_expr().expect("fields imply `this`"), index }, ty))
+                }
+                Some(Named::Global(g)) => Ok((Target::Global(g), self.global_use(g, target.span)?)),
+                Some(_) => Err(Diagnostic::new(format!("cannot assign to `{n}`"), target.span)),
+                None => Err(Diagnostic::new(format!("undefined variable `{n}`"), target.span)),
+            },
+            A::Field(obj, field) => {
+                if let Some(g) = self.module_global(obj, field)? {
+                    return Ok((Target::Global(g), self.global_use(g, field.span)?));
+                }
+                let obj = self.value(obj)?;
+                let (index, ty) = self.field_of(&obj, field)?;
+                Ok((Target::Field { obj, index }, ty))
+            }
+            _ => unreachable!("the parser only accepts names and fields as targets"),
+        }
     }
 
     fn assign(
@@ -206,53 +485,62 @@ impl<'t> Cx<'t> {
         span: Span,
         out: &mut Vec<hir::Stmt>,
     ) -> Result<()> {
+        let (target, ty) = self.target(target)?;
         let value_span = value.span;
         let value = self.value(value)?;
-        let combine = |cx: &mut Self, cur: hir::Expr, value: hir::Expr| -> Result<hir::Expr> {
+
+        // A field target is evaluated once even for `a.b += 1`.
+        let target = match target {
+            Target::Field { obj, index } if op != AssignOp::Set && !matches!(obj.kind, K::Local(_)) => {
+                let tmp = self.new_local("$recv", obj.ty);
+                out.push(hir::Stmt::Let(tmp, Some(obj)));
+                Target::Field { obj: self.local_expr(tmp), index }
+            }
+            other => other,
+        };
+
+        let new = if op == AssignOp::Set {
+            self.coerce(value, ty, value_span)?
+        } else {
             let bin = match op {
-                AssignOp::Set => unreachable!(),
                 AssignOp::Add => ast::BinOp::Add,
                 AssignOp::Sub => ast::BinOp::Sub,
                 AssignOp::Mul => ast::BinOp::Mul,
-                AssignOp::Div => ast::BinOp::Div,
+                _ => ast::BinOp::Div,
             };
-            let ty = cur.ty;
-            let r = cx.binary(bin, cur, value, span)?;
-            cx.coerce(r, ty, span)
+            let current = self.read(&target, ty);
+            let r = self.binary(bin, current, value, span)?;
+            self.coerce(r, ty, span)?
         };
-
-        match &target.kind {
-            ast::ExprKind::Name(n) => {
-                let Some(id) = self.find_local(n) else {
-                    return Err(Diagnostic::new(format!("undefined variable `{n}`"), target.span));
-                };
-                let ty = self.locals[id].ty;
-                let new = if op == AssignOp::Set {
-                    self.coerce(value, ty, value_span)?
-                } else {
-                    let cur = self.local_expr(id);
-                    combine(self, cur, value)?
-                };
-                out.push(hir::Stmt::Set(id, new));
-            }
-            ast::ExprKind::Field(obj, field) => {
-                let obj = self.value(obj)?;
-                let (index, fty) = self.field_of(&obj, field)?;
-                if op == AssignOp::Set {
-                    let value = self.coerce(value, fty, value_span)?;
-                    out.push(hir::Stmt::SetField { obj, index, value });
-                } else {
-                    // Evaluate the receiver once.
-                    let tmp = self.new_local("$recv", obj.ty);
-                    out.push(hir::Stmt::Let(tmp, Some(obj)));
-                    let cur = mk(K::Field { obj: Box::new(self.local_expr(tmp)), index }, fty);
-                    let value = combine(self, cur, value)?;
-                    out.push(hir::Stmt::SetField { obj: self.local_expr(tmp), index, value });
-                }
-            }
-            _ => unreachable!("the parser only accepts names and fields as targets"),
-        }
+        out.push(match target {
+            Target::Local(id) => hir::Stmt::Set(id, new),
+            Target::Global(g) => hir::Stmt::SetGlobal(g, new),
+            Target::Field { obj, index } => hir::Stmt::SetField { obj, index, value: new },
+        });
         Ok(())
+    }
+
+    /// Read the current value of a target (for `+=` and friends).
+    fn read(&self, target: &Target, ty: Ty) -> hir::Expr {
+        match target {
+            Target::Local(id) => self.local_expr(*id),
+            Target::Global(g) => mk(K::Global(*g), ty),
+            Target::Field { obj, index } => {
+                let K::Local(id) = obj.kind else { unreachable!("compound targets are spilled to locals") };
+                mk(K::Field { obj: Box::new(self.local_expr(id)), index: *index }, ty)
+            }
+        }
+    }
+
+    /// `module.name` where `module` is an imported module alias and `name` a global.
+    fn module_global(&self, obj: &ast::Expr, field: &ast::Ident) -> Result<Option<GlobalId>> {
+        let A::Name(a) = &obj.kind else { return Ok(None) };
+        let Some(Named::Module(m)) = self.resolve(a) else { return Ok(None) };
+        match self.ck.t.scopes[m].items.get(&field.name) {
+            Some(&Sym::Global(g)) => Ok(Some(g)),
+            Some(_) => Err(Diagnostic::new(format!("`{}.{}` is not a variable", a, field.name), field.span)),
+            None => Err(Diagnostic::new(format!("module `{a}` has no `{}`", field.name), field.span)),
+        }
     }
 
     // ── conversions ─────────────────────────────────────────────
@@ -277,18 +565,37 @@ impl<'t> Cx<'t> {
         }
     }
 
-    fn to_string(&self, e: hir::Expr, span: Span) -> Result<hir::Expr> {
+    /// Turn a value into text: Strings as they are, numbers and Bools
+    /// formatted, objects via their `toString`.
+    fn stringify(&mut self, e: hir::Expr, span: Span) -> Result<hir::Expr> {
         match e.ty {
             Ty::Str => Ok(e),
             Ty::Int | Ty::Float | Ty::Bool => Ok(mk(K::ToStr(Box::new(e)), Ty::Str)),
-            other => Err(Diagnostic::new(format!("cannot turn a {} into text", self.name(other)), span)),
+            Ty::Obj(ty) => {
+                let f = self.ck.tostring_fn(ty)?;
+                let tmp = self.new_local("$obj", e.ty);
+                let is_null = mk(
+                    K::Binary(hir::BinOp::Eq, Box::new(self.local_expr(tmp)), Box::new(mk(K::Null, e.ty))),
+                    Ty::Bool,
+                );
+                let call = mk(K::Call { func: f, args: vec![self.local_expr(tmp)] }, Ty::Str);
+                let cond = mk(
+                    K::Cond {
+                        cond: Box::new(is_null),
+                        then: Box::new(mk(K::Str("null".into()), Ty::Str)),
+                        otherwise: Box::new(call),
+                    },
+                    Ty::Str,
+                );
+                Ok(mk(K::Block(vec![hir::Stmt::Let(tmp, Some(e))], Box::new(cond)), Ty::Str))
+            }
+            Ty::Void => Err(Diagnostic::new("cannot turn nothing into text", span)),
         }
     }
 
     // ── expressions ─────────────────────────────────────────────
 
     fn expr(&mut self, e: &ast::Expr) -> Result<hir::Expr> {
-        use ast::ExprKind as A;
         Ok(match &e.kind {
             A::Int(v) => mk(K::Int(*v), Ty::Int),
             A::Float(v) => mk(K::Float(*v), Ty::Float),
@@ -302,7 +609,7 @@ impl<'t> Cx<'t> {
                         InterpPart::Lit(s) => mk(K::Str(s.clone()), Ty::Str),
                         InterpPart::Expr(x) => {
                             let v = self.value(x)?;
-                            self.to_string(v, x.span)?
+                            self.stringify(v, x.span)?
                         }
                     };
                     acc = Some(match acc {
@@ -313,13 +620,48 @@ impl<'t> Cx<'t> {
                 acc.expect("the parser never produces an empty interpolation")
             }
 
-            A::Name(n) => match self.find_local(n) {
-                Some(id) => self.local_expr(id),
-                None => return Err(self.unresolved_name(n, e.span)),
+            A::Name(n) => match self.resolve(n) {
+                Some(Named::Local(id)) => self.local_expr(id),
+                Some(Named::Field(index, ty)) => {
+                    mk(K::Field { obj: Box::new(self.this_expr().expect("fields imply `this`")), index }, ty)
+                }
+                Some(Named::Global(g)) => {
+                    let ty = self.global_use(g, e.span)?;
+                    mk(K::Global(g), ty)
+                }
+                Some(Named::Fn) => {
+                    return Err(Diagnostic::new(format!("`{n}` is a function; call it with `{n}(...)`"), e.span));
+                }
+                Some(Named::Type) => {
+                    return Err(Diagnostic::new(format!("`{n}` is a type; construct one with `{n}(...)`"), e.span));
+                }
+                Some(Named::Module(_)) => {
+                    return Err(Diagnostic::new(format!("`{n}` is a module, not a value"), e.span)
+                        .hint(format!("call one of its functions, e.g. `{n}.name(...)`")));
+                }
+                None => {
+                    let d = Diagnostic::new(format!("undefined variable `{n}`"), e.span);
+                    return Err(if n == "it" && self.this.is_some() {
+                        d.hint("the receiver of a method is called `this`")
+                    } else {
+                        d
+                    });
+                }
             },
 
             A::Field(obj, field) => {
-                self.reject_module_value(obj)?;
+                if let Some(g) = self.module_global(obj, field)? {
+                    let ty = self.global_use(g, field.span)?;
+                    return Ok(mk(K::Global(g), ty));
+                }
+                if let A::Name(a) = &obj.kind
+                    && matches!(self.resolve(a), Some(Named::Module(_)))
+                {
+                    return Err(Diagnostic::new(
+                        format!("`{a}.{}` is not a value; call it with `(...)`", field.name),
+                        e.span,
+                    ));
+                }
                 let obj = self.value(obj)?;
                 let (index, ty) = self.field_of(&obj, field)?;
                 mk(K::Field { obj: Box::new(obj), index }, ty)
@@ -351,33 +693,76 @@ impl<'t> Cx<'t> {
                 let r = self.value(r)?;
                 self.binary(*op, l, r, e.span)?
             }
+
+            A::If { cond, then, otherwise } => self.if_value(cond, then, otherwise.as_deref(), e.span)?,
+
+            A::Block(stmts) => self.block_value(stmts)?,
+
+            A::Range { .. } => {
+                return Err(Diagnostic::new("a range can only be used in a `for` loop or after `in`", e.span));
+            }
         })
     }
 
-    fn unresolved_name(&self, n: &str, span: Span) -> Diagnostic {
-        if self.t.scopes[self.module].modules.contains_key(n) {
-            return Diagnostic::new(format!("`{n}` is a module, not a value"), span)
-                .hint(format!("call one of its functions, e.g. `{n}.name(...)`"));
-        }
-        match self.t.lookup(self.module, n) {
-            Some(Sym::Fn(_)) => Diagnostic::new(format!("`{n}` is a function; call it with `{n}(...)`"), span),
-            Some(Sym::Type(_)) => Diagnostic::new(format!("`{n}` is a type; construct one with `{n}(...)`"), span),
-            None => Diagnostic::new(format!("undefined variable `{n}`"), span),
-        }
+    /// Statements followed by a value: the last expression of the block.
+    fn block_value(&mut self, stmts: &[ast::Stmt]) -> Result<hir::Expr> {
+        self.scopes.push(HashMap::new());
+        let result = (|| {
+            let mut out = Vec::new();
+            let mut tail = unit();
+            for (i, s) in stmts.iter().enumerate() {
+                match &s.kind {
+                    StmtKind::Expr(e) if i + 1 == stmts.len() => tail = self.expr(e)?,
+                    _ => self.stmt(s, &mut out)?,
+                }
+            }
+            Ok(if out.is_empty() {
+                tail
+            } else {
+                let ty = tail.ty;
+                mk(K::Block(out, Box::new(tail)), ty)
+            })
+        })();
+        self.scopes.pop();
+        result
     }
 
-    /// `math.pi` style access to a module member as a value is not supported.
-    fn reject_module_value(&self, obj: &ast::Expr) -> Result<()> {
-        if let ast::ExprKind::Name(n) = &obj.kind
-            && self.find_local(n).is_none()
-            && self.t.scopes[self.module].modules.contains_key(n)
-        {
-            return Err(Diagnostic::new(
-                format!("`{n}` is a module; only functions and types can be used from it"),
-                obj.span,
-            ));
+    /// `if` used for its value: both branches must agree on a type.
+    fn if_value(
+        &mut self,
+        cond: &ast::Expr,
+        then: &[ast::Stmt],
+        otherwise: Option<&[ast::Stmt]>,
+        span: Span,
+    ) -> Result<hir::Expr> {
+        let cond = self.condition(cond)?;
+        let mut then = self.block_value(then)?;
+        let mut other = match otherwise {
+            Some(b) => self.block_value(b)?,
+            None => unit(),
+        };
+        if otherwise.is_none() && then.ty != Ty::Void {
+            return Err(Diagnostic::new("an `if` that produces a value needs an `else`", span)
+                .hint("for `when`, add an `else ->` branch"));
         }
-        Ok(())
+        let ty = match (then.ty, other.ty) {
+            (a, b) if a == b => a,
+            (Ty::Int, Ty::Float) => {
+                then = self.coerce(then, Ty::Float, span)?;
+                Ty::Float
+            }
+            (Ty::Float, Ty::Int) => {
+                other = self.coerce(other, Ty::Float, span)?;
+                Ty::Float
+            }
+            (a, b) => {
+                return Err(Diagnostic::new(
+                    format!("the branches have different types: {} and {}", self.name(a), self.name(b)),
+                    span,
+                ));
+            }
+        };
+        Ok(mk(K::Cond { cond: Box::new(cond), then: Box::new(then), otherwise: Box::new(other) }, ty))
     }
 
     fn field_of(&self, obj: &hir::Expr, field: &ast::Ident) -> Result<(usize, Ty)> {
@@ -387,7 +772,7 @@ impl<'t> Cx<'t> {
                 field.span,
             ));
         };
-        let info = &self.t.types[id];
+        let info = &self.ck.t.types[id];
         match info.fields.iter().position(|f| f.name == field.name) {
             Some(i) => Ok((i, info.fields[i].ty)),
             None => Err(Diagnostic::new(format!("`{}` has no field `{}`", info.name, field.name), field.span)),
@@ -457,42 +842,54 @@ impl<'t> Cx<'t> {
 
     // ── calls ───────────────────────────────────────────────────
 
-    fn call(&mut self, callee: &ast::Expr, args: &[ast::Expr], span: Span) -> Result<hir::Expr> {
+    fn call(&mut self, callee: &ast::Expr, args: &[ast::Arg], span: Span) -> Result<hir::Expr> {
         match &callee.kind {
-            ast::ExprKind::Name(n) => {
+            A::Name(n) => {
                 if self.find_local(n).is_some() {
                     return Err(Diagnostic::new(format!("`{n}` is a variable, not a function"), callee.span));
                 }
-                match self.t.lookup(self.module, n) {
+                // A method of the current object can be called bare.
+                if let Some((_, ty)) = self.this
+                    && let Some(&m) = self.ck.t.types[ty].methods.get(n)
+                {
+                    let recv = self.this_expr();
+                    return self.call_fn(m, recv, args, span);
+                }
+                match self.ck.t.lookup(self.module, n) {
                     Some(Sym::Fn(id)) => self.call_fn(id, None, args, span),
-                    Some(Sym::Type(ty)) => self.call_fn(self.t.types[ty].ctor, None, args, span),
+                    Some(Sym::Type(ty)) => self.call_fn(self.ck.t.types[ty].ctor, None, args, span),
+                    Some(Sym::Global(_)) => {
+                        Err(Diagnostic::new(format!("`{n}` is a variable, not a function"), callee.span))
+                    }
                     None if n == "print" || n == "println" => self.print(n == "println", args, span),
                     None => Err(Diagnostic::new(format!("undefined function `{n}`"), callee.span)),
                 }
             }
 
-            ast::ExprKind::Field(obj, member) => {
+            A::Field(obj, member) => {
                 // `module.func(...)` / `module.Type(...)`
-                if let ast::ExprKind::Name(a) = &obj.kind
-                    && self.find_local(a).is_none()
-                {
-                    let Some(&target) = self.t.scopes[self.module].modules.get(a) else {
-                        let import = if crate::embedded::stdlib_names().contains(&a.as_str()) {
-                            format!("import std.{a};")
-                        } else {
-                            format!("import {a};")
-                        };
-                        return Err(Diagnostic::new(format!("undefined name `{a}`"), obj.span)
-                            .hint(format!("did you forget `{import}`?")));
-                    };
-                    return match self.t.scopes[target].items.get(&member.name) {
-                        Some(&Sym::Fn(id)) => self.call_fn(id, None, args, span),
-                        Some(&Sym::Type(ty)) => self.call_fn(self.t.types[ty].ctor, None, args, span),
-                        None => Err(Diagnostic::new(
-                            format!("module `{a}` has no function or type `{}`", member.name),
-                            member.span,
-                        )),
-                    };
+                if let A::Name(a) = &obj.kind {
+                    match self.resolve(a) {
+                        Some(Named::Module(target)) => {
+                            return match self.ck.t.scopes[target].items.get(&member.name) {
+                                Some(&Sym::Fn(id)) => self.call_fn(id, None, args, span),
+                                Some(&Sym::Type(ty)) => self.call_fn(self.ck.t.types[ty].ctor, None, args, span),
+                                Some(&Sym::Global(_)) => Err(Diagnostic::new(
+                                    format!("`{a}.{}` is a variable, not a function", member.name),
+                                    member.span,
+                                )),
+                                None => Err(Diagnostic::new(
+                                    format!("module `{a}` has no function or type `{}`", member.name),
+                                    member.span,
+                                )),
+                            };
+                        }
+                        None => {
+                            return Err(Diagnostic::new(format!("undefined name `{a}`"), obj.span)
+                                .hint(format!("did you forget `import {a}`?")));
+                        }
+                        Some(_) => {} // a variable: fall through to a method call
+                    }
                 }
 
                 // `value.method(...)`
@@ -503,10 +900,10 @@ impl<'t> Cx<'t> {
                         member.span,
                     ));
                 };
-                match self.t.types[ty].methods.get(&member.name) {
+                match self.ck.t.types[ty].methods.get(&member.name) {
                     Some(&id) => self.call_fn(id, Some(recv), args, span),
                     None => Err(Diagnostic::new(
-                        format!("`{}` has no method `{}`", self.t.types[ty].name, member.name),
+                        format!("`{}` has no method `{}`", self.ck.t.types[ty].name, member.name),
                         member.span,
                     )),
                 }
@@ -516,41 +913,123 @@ impl<'t> Cx<'t> {
         }
     }
 
-    fn call_fn(&mut self, id: FnId, recv: Option<hir::Expr>, args: &[ast::Expr], span: Span) -> Result<hir::Expr> {
-        let info = &self.t.funcs[id];
-        let skip = usize::from(recv.is_some());
-        let expected = &info.params[skip..];
-        if expected.len() != args.len() {
-            return Err(Diagnostic::new(
-                format!("`{}` takes {} argument(s) but {} were given", info.name, expected.len(), args.len()),
+    /// Call `id`, matching arguments to parameters by position and name and
+    /// filling in defaults.
+    fn call_fn(&mut self, id: FnId, recv: Option<hir::Expr>, args: &[ast::Arg], span: Span) -> Result<hir::Expr> {
+        let ck = self.ck;
+        let info = &ck.t.funcs[id];
+        let ret = ck.ret_of(id, span)?;
+        let params = &info.params[usize::from(recv.is_some())..];
+        let too_many = || {
+            Diagnostic::new(
+                format!("`{}` takes {} argument(s) but {} were given", info.name, params.len(), args.len()),
                 span,
-            ));
+            )
+        };
+
+        // Which parameter does each argument fill?
+        let mut filled: Vec<Option<usize>> = vec![None; params.len()];
+        let mut order = Vec::with_capacity(args.len());
+        let mut positional = 0;
+        let mut named_seen = false;
+        for (ai, a) in args.iter().enumerate() {
+            let pi = match &a.name {
+                None => {
+                    if named_seen {
+                        return Err(Diagnostic::new("a positional argument can't follow a named one", a.value.span));
+                    }
+                    positional += 1;
+                    if positional > params.len() {
+                        return Err(too_many());
+                    }
+                    positional - 1
+                }
+                Some(n) => {
+                    named_seen = true;
+                    let Some(pi) = params.iter().position(|p| p.name == n.name) else {
+                        return Err(Diagnostic::new(
+                            format!("`{}` has no parameter named `{}`", info.name, n.name),
+                            n.span,
+                        ));
+                    };
+                    pi
+                }
+            };
+            if filled[pi].is_some() {
+                return Err(Diagnostic::new(format!("`{}` is given twice", params[pi].name), a.value.span));
+            }
+            filled[pi] = Some(ai);
+            order.push(pi);
         }
-        let mut out: Vec<hir::Expr> = recv.into_iter().collect();
-        for ((_, ty), arg) in expected.iter().zip(args) {
-            let v = self.value(arg)?;
-            out.push(self.coerce(v, *ty, arg.span)?);
+
+        // Evaluate arguments in the order they were written.
+        let mut values: Vec<Option<hir::Expr>> = (0..params.len()).map(|_| None).collect();
+        for (a, &pi) in args.iter().zip(&order) {
+            let v = self.value(&a.value)?;
+            values[pi] = Some(self.coerce(v, params[pi].ty, a.value.span)?);
         }
-        Ok(mk(K::Call { func: id, args: out }, info.ret))
+
+        // If named arguments reorder evaluation, pin each to a temporary first.
+        let mut pre = Vec::new();
+        if !order.windows(2).all(|w| w[0] < w[1]) {
+            for &pi in &order {
+                let v = values[pi].take().unwrap();
+                let tmp = self.new_local("$arg", v.ty);
+                pre.push(hir::Stmt::Let(tmp, Some(v)));
+                values[pi] = Some(self.local_expr(tmp));
+            }
+        }
+
+        let mut call_args: Vec<hir::Expr> = recv.into_iter().collect();
+        for (p, v) in params.iter().zip(values) {
+            call_args.push(match (v, &p.default) {
+                (Some(v), _) => v,
+                (None, Some(c)) => const_expr(c),
+                (None, None) => {
+                    return Err(Diagnostic::new(
+                        format!("`{}` is missing the argument `{}`", info.name, p.name),
+                        span,
+                    ));
+                }
+            });
+        }
+        let call = mk(K::Call { func: id, args: call_args }, ret);
+        Ok(if pre.is_empty() { call } else { mk(K::Block(pre, Box::new(call)), ret) })
     }
 
     /// The built-in, type-polymorphic `print` / `println`.
-    fn print(&mut self, newline: bool, args: &[ast::Expr], span: Span) -> Result<hir::Expr> {
-        let arg = match args {
-            [] if newline => None,
-            [a] => {
-                let v = self.value(a)?;
-                if matches!(v.ty, Ty::Obj(_)) {
-                    return Err(Diagnostic::new(format!("cannot print a {}", self.name(v.ty)), a.span)
-                        .hint("print its fields, or build text with \"${...}\""));
-                }
-                Some(Box::new(v))
+    fn print(&mut self, newline: bool, args: &[ast::Arg], span: Span) -> Result<hir::Expr> {
+        if args.is_empty() && !newline {
+            return Err(Diagnostic::new("`print` needs something to print", span));
+        }
+        let mut out = Vec::new();
+        for a in args {
+            if let Some(n) = &a.name {
+                return Err(Diagnostic::new("`print` doesn't take named arguments", n.span));
             }
-            _ => {
-                let name = if newline { "println" } else { "print" };
-                return Err(Diagnostic::new(format!("`{name}` takes one value to print"), span));
-            }
-        };
-        Ok(mk(K::Print { newline, arg }, Ty::Void))
+            let v = self.value(&a.value)?;
+            out.push(if matches!(v.ty, Ty::Obj(_)) { self.stringify(v, a.value.span)? } else { v });
+        }
+        Ok(mk(K::Print { newline, args: out }, Ty::Void))
+    }
+}
+
+fn default_expr(ty: Ty) -> hir::Expr {
+    match ty {
+        Ty::Int => mk(K::Int(0), Ty::Int),
+        Ty::Float => mk(K::Float(0.0), Ty::Float),
+        Ty::Bool => mk(K::Bool(false), Ty::Bool),
+        Ty::Str => mk(K::Str(String::new()), Ty::Str),
+        Ty::Obj(_) => mk(K::Null, ty),
+        Ty::Void => unit(),
+    }
+}
+
+fn const_expr(c: &Const) -> hir::Expr {
+    match c {
+        Const::Int(v) => mk(K::Int(*v), Ty::Int),
+        Const::Float(v) => mk(K::Float(*v), Ty::Float),
+        Const::Bool(v) => mk(K::Bool(*v), Ty::Bool),
+        Const::Str(s) => mk(K::Str(s.clone()), Ty::Str),
     }
 }

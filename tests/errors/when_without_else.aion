@@ -1,0 +1,6 @@
+// error: an `if` that produces a value needs an `else`
+fn main() {
+    x := when 3 {
+        1 -> "a"
+    }
+}

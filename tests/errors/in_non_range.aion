@@ -1,0 +1,4 @@
+// error: `in` needs a range such as `1..10`
+fn main() {
+    println(3 in 5)
+}

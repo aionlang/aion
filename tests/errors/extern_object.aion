@@ -1,6 +1,5 @@
 // error: `extern fn` can only use Int, Float, Bool and String
-type P(it.x) {
-    x: Int
+type P(x: Int) {
 }
 extern fn f(p: P)
 fn main() {}

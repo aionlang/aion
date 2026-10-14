@@ -1,0 +1,4 @@
+// error: cannot infer the type of `g` here
+fn show() = println(g)
+show()
+g := 1

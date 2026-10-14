@@ -1,4 +1,4 @@
-// import std.math;
+// import math
 //
 //   math.sqrt(144.0)     // 12
 //   math.pow(2.0, 10.0)  // 1024

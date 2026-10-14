@@ -1,0 +1,7 @@
+// error: `in` arms need a `when <value>`
+fn main() {
+    x := when {
+        in 1..2 -> 1
+        else -> 2
+    }
+}

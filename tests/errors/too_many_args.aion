@@ -1,0 +1,5 @@
+// error: `f` takes 1 argument(s) but 2 were given
+fn f(a: Int) {}
+fn main() {
+    f(1, 2)
+}

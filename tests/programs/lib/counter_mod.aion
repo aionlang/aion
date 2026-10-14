@@ -1,0 +1,9 @@
+// Top-level code in a module runs once, before the importing program.
+println("counter_mod: initialising")
+
+label := "counter"
+total := 0
+
+fn bump() {
+    total += 10
+}

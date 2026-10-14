@@ -1,0 +1,116 @@
+// Defaults, named arguments, if/when as expressions, for loops, implicit this,
+// field initialisers, init blocks, auto toString, $name interpolation.
+
+fn greet(name: String, greeting: String = "Hello", punct: String = "!") = "$greeting, $name$punct"
+
+fn trace(label: String, v: Int) -> Int {
+    println("eval", label)
+    return v
+}
+
+fn three(a: Int, b: Int, c: Int) = "$a-$b-$c"
+
+type User(name: String, age: Int = 0) {
+    active: Bool = true
+    tags: Int = 10 + 5
+    log: String = ""
+
+    init {
+        log = "created $name"
+    }
+
+    fn birthday() {
+        age += 1
+        note("birthday")
+    }
+
+    fn note(what: String) {
+        log += "; " + what
+    }
+
+    fn isAdult() = age >= 18
+}
+
+fn User.label() = "$name($age)"
+
+type Point(x: Int, y: Int)
+type Line(from: Point, to: Point) {
+    tag: Line?
+}
+
+type Named(who: String) {
+    fn toString() = "<$who>"
+}
+
+fn grade(score: Int) = when {
+    score >= 90 -> "A"
+    score >= 80 -> "B"
+    else -> "C"
+}
+
+fn main() {
+    println(greet("Ann"))
+    println(greet("Bob", "Hi"))
+    println(greet("Cy", punct: "?"))
+    println(greet(greeting: "Yo", name: "Di"))
+
+    // Evaluation follows the written order even when names reorder arguments.
+    println(three(c: trace("c", 3), a: trace("a", 1), b: trace("b", 2)))
+
+    u := User("ann", 17)
+    println(u.log)
+    println(u.isAdult(), u.active, u.tags)
+    u.birthday()
+    println(u.isAdult(), u.age, u.log)
+    println(u.label())
+    println(User("bob").age)
+    println(User(age: 40, name: "cy").label())
+
+    // if / when are expressions
+    n := 7
+    kind := if n % 2 == 0 { "even" } else { "odd" }
+    println(kind)
+    println(grade(95), grade(85), grade(10))
+    size := when n {
+        0 -> "zero"
+        1, 2, 3 -> "small"
+        in 4..10 -> "medium"
+        else -> "large"
+    }
+    println(size)
+    println(if n > 5 { n * 2 } else { n })
+    println(if n > 5 { 1 } else { 2.5 })       // Int and Float meet at Float
+
+    // for loops, break, continue
+    total := 0
+    for i in 0..5 { total += i }
+    println(total)
+    for i in 1..=3 { print(i, "") }
+    println()
+    for i in 0..10 {
+        if i % 2 == 0 { continue }
+        if i > 7 { break }
+        print(i, "")
+    }
+    println()
+    for i in 0..3 {
+        for j in 0..3 {
+            if j > i { break }
+            print(i * 10 + j, "")
+        }
+    }
+    println()
+    println(3 in 1..5, 5 in 1..5, 5 in 1..=5)
+
+    // printing objects
+    p := Point(1, 2)
+    println(p)
+    println("point is $p")
+    line := Line(p, Point(3, 4))
+    println(line)
+    line.tag = Line(Point(0, 0), Point(0, 1))
+    println(line)
+    println(Named("zed"), "and", u.name)
+    println(User("eve", 30))
+    println(1, 2.5, true, "s")
+}

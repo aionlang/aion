@@ -78,16 +78,43 @@ pub fn emit(p: &Program) -> String {
         let _ = writeln!(out, "declare {}{} @\"{}\"({})", zext(f.ret), ir(f.ret), f.symbol, params.join(", "));
     }
     out.push('\n');
+
+    // Module-level variables, and the table the collector reads them from.
+    for g in &p.globals {
+        let init = match g.ty {
+            Ty::Int => "0".to_string(),
+            Ty::Float => "0.0".to_string(),
+            Ty::Bool => "false".to_string(),
+            Ty::Str => pool.operand(""),
+            _ => "null".to_string(),
+        };
+        let _ = writeln!(out, "@\"{}\" = internal global {} {init} ; {}", g.symbol, ir(g.ty), g.name);
+    }
+    let roots: Vec<String> =
+        p.globals.iter().filter(|g| g.ty.is_gc()).map(|g| format!("ptr @\"{}\"", g.symbol)).collect();
+    if roots.is_empty() {
+        out.push_str("@aion_roots = constant [0 x ptr] zeroinitializer\n");
+    } else {
+        let _ = writeln!(out, "@aion_roots = constant [{} x ptr] [{}]", roots.len(), roots.join(", "));
+    }
+    let _ = writeln!(out, "@aion_roots_len = constant i64 {}\n", roots.len());
+
     out.push_str(&pool.definitions());
     out.push('\n');
     out.push_str(&funcs);
 
-    let entry = &p.funcs[p.entry];
     out.push_str("define i32 @main(i32 %argc, ptr %argv) {\n");
-    if entry.ret == Ty::Int {
-        let _ = writeln!(out, "  %r = call i64 @\"{}\"()\n  %c = trunc i64 %r to i32\n  ret i32 %c", entry.symbol);
-    } else {
-        let _ = writeln!(out, "  call void @\"{}\"()\n  ret i32 0", entry.symbol);
+    for &init in &p.inits {
+        let _ = writeln!(out, "  call void @\"{}\"()", p.funcs[init].symbol);
+    }
+    match p.main.map(|m| &p.funcs[m]) {
+        Some(main) if main.ret == Ty::Int => {
+            let _ = writeln!(out, "  %r = call i64 @\"{}\"()\n  %c = trunc i64 %r to i32\n  ret i32 %c", main.symbol);
+        }
+        Some(main) => {
+            let _ = writeln!(out, "  call void @\"{}\"()\n  ret i32 0", main.symbol);
+        }
+        None => out.push_str("  ret i32 0\n"),
     }
     out.push_str("}\n");
     out
@@ -170,6 +197,8 @@ struct FnGen<'a> {
     nslots: usize,
     cur: String,
     terminated: bool,
+    /// Enclosing loops as `(continue label, break label)`.
+    loops: Vec<(String, String)>,
 }
 
 /// Placeholder replaced by the frame-pop sequence (or nothing) at assembly.
@@ -189,6 +218,7 @@ impl<'a> FnGen<'a> {
             nslots: 0,
             cur: "entry".into(),
             terminated: false,
+            loops: Vec::new(),
         }
     }
 
@@ -322,12 +352,29 @@ impl<'a> FnGen<'a> {
     }
 
     fn local_addr(&mut self, id: LocalId) -> String {
-        match &self.storage[&id] {
-            Storage::Slot(s) => {
-                let s = *s;
-                self.slot_addr(s)
-            }
+        let st = match &self.storage[&id] {
+            Storage::Slot(s) => Storage::Slot(*s),
+            Storage::Alloca(name) => Storage::Alloca(name.clone()),
+        };
+        self.storage_addr(&st)
+    }
+
+    fn storage_addr(&mut self, st: &Storage) -> String {
+        match st {
+            Storage::Slot(s) => self.slot_addr(*s),
             Storage::Alloca(name) => name.clone(),
+        }
+    }
+
+    /// Anonymous storage for an expression result (e.g. of an `if`).
+    fn temp_storage(&mut self, ty: Ty) -> Storage {
+        if ty.is_gc() {
+            Storage::Slot(self.new_slot())
+        } else {
+            self.tmps += 1;
+            let name = format!("%r{}", self.tmps);
+            self.allocas.push(format!("{name} = alloca {}", ir(ty)));
+            Storage::Alloca(name)
         }
     }
 
@@ -387,27 +434,33 @@ impl<'a> FnGen<'a> {
             Stmt::Expr(e) => {
                 self.expr(e);
             }
-            Stmt::If { cond, then, otherwise } => {
-                let c = self.expr(cond);
-                let (t, e, end) = (self.label("then"), self.label("else"), self.label("endif"));
-                self.term(format!("br i1 {c}, label %{t}, label %{}", if otherwise.is_empty() { &end } else { &e }));
-                self.begin(&t);
-                then.iter().for_each(|s| self.stmt(s));
-                if !otherwise.is_empty() {
-                    self.begin_after_branch(&e, &end);
-                    otherwise.iter().for_each(|s| self.stmt(s));
-                }
-                self.begin(&end);
+            Stmt::SetGlobal(id, e) => {
+                let v = self.expr(e);
+                let g = &self.p.globals[*id];
+                self.line(format!("store {} {v}, ptr @\"{}\"", ir(g.ty), g.symbol));
             }
-            Stmt::While { cond, body } => {
-                let (head, inner, end) = (self.label("while"), self.label("body"), self.label("endwhile"));
+            Stmt::While { cond, body, step } => {
+                let (head, inner, next, end) =
+                    (self.label("while"), self.label("body"), self.label("next"), self.label("endwhile"));
                 self.begin(&head);
                 let c = self.expr(cond);
                 self.term(format!("br i1 {c}, label %{inner}, label %{end}"));
                 self.begin(&inner);
+                self.loops.push((next.clone(), end.clone()));
                 body.iter().for_each(|s| self.stmt(s));
+                self.loops.pop();
+                self.begin(&next);
+                step.iter().for_each(|s| self.stmt(s));
                 self.term(format!("br label %{head}"));
                 self.begin(&end);
+            }
+            Stmt::Break => {
+                let end = self.loops.last().expect("the checker rejects `break` outside loops").1.clone();
+                self.term(format!("br label %{end}"));
+            }
+            Stmt::Continue => {
+                let next = self.loops.last().expect("the checker rejects `continue` outside loops").0.clone();
+                self.term(format!("br label %{next}"));
             }
             Stmt::Return(v) => {
                 let v = v.as_ref().map(|e| (e.ty, self.expr(e)));
@@ -521,6 +574,53 @@ impl<'a> FnGen<'a> {
                 o
             }
 
+            ExprKind::Global(id) => {
+                let g = &self.p.globals[*id];
+                let (ty, symbol) = (g.ty, g.symbol.clone());
+                let t = self.tmp();
+                self.line(format!("{t} = load {}, ptr @\"{symbol}\"", ir(ty)));
+                if ty.is_gc() {
+                    self.root(&t);
+                }
+                t
+            }
+            ExprKind::Null => "null".into(),
+            ExprKind::Unit => String::new(),
+
+            ExprKind::Block(stmts, tail) => {
+                stmts.iter().for_each(|s| self.stmt(s));
+                self.expr(tail)
+            }
+
+            ExprKind::Cond { cond, then, otherwise } => {
+                let c = self.expr(cond);
+                let (t, f, end) = (self.label("then"), self.label("else"), self.label("endif"));
+                let result = (e.ty != Ty::Void).then(|| self.temp_storage(e.ty));
+                self.term(format!("br i1 {c}, label %{t}, label %{f}"));
+                for (i, branch) in [then, otherwise].into_iter().enumerate() {
+                    if i == 0 {
+                        self.begin(&t);
+                    } else {
+                        self.begin_after_branch(&f, &end);
+                    }
+                    let v = self.expr(branch);
+                    if let (Some(st), false) = (&result, self.terminated) {
+                        let addr = self.storage_addr(st);
+                        self.line(format!("store {} {v}, ptr {addr}", ir(e.ty)));
+                    }
+                }
+                self.begin(&end);
+                match &result {
+                    Some(st) => {
+                        let addr = self.storage_addr(st);
+                        let t = self.tmp();
+                        self.line(format!("{t} = load {}, ptr {addr}", ir(e.ty)));
+                        t
+                    }
+                    None => String::new(),
+                }
+            }
+
             ExprKind::Neg(inner) => {
                 let v = self.expr(inner);
                 let t = self.tmp();
@@ -560,25 +660,27 @@ impl<'a> FnGen<'a> {
                 t
             }
 
-            ExprKind::Print { newline, arg } => {
-                let nl = i64::from(*newline);
-                match arg {
-                    None => {
-                        let empty = self.pool.operand("");
-                        self.line(format!("call void @aion_print_str(ptr {empty}, i64 {nl})"));
+            ExprKind::Print { newline, args } => {
+                if args.is_empty() {
+                    let empty = self.pool.operand("");
+                    self.line(format!("call void @aion_print_str(ptr {empty}, i64 1)"));
+                }
+                for (i, a) in args.iter().enumerate() {
+                    let nl = i64::from(*newline && i + 1 == args.len());
+                    if i > 0 {
+                        let space = self.pool.operand(" ");
+                        self.line(format!("call void @aion_print_str(ptr {space}, i64 0)"));
                     }
-                    Some(a) => {
-                        let v = self.expr(a);
-                        match a.ty {
-                            Ty::Int => self.line(format!("call void @aion_print_int(i64 {v}, i64 {nl})")),
-                            Ty::Float => self.line(format!("call void @aion_print_float(double {v}, i64 {nl})")),
-                            Ty::Bool => {
-                                let z = self.tmp();
-                                self.line(format!("{z} = zext i1 {v} to i64"));
-                                self.line(format!("call void @aion_print_bool(i64 {z}, i64 {nl})"));
-                            }
-                            _ => self.line(format!("call void @aion_print_str(ptr {v}, i64 {nl})")),
+                    let v = self.expr(a);
+                    match a.ty {
+                        Ty::Int => self.line(format!("call void @aion_print_int(i64 {v}, i64 {nl})")),
+                        Ty::Float => self.line(format!("call void @aion_print_float(double {v}, i64 {nl})")),
+                        Ty::Bool => {
+                            let z = self.tmp();
+                            self.line(format!("{z} = zext i1 {v} to i64"));
+                            self.line(format!("call void @aion_print_bool(i64 {z}, i64 {nl})"));
                         }
+                        _ => self.line(format!("call void @aion_print_str(ptr {v}, i64 {nl})")),
                     }
                 }
                 String::new()

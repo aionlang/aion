@@ -1,0 +1,6 @@
+// error: expected a Int to return
+fn g() -> Int {
+    return
+        5
+}
+fn main() {}

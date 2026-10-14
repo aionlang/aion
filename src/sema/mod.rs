@@ -1,23 +1,25 @@
 //! Semantic analysis: names and types.
 //!
-//! Runs in two phases over the loaded modules (dependencies first):
+//! 1. **Declare** — register every type, function, method, constructor and
+//!    global with its resolved signature ([`Tables`]).  Bodies are not looked at.
+//! 2. **Check** — type-check every body against those tables, producing [`hir`].
 //!
-//! 1. **Declare** — register every type, function, method and constructor with
-//!    its resolved signature ([`Tables`]).  Bodies are not looked at.
-//! 2. **Check** — type-check each body against those tables, producing [`hir`].
-//!
-//! Splitting the phases is what lets functions call each other regardless of
-//! definition order, with no forward-declaration bookkeeping.
+//! Because signatures are known up front, functions may call each other in any
+//! order.  Two things *can't* be known up front and are inferred on demand:
+//! the return type of `fn f() = expr` and the type of `x := expr` at the top
+//! level.  Whoever first needs such a fact asks the [`Checker`], which checks
+//! the defining body right then (and reports a cycle if it depends on itself).
 
 mod body;
 pub mod hir;
 
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 use crate::diag::{Diagnostic, Result, Span};
 use crate::loader::Loaded;
-use crate::syntax::ast::{self, Item};
-use hir::{FnId, FuncKind, Ty, TypeId};
+use crate::syntax::ast::{self, ExprKind, Item, StmtKind};
+use hir::{FnId, FuncKind, GlobalId, Ty, TypeId};
 
 pub struct TypeInfo {
     pub name: String,
@@ -26,29 +28,55 @@ pub struct TypeInfo {
     pub ctor: FnId,
 }
 
+/// A literal usable as a default argument.
+#[derive(Clone)]
+pub enum Const {
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    Str(String),
+}
+
+pub struct ParamInfo {
+    pub name: String,
+    pub ty: Ty,
+    pub default: Option<Const>,
+}
+
 pub struct FnInfo {
     pub name: String,
     pub module: usize,
     pub symbol: String,
     pub kind: FuncKind,
-    /// Includes the receiver `it` for methods.
-    pub params: Vec<(String, Ty)>,
-    pub ret: Ty,
+    /// Includes the receiver `this` for methods.
+    pub params: Vec<ParamInfo>,
+    /// `None` until inferred (only for `fn f() = expr` without `->`).
+    pub ret: Cell<Option<Ty>>,
+}
+
+pub struct GlobalInfo {
+    pub name: String,
+    pub symbol: String,
+    /// `None` until the defining `x := expr` has been checked.
+    pub ty: Cell<Option<Ty>>,
+    /// The module initialiser that assigns it.
+    pub init_fn: FnId,
 }
 
 #[derive(Clone, Copy)]
 pub enum Sym {
     Fn(FnId),
     Type(TypeId),
+    Global(GlobalId),
 }
 
 /// Everything visible inside one module.
 #[derive(Default)]
 pub struct Scope {
     pub items: HashMap<String, Sym>,
-    /// `import m;` — `alias` → module index, for `alias.name(...)`.
+    /// `import m` — `alias` → module index, for `alias.name(...)`.
     pub modules: HashMap<String, usize>,
-    /// `import m.Name;` — brings `Name` in unqualified.
+    /// `import m.Name` — brings `Name` in unqualified.
     pub imported: HashMap<String, Sym>,
 }
 
@@ -56,6 +84,7 @@ pub struct Scope {
 pub struct Tables {
     pub types: Vec<TypeInfo>,
     pub funcs: Vec<FnInfo>,
+    pub globals: Vec<GlobalInfo>,
     pub scopes: Vec<Scope>,
 }
 
@@ -63,12 +92,28 @@ pub struct Tables {
 pub enum Work<'a> {
     Fn(&'a ast::FnDecl),
     Method(&'a ast::FnDecl),
-    Ctor {
-        ty: TypeId,
-        decl: Option<&'a ast::CtorDecl>,
-        /// Shorthand constructors: the field each parameter initialises.
-        shorthand: Vec<usize>,
-    },
+    Ctor { ty: TypeId, decl: &'a ast::TypeDecl },
+    /// A module's top-level statements.
+    Init { stmts: Vec<&'a ast::Stmt> },
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum State {
+    New,
+    InProgress,
+    Done,
+}
+
+pub struct Checker<'a> {
+    t: Tables,
+    work: Vec<Work<'a>>,
+    state: RefCell<Vec<State>>,
+    /// Checked functions by id.  Grows past `work` with synthesised helpers.
+    out: RefCell<Vec<Option<hir::Func>>>,
+    /// Module initialisers in dependency order.
+    inits: Vec<FnId>,
+    /// Generated `toString` functions by type.
+    tostring: RefCell<HashMap<TypeId, FnId>>,
 }
 
 impl Tables {
@@ -120,127 +165,327 @@ impl Tables {
 }
 
 pub fn analyze(loaded: &Loaded) -> Result<hir::Program> {
-    let mut t = Tables::default();
-    let mut work: Vec<Work> = Vec::new();
-    for module in 0..loaded.modules.len() {
-        declare_module(&mut t, &mut work, loaded, module)?;
+    let ck = Checker::declare(loaded)?;
+    // Initialisers first: they fix the types of inferred globals in order.
+    for &id in &ck.inits {
+        ck.ensure(id)?;
     }
-
-    let funcs = work
-        .iter()
-        .enumerate()
-        .map(|(id, w)| body::check_fn(&t, id, w))
-        .collect::<Result<Vec<_>>>()?;
-
-    let entry_module = loaded.modules.len() - 1;
-    let entry = match t.scopes[entry_module].items.get("main") {
-        Some(&Sym::Fn(id)) => id,
-        _ => return Err(Diagnostic::general("the program has no `fn main()`")),
-    };
-    let main = &t.funcs[entry];
-    if !main.params.is_empty() || !matches!(main.ret, Ty::Void | Ty::Int) {
-        return Err(Diagnostic::general("`main` must take no parameters and return nothing or Int"));
+    for id in 0..ck.work.len() {
+        ck.ensure(id)?;
     }
-
-    let types = t
-        .types
-        .into_iter()
-        .map(|ti| hir::TypeDef { name: ti.name, fields: ti.fields })
-        .collect();
-    Ok(hir::Program { types, funcs, entry })
+    ck.finish(loaded.modules.len() - 1)
 }
 
-fn declare_module<'a>(
-    t: &mut Tables,
-    work: &mut Vec<Work<'a>>,
-    loaded: &'a Loaded,
-    mi: usize,
-) -> Result<()> {
-    let module = &loaded.modules[mi];
-    t.scopes.push(Scope::default());
-
-    // 1. Type names, so signatures and fields can refer to any of them.
-    let mut own_types: Vec<(TypeId, &ast::TypeDecl)> = Vec::new();
-    for item in &module.ast.items {
-        if let Item::Type(td) = item {
-            let id = t.types.len();
-            t.types.push(TypeInfo {
-                name: td.name.name.clone(),
-                fields: Vec::new(),
-                methods: HashMap::new(),
-                ctor: usize::MAX,
-            });
-            t.define(mi, &td.name, Sym::Type(id))?;
-            own_types.push((id, td));
+impl<'a> Checker<'a> {
+    fn declare(loaded: &'a Loaded) -> Result<Self> {
+        let mut ck = Checker {
+            t: Tables::default(),
+            work: Vec::new(),
+            state: RefCell::new(Vec::new()),
+            out: RefCell::new(Vec::new()),
+            inits: Vec::new(),
+            tostring: RefCell::new(HashMap::new()),
+        };
+        for module in 0..loaded.modules.len() {
+            ck.declare_module(loaded, module)?;
         }
+        let n = ck.work.len();
+        *ck.state.borrow_mut() = vec![State::New; n];
+        *ck.out.borrow_mut() = (0..n).map(|_| None).collect();
+        Ok(ck)
     }
 
-    // 2. Imports (all imported modules are already declared).
-    for imp in &module.imports {
-        match t.scopes[mi].modules.insert(imp.alias.clone(), imp.module) {
-            Some(prev) if prev != imp.module => {
-                return Err(Diagnostic::new(format!("`{}` is imported twice for different modules", imp.alias), imp.span));
+    fn declare_module(&mut self, loaded: &'a Loaded, mi: usize) -> Result<()> {
+        let module = &loaded.modules[mi];
+        self.t.scopes.push(Scope::default());
+
+        // 1. Type names, so signatures and fields can refer to any of them.
+        let mut own_types: Vec<(TypeId, &ast::TypeDecl)> = Vec::new();
+        for item in &module.ast.items {
+            if let Item::Type(td) = item {
+                let id = self.t.types.len();
+                self.t.types.push(TypeInfo {
+                    name: td.name.name.clone(),
+                    fields: Vec::new(),
+                    methods: HashMap::new(),
+                    ctor: usize::MAX,
+                });
+                self.t.define(mi, &td.name, Sym::Type(id))?;
+                own_types.push((id, td));
             }
-            _ => {}
         }
-        if let Some(sym) = &imp.symbol {
-            let found = t.scopes[imp.module].items.get(&sym.name).copied();
-            match found {
-                Some(found) => {
-                    t.scopes[mi].imported.insert(sym.name.clone(), found);
+
+        // 2. Imports (all imported modules are already declared).
+        for imp in &module.imports {
+            if let Some(alias) = &imp.alias {
+                match self.t.scopes[mi].modules.insert(alias.clone(), imp.module) {
+                    Some(prev) if prev != imp.module => {
+                        return Err(Diagnostic::new(
+                            format!("`{alias}` is imported twice for different modules"),
+                            imp.span,
+                        ));
+                    }
+                    _ => {}
                 }
-                None => {
+            }
+            if let Some(sym) = &imp.symbol {
+                let Some(found) = self.t.scopes[imp.module].items.get(&sym.name).copied() else {
                     return Err(Diagnostic::new(
-                        format!("module `{}` has no item `{}`", imp.alias, sym.name),
+                        format!("module `{}` has no item `{}`", loaded.modules[imp.module].name, sym.name),
                         sym.span,
                     ));
+                };
+                self.t.scopes[mi].imported.insert(sym.name.clone(), found);
+            }
+        }
+
+        // 3. Field types: primary-constructor parameters first, then body fields.
+        for &(id, td) in &own_types {
+            let mut fields: Vec<hir::Field> = Vec::new();
+            let declared = td
+                .primary
+                .iter()
+                .flatten()
+                .map(|p| (&p.name, &p.ty))
+                .chain(td.fields.iter().map(|f| (&f.name, &f.ty)));
+            for (name, ty) in declared {
+                if fields.iter().any(|g| g.name == name.name) {
+                    return Err(Diagnostic::new(format!("duplicate field `{}`", name.name), name.span));
+                }
+                fields.push(hir::Field { name: name.name.clone(), ty: self.t.resolve_type(mi, ty)? });
+            }
+            if fields.len() > 64 {
+                return Err(Diagnostic::new("a type can have at most 64 fields", td.name.span));
+            }
+            if td.primary.is_some()
+                && let Some(c) = &td.ctor
+            {
+                return Err(Diagnostic::new(
+                    "a type with a primary constructor cannot also declare `constructor`",
+                    c.params.first().map_or(td.name.span, |p| p.name.span),
+                ));
+            }
+            self.t.types[id].fields = fields;
+        }
+
+        // 4. Functions, methods and constructors.
+        let mut top: Vec<&'a ast::Stmt> = Vec::new();
+        for item in &module.ast.items {
+            match item {
+                Item::Fn(decl) => {
+                    let info = self.signature(mi, decl, FuncKind::Free, None, symbol_for(&module.name, None, decl))?;
+                    let id = self.t.add_fn(info);
+                    self.work.push(Work::Fn(decl));
+                    self.t.define(mi, &decl.name, Sym::Fn(id))?;
+                }
+                Item::Method { owner, decl } => {
+                    let ty = match self.t.lookup(mi, &owner.name) {
+                        Some(Sym::Type(id)) => id,
+                        _ => return Err(Diagnostic::new(format!("unknown type `{}`", owner.name), owner.span)),
+                    };
+                    self.declare_method(&module.name, mi, ty, decl)?;
+                }
+                Item::Stmt(s) => top.push(s),
+                Item::Type(_) => {}
+            }
+        }
+        for &(id, td) in &own_types {
+            for m in &td.methods {
+                self.declare_method(&module.name, mi, id, m)?;
+            }
+            self.declare_ctor(&module.name, mi, id, td)?;
+        }
+
+        // 5. Top-level statements: an initialiser function plus a global per `x := …`.
+        if !top.is_empty() {
+            let init_fn = self.t.add_fn(FnInfo {
+                name: "<init>".into(),
+                module: mi,
+                symbol: format!("{}__init", module.name),
+                kind: FuncKind::Free,
+                params: Vec::new(),
+                ret: Cell::new(Some(Ty::Void)),
+            });
+            for s in &top {
+                if let StmtKind::Let { name, ty, .. } = &s.kind {
+                    let declared = ty.as_ref().map(|t| self.t.resolve_type(mi, t)).transpose()?;
+                    let gid = self.t.globals.len();
+                    self.t.globals.push(GlobalInfo {
+                        name: name.name.clone(),
+                        symbol: format!("{}__g_{}", module.name, name.name),
+                        ty: Cell::new(declared),
+                        init_fn,
+                    });
+                    self.t.define(mi, name, Sym::Global(gid))?;
                 }
             }
+            self.work.push(Work::Init { stmts: top });
+            self.inits.push(init_fn);
         }
+        Ok(())
     }
 
-    // 3. Field types.
-    for &(id, td) in &own_types {
-        let mut fields: Vec<hir::Field> = Vec::new();
-        for f in &td.fields {
-            if fields.iter().any(|g| g.name == f.name.name) {
-                return Err(Diagnostic::new(format!("duplicate field `{}`", f.name.name), f.name.span));
-            }
-            let ty = t.resolve_type(mi, &f.ty)?;
-            fields.push(hir::Field { name: f.name.name.clone(), ty });
-        }
-        if fields.len() > 64 {
-            return Err(Diagnostic::new("a type can have at most 64 fields", td.name.span));
-        }
-        t.types[id].fields = fields;
+    fn param_info(&self, mi: usize, p: &ast::Param) -> Result<ParamInfo> {
+        let ty = self.t.resolve_type(mi, &p.ty)?;
+        let default = p.default.as_ref().map(|e| const_default(e, ty, &self.t)).transpose()?;
+        Ok(ParamInfo { name: p.name.name.clone(), ty, default })
     }
 
-    // 4. Functions, methods and constructors.
-    for item in &module.ast.items {
-        match item {
-            Item::Fn(decl) => {
-                let info = signature(t, mi, decl, FuncKind::Free, None, symbol_for(&module.name, None, decl))?;
-                let id = t.add_fn(info);
-                work.push(Work::Fn(decl));
-                t.define(mi, &decl.name, Sym::Fn(id))?;
-            }
-            Item::Method { owner, decl } => {
-                let ty = match t.lookup(mi, &owner.name) {
-                    Some(Sym::Type(id)) => id,
-                    _ => return Err(Diagnostic::new(format!("unknown type `{}`", owner.name), owner.span)),
-                };
-                declare_method(t, work, &module.name, mi, ty, decl)?;
-            }
-            Item::Type(_) => {}
+    fn params(&self, mi: usize, params: &[ast::Param], receiver: Option<TypeId>) -> Result<Vec<ParamInfo>> {
+        let mut out: Vec<ParamInfo> = Vec::new();
+        if let Some(ty) = receiver {
+            out.push(ParamInfo { name: "this".into(), ty: Ty::Obj(ty), default: None });
         }
-    }
-    for &(id, td) in &own_types {
-        for m in &td.methods {
-            declare_method(t, work, &module.name, mi, id, m)?;
+        for p in params {
+            if out.iter().any(|q| q.name == p.name.name) {
+                return Err(Diagnostic::new(format!("duplicate parameter `{}`", p.name.name), p.name.span));
+            }
+            out.push(self.param_info(mi, p)?);
         }
-        declare_ctor(t, work, &module.name, mi, id, td)?;
+        Ok(out)
     }
-    Ok(())
+
+    /// Resolve a function's parameter and return types.
+    fn signature(
+        &self,
+        mi: usize,
+        decl: &ast::FnDecl,
+        kind: FuncKind,
+        receiver: Option<TypeId>,
+        symbol: String,
+    ) -> Result<FnInfo> {
+        let params = self.params(mi, &decl.params, receiver)?;
+        let ret = match &decl.ret {
+            Some(r) => Some(self.t.resolve_type(mi, r)?),
+            // Only `fn f() = expr` can infer its return type; anything else returns nothing.
+            None if matches!(decl.body, ast::FnBody::Expr(_)) => None,
+            None => Some(Ty::Void),
+        };
+        if matches!(decl.body, ast::FnBody::Extern { .. }) {
+            let c_types_only =
+                params.iter().map(|p| p.ty).chain(ret).all(|ty| !matches!(ty, Ty::Obj(_)));
+            if !c_types_only {
+                return Err(Diagnostic::new("`extern fn` can only use Int, Float, Bool and String", decl.span));
+            }
+        }
+        Ok(FnInfo { name: decl.name.name.clone(), module: mi, symbol, kind, params, ret: Cell::new(ret) })
+    }
+
+    fn declare_method(&mut self, module_name: &str, mi: usize, ty: TypeId, decl: &'a ast::FnDecl) -> Result<()> {
+        if matches!(decl.body, ast::FnBody::Extern { .. }) {
+            return Err(Diagnostic::new("methods cannot be `extern`", decl.span));
+        }
+        let owner = self.t.types[ty].name.clone();
+        let symbol = symbol_for(module_name, Some(&owner), decl);
+        let info = self.signature(mi, decl, FuncKind::Method, Some(ty), symbol)?;
+        let id = self.t.add_fn(info);
+        if self.t.types[ty].methods.insert(decl.name.name.clone(), id).is_some() {
+            return Err(Diagnostic::new(
+                format!("`{owner}` already has a method `{}`", decl.name.name),
+                decl.name.span,
+            ));
+        }
+        self.work.push(Work::Method(decl));
+        Ok(())
+    }
+
+    fn declare_ctor(&mut self, module_name: &str, mi: usize, ty: TypeId, td: &'a ast::TypeDecl) -> Result<()> {
+        let params = match (&td.ctor, &td.primary) {
+            (Some(c), _) => self.params(mi, &c.params, None)?,
+            (None, Some(p)) => self.params(mi, p, None)?,
+            (None, None) => Vec::new(),
+        };
+        let id = self.t.add_fn(FnInfo {
+            name: td.name.name.clone(),
+            module: mi,
+            symbol: format!("{module_name}__{}__new", td.name.name),
+            kind: FuncKind::Constructor,
+            params,
+            ret: Cell::new(Some(Ty::Obj(ty))),
+        });
+        self.t.types[ty].ctor = id;
+        self.work.push(Work::Ctor { ty, decl: td });
+        Ok(())
+    }
+
+    // ── on-demand checking ──────────────────────────────────────
+
+    /// Check function `id` (once).  Re-entrant requests for a function that is
+    /// currently being checked return immediately; callers that need its
+    /// result use [`Self::ret_of`], which reports the cycle.
+    fn ensure(&self, id: FnId) -> Result<()> {
+        if self.state.borrow()[id] != State::New {
+            return Ok(());
+        }
+        self.state.borrow_mut()[id] = State::InProgress;
+        let func = body::check_fn(self, id, &self.work[id])?;
+        self.out.borrow_mut()[id] = Some(func);
+        self.state.borrow_mut()[id] = State::Done;
+        Ok(())
+    }
+
+    /// The return type of `id`, inferring it from the body if necessary.
+    fn ret_of(&self, id: FnId, span: Span) -> Result<Ty> {
+        let info = &self.t.funcs[id];
+        if let Some(ty) = info.ret.get() {
+            return Ok(ty);
+        }
+        if self.state.borrow()[id] == State::InProgress {
+            return Err(Diagnostic::new(
+                format!("cannot infer the return type of `{}`: it depends on itself", info.name),
+                span,
+            )
+            .hint("add `-> Type` to its signature"));
+        }
+        self.ensure(id)?;
+        Ok(info.ret.get().expect("checking a function fixes its return type"))
+    }
+
+    /// The type of a global, checking its module's initialiser if needed.
+    fn global_ty(&self, gid: GlobalId, span: Span) -> Result<Ty> {
+        let g = &self.t.globals[gid];
+        if let Some(ty) = g.ty.get() {
+            return Ok(ty);
+        }
+        if self.state.borrow()[g.init_fn] == State::InProgress {
+            return Err(Diagnostic::new(format!("cannot infer the type of `{}` here", g.name), span)
+                .hint("it is used before its definition has been seen; annotate it, e.g. `name: Int := …`"));
+        }
+        self.ensure(g.init_fn)?;
+        Ok(g.ty.get().expect("checking the initialiser fixes global types"))
+    }
+
+    fn finish(self, entry_module: usize) -> Result<hir::Program> {
+        let main = match self.t.scopes[entry_module].items.get("main") {
+            Some(&Sym::Fn(id)) => Some(id),
+            _ => None,
+        };
+        if let Some(id) = main {
+            let m = &self.t.funcs[id];
+            if !m.params.is_empty() || !matches!(m.ret.get(), Some(Ty::Void | Ty::Int)) {
+                return Err(Diagnostic::general("`main` must take no parameters and return nothing or Int"));
+            }
+        }
+        let entry_has_script = self.inits.iter().any(|&i| self.t.funcs[i].module == entry_module);
+        if main.is_none() && !entry_has_script {
+            return Err(Diagnostic::general("the program has no `fn main()` and no top-level statements to run")
+                .hint("write statements directly in the file, or define `fn main() { … }`"));
+        }
+
+        let globals = self
+            .t
+            .globals
+            .iter()
+            .map(|g| hir::Global {
+                name: g.name.clone(),
+                symbol: g.symbol.clone(),
+                ty: g.ty.get().expect("every global is typed by its initialiser"),
+            })
+            .collect();
+        let types = self.t.types.into_iter().map(|ti| hir::TypeDef { name: ti.name, fields: ti.fields }).collect();
+        let funcs = self.out.into_inner().into_iter().map(|f| f.expect("every function was checked")).collect();
+        Ok(hir::Program { types, globals, funcs, inits: self.inits, main })
+    }
 }
 
 fn symbol_for(module: &str, owner: Option<&str>, decl: &ast::FnDecl) -> String {
@@ -251,105 +496,27 @@ fn symbol_for(module: &str, owner: Option<&str>, decl: &ast::FnDecl) -> String {
     }
 }
 
-/// Resolve a function's parameter and return types.
-fn signature(
-    t: &Tables,
-    mi: usize,
-    decl: &ast::FnDecl,
-    kind: FuncKind,
-    receiver: Option<TypeId>,
-    symbol: String,
-) -> Result<FnInfo> {
-    let mut params: Vec<(String, Ty)> = Vec::new();
-    if let Some(ty) = receiver {
-        params.push(("it".into(), Ty::Obj(ty)));
-    }
-    for p in &decl.params {
-        if params.iter().any(|(n, _)| *n == p.name.name) {
-            return Err(Diagnostic::new(format!("duplicate parameter `{}`", p.name.name), p.name.span));
-        }
-        params.push((p.name.name.clone(), t.resolve_type(mi, &p.ty)?));
-    }
-    let ret = match &decl.ret {
-        Some(r) => t.resolve_type(mi, r)?,
-        None => Ty::Void,
+/// Default arguments must be literals (possibly negated), matching the parameter type.
+fn const_default(e: &ast::Expr, ty: Ty, t: &Tables) -> Result<Const> {
+    let lit = match &e.kind {
+        ExprKind::Int(v) => Some((Const::Int(*v), Ty::Int)),
+        ExprKind::Float(v) => Some((Const::Float(*v), Ty::Float)),
+        ExprKind::Bool(v) => Some((Const::Bool(*v), Ty::Bool)),
+        ExprKind::Str(s) => Some((Const::Str(s.clone()), Ty::Str)),
+        ExprKind::Unary(ast::UnOp::Neg, inner) => match &inner.kind {
+            ExprKind::Int(v) => Some((Const::Int(v.wrapping_neg()), Ty::Int)),
+            ExprKind::Float(v) => Some((Const::Float(-v), Ty::Float)),
+            _ => None,
+        },
+        _ => None,
     };
-    if matches!(decl.body, ast::FnBody::Extern { .. }) {
-        let c_types_only = params.iter().map(|(_, ty)| *ty).chain([ret]).all(|ty| !matches!(ty, Ty::Obj(_)));
-        if !c_types_only {
-            return Err(Diagnostic::new("`extern fn` can only use Int, Float, Bool and String", decl.span));
-        }
+    match lit {
+        None => Err(Diagnostic::new("default values must be literals", e.span)),
+        Some((c, found)) if found == ty => Ok(c),
+        Some((Const::Int(v), Ty::Int)) if ty == Ty::Float => Ok(Const::Float(v as f64)),
+        Some((_, found)) => Err(Diagnostic::new(
+            format!("expected a {} default, found {}", t.ty_name(ty), t.ty_name(found)),
+            e.span,
+        )),
     }
-    Ok(FnInfo { name: decl.name.name.clone(), module: mi, symbol, kind, params, ret })
-}
-
-fn declare_method<'a>(
-    t: &mut Tables,
-    work: &mut Vec<Work<'a>>,
-    module_name: &str,
-    mi: usize,
-    ty: TypeId,
-    decl: &'a ast::FnDecl,
-) -> Result<()> {
-    if matches!(decl.body, ast::FnBody::Extern { .. }) {
-        return Err(Diagnostic::new("methods cannot be `extern`", decl.span));
-    }
-    let owner = t.types[ty].name.clone();
-    let symbol = symbol_for(module_name, Some(&owner), decl);
-    let info = signature(t, mi, decl, FuncKind::Method, Some(ty), symbol)?;
-    let id = t.add_fn(info);
-    if t.types[ty].methods.insert(decl.name.name.clone(), id).is_some() {
-        return Err(Diagnostic::new(format!("`{owner}` already has a method `{}`", decl.name.name), decl.name.span));
-    }
-    work.push(Work::Method(decl));
-    Ok(())
-}
-
-fn declare_ctor<'a>(
-    t: &mut Tables,
-    work: &mut Vec<Work<'a>>,
-    module_name: &str,
-    mi: usize,
-    ty: TypeId,
-    td: &'a ast::TypeDecl,
-) -> Result<()> {
-    let mut shorthand = Vec::new();
-    let params: Vec<(String, Ty)> = if let Some(c) = &td.ctor {
-        let mut ps: Vec<(String, Ty)> = Vec::new();
-        for p in &c.params {
-            if ps.iter().any(|(n, _)| *n == p.name.name) {
-                return Err(Diagnostic::new(format!("duplicate parameter `{}`", p.name.name), p.name.span));
-            }
-            ps.push((p.name.name.clone(), t.resolve_type(mi, &p.ty)?));
-        }
-        ps
-    } else {
-        // `type A(it.x, it.y)` or, with no list, every field in order.
-        let wanted: Vec<(String, Span)> = match &td.ctor_fields {
-            Some(list) => list.iter().map(|i| (i.name.clone(), i.span)).collect(),
-            None => t.types[ty].fields.iter().map(|f| (f.name.clone(), td.name.span)).collect(),
-        };
-        let mut ps = Vec::new();
-        for (name, span) in wanted {
-            let Some(idx) = t.types[ty].fields.iter().position(|f| f.name == name) else {
-                return Err(Diagnostic::new(format!("`{}` has no field `{name}`", td.name.name), span));
-            };
-            shorthand.push(idx);
-            ps.push((name, t.types[ty].fields[idx].ty));
-        }
-        ps
-    };
-
-    let info = FnInfo {
-        name: td.name.name.clone(),
-        module: mi,
-        symbol: format!("{module_name}__{}__new", td.name.name),
-        kind: FuncKind::Constructor,
-        params,
-        ret: Ty::Obj(ty),
-    };
-    let id = t.add_fn(info);
-    t.types[ty].ctor = id;
-    work.push(Work::Ctor { ty, decl: td.ctor.as_ref(), shorthand });
-    Ok(())
 }

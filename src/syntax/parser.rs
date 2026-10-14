@@ -1,17 +1,24 @@
 //! Recursive-descent parser.
 //!
 //! ```text
-//! module   = (import | item)*
-//! import   = "import" IDENT ("." IDENT)* ";"?
-//! item     = fn | extern_fn | type | "fn" IDENT "::" fn
-//! fn       = "fn" IDENT "(" params ")" ("->" TYPE)? (block | "=>" expr)
+//! module   = (import | item)*                 # items include plain statements
+//! item     = fn | extern_fn | type | method | stmt
+//! fn       = "fn" IDENT "(" params ")" ("->" TYPE)? (block | "=" expr)
+//! method   = "fn" IDENT "." fn-rest
 //! extern   = "extern" "fn" IDENT "(" params ")" ("->" TYPE)? ("=" STRING)?
-//! type     = "type" IDENT ("(" "it" "." IDENT,* ")")? "{" member* "}"
-//! member   = IDENT ":" TYPE "?"? | fn | "constructor" "(" params ")" block
-//! stmt     = let | assign | if | while | return | expr
-//! let      = IDENT (":" TYPE)? (":=" expr)?
-//! if       = "if" expr block ("else" (if | block))?
+//! type     = "type" IDENT ("(" params ")")? ("{" member* "}")?
+//! member   = IDENT ":" TYPE ("=" expr)? | fn | "constructor" "(" params ")" block | "init" block
+//! stmt     = let | assign | while | for | "break" | "continue" | "return" expr? | expr
+//! expr     = binary (".." | "..=" binary)?
+//! primary  = literal | name | "(" expr ")" | if | when
 //! ```
+//!
+//! ## Newlines
+//!
+//! Statements need no terminator.  A line break ends the current expression
+//! unless it sits inside `(...)`, or the next line starts with `.` or `&&`/`||`
+//! (so method chains and long conditions can be split), or the line ended in an
+//! operator.  A `(` that starts a new line is a new statement, not a call.
 
 use super::ast::*;
 use super::lexer::{Tok, Token, interpolation_end, lex};
@@ -27,11 +34,15 @@ struct Parser<'a> {
     base: usize,
     toks: Vec<Tok>,
     pos: usize,
+    /// Inside `( ... )` line breaks do not end expressions.
+    ignore_nl: bool,
+    /// While parsing an `if`/`while`/`for`/`when` header, a `{` starts the body.
+    no_brace: bool,
 }
 
 impl<'a> Parser<'a> {
     fn new(file: u32, src: &'a str, base: usize) -> Result<Self> {
-        Ok(Parser { file, src, base, toks: lex(file, src, base)?, pos: 0 })
+        Ok(Parser { file, src, base, toks: lex(file, src, base)?, pos: 0, ignore_nl: false, no_brace: false })
     }
 
     // ── token plumbing ──────────────────────────────────────────
@@ -42,6 +53,11 @@ impl<'a> Parser<'a> {
 
     fn peek_at(&self, n: usize) -> Option<Token> {
         self.toks.get(self.pos + n).map(|t| t.kind)
+    }
+
+    /// Is the next token on a new line (and are line breaks significant here)?
+    fn nl(&self) -> bool {
+        !self.ignore_nl && self.toks.get(self.pos).is_some_and(|t| t.nl)
     }
 
     fn text(&self, tok: Tok) -> &'a str {
@@ -98,6 +114,21 @@ impl<'a> Parser<'a> {
         Ok(TypeRef { name: id.name, span: id.span })
     }
 
+    /// Run `f` with the given newline / brace context, restoring it afterwards.
+    fn scoped<T>(&mut self, ignore_nl: bool, no_brace: bool, f: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        let saved = (self.ignore_nl, self.no_brace);
+        (self.ignore_nl, self.no_brace) = (ignore_nl, no_brace);
+        let r = f(self);
+        (self.ignore_nl, self.no_brace) = saved;
+        r
+    }
+
+    /// An expression in an `if`/`while`/`for`/`when` header: a `{` ends it.
+    fn header_expr(&mut self) -> Result<Expr> {
+        let ignore = self.ignore_nl;
+        self.scoped(ignore, true, |p| p.expr())
+    }
+
     // ── items ───────────────────────────────────────────────────
 
     fn module(&mut self) -> Result<Module> {
@@ -109,6 +140,7 @@ impl<'a> Parser<'a> {
                     self.bump();
                 }
                 Token::Import => imports.push(self.import()?),
+                Token::Ident if self.at_from_import() => imports.push(self.import_from()?),
                 Token::Type => items.push(Item::Type(self.type_decl()?)),
                 Token::Extern => {
                     let start = self.bump().span;
@@ -117,7 +149,7 @@ impl<'a> Parser<'a> {
                 }
                 Token::Fn => {
                     let start = self.bump().span;
-                    if self.peek() == Some(Token::Ident) && self.peek_at(1) == Some(Token::ColonColon) {
+                    if self.peek() == Some(Token::Ident) && self.peek_at(1) == Some(Token::Dot) {
                         let owner = self.ident()?;
                         self.bump();
                         let decl = self.fn_decl(start, false)?;
@@ -126,7 +158,7 @@ impl<'a> Parser<'a> {
                         items.push(Item::Fn(self.fn_decl(start, false)?));
                     }
                 }
-                _ => return Err(self.expected("`fn`, `type` or `import`")),
+                _ => items.push(Item::Stmt(self.stmt()?)),
             }
         }
         Ok(Module { imports, items })
@@ -134,31 +166,78 @@ impl<'a> Parser<'a> {
 
     fn import(&mut self) -> Result<Import> {
         let start = self.bump().span;
-        let mut path = vec![self.ident()?];
-        while self.eat(Token::Dot) {
-            path.push(self.ident()?);
+        let path = self.import_path()?;
+        let alias = if self.at_word("as") {
+            self.bump();
+            Some(self.ident()?)
+        } else {
+            None
+        };
+        self.eat(Token::Semi);
+        Ok(Import { span: start.to(self.prev_span()), path, names: None, alias })
+    }
+
+    /// `from a.b import x, y`
+    fn import_from(&mut self) -> Result<Import> {
+        let start = self.bump().span;
+        let path = self.import_path()?;
+        self.expect(Token::Import)?;
+        let mut names = vec![self.ident()?];
+        while self.peek() == Some(Token::Comma) {
+            self.bump();
+            names.push(self.ident()?);
         }
         self.eat(Token::Semi);
-        Ok(Import { span: start.to(self.prev_span()), path })
+        Ok(Import { span: start.to(self.prev_span()), path, names: Some(names), alias: None })
+    }
+
+    fn import_path(&mut self) -> Result<Vec<Ident>> {
+        let mut path = vec![self.ident()?];
+        while self.peek() == Some(Token::Dot) && !self.nl() {
+            self.bump();
+            path.push(self.ident()?);
+        }
+        Ok(path)
+    }
+
+    /// Is the next token the identifier `word` (a keyword only in context)?
+    fn at_word(&self, word: &str) -> bool {
+        self.peek() == Some(Token::Ident) && !self.nl() && self.text(self.toks[self.pos]) == word
+    }
+
+    /// `from` starts an import only as `from <path> import`.
+    fn at_from_import(&self) -> bool {
+        if self.text(self.toks[self.pos]) != "from" || self.peek_at(1) != Some(Token::Ident) {
+            return false;
+        }
+        let mut i = 2;
+        while self.peek_at(i) == Some(Token::Dot) && self.peek_at(i + 1) == Some(Token::Ident) {
+            i += 2;
+        }
+        self.peek_at(i) == Some(Token::Import)
     }
 
     fn params(&mut self) -> Result<Vec<Param>> {
         self.expect(Token::LParen)?;
-        let mut params = Vec::new();
-        while self.peek() != Some(Token::RParen) {
-            let name = self.ident()?;
-            self.expect(Token::Colon)?;
-            let ty = self.type_ref()?;
-            params.push(Param { name, ty });
-            if !self.eat(Token::Comma) {
-                break;
+        let params = self.scoped(true, false, |p| {
+            let mut params = Vec::new();
+            while p.peek() != Some(Token::RParen) {
+                let name = p.ident()?;
+                p.expect(Token::Colon)?;
+                let ty = p.type_ref()?;
+                let default = if p.eat(Token::Eq) { Some(p.expr()?) } else { None };
+                params.push(Param { name, ty, default });
+                if !p.eat(Token::Comma) {
+                    break;
+                }
             }
-        }
+            Ok(params)
+        })?;
         self.expect(Token::RParen)?;
         Ok(params)
     }
 
-    /// Parse after `fn` (and the optional `Type::`): name, signature, body.
+    /// Parse after `fn` (and the optional `Type.`): name, signature, body.
     fn fn_decl(&mut self, start: Span, is_extern: bool) -> Result<FnDecl> {
         let name = self.ident()?;
         let params = self.params()?;
@@ -172,12 +251,15 @@ impl<'a> Parser<'a> {
                 None
             };
             FnBody::Extern { symbol }
-        } else if self.eat(Token::FatArrow) {
-            FnBody::Arrow(self.expr()?)
+        } else if self.eat(Token::Eq) {
+            FnBody::Expr(self.expr()?)
+        } else if self.peek() == Some(Token::FatArrow) {
+            return Err(Diagnostic::new("one-line functions are written with `=`, not `=>`", self.here())
+                .hint("e.g. `fn double(x: Int) = x * 2`"));
         } else if self.peek() == Some(Token::LBrace) {
             FnBody::Block(self.block()?)
         } else {
-            return Err(self.expected("`{` or `=>`"));
+            return Err(self.expected("`{` or `=`"));
         };
         Ok(FnDecl { name, params, ret, body, span: start.to(self.prev_span()) })
     }
@@ -188,76 +270,72 @@ impl<'a> Parser<'a> {
         if self.peek() == Some(Token::Colon) {
             return Err(Diagnostic::new("type inheritance is not supported", self.here()));
         }
+        let primary = if self.peek() == Some(Token::LParen) && !self.nl() { Some(self.params()?) } else { None };
 
-        let mut ctor_fields = None;
-        if self.eat(Token::LParen) {
-            let mut fields = Vec::new();
-            while self.peek() != Some(Token::RParen) {
-                let it = self.ident()?;
-                if it.name != "it" {
-                    return Err(Diagnostic::new("constructor parameters are written `it.field`", it.span));
-                }
-                self.expect(Token::Dot)?;
-                fields.push(self.ident()?);
-                if !self.eat(Token::Comma) {
-                    break;
-                }
-            }
-            self.expect(Token::RParen)?;
-            ctor_fields = Some(fields);
-        }
-
-        self.expect(Token::LBrace)?;
-        let (mut fields, mut methods, mut ctor) = (Vec::new(), Vec::new(), None);
-        while self.peek() != Some(Token::RBrace) {
-            match self.peek() {
-                Some(Token::Semi) => {
-                    self.bump();
-                }
-                Some(Token::Fn) => {
-                    let s = self.bump().span;
-                    methods.push(self.fn_decl(s, false)?);
-                }
-                Some(Token::Constructor) => {
-                    let s = self.bump().span;
-                    let params = self.params()?;
-                    let body = self.block()?;
-                    if ctor.is_some() {
-                        return Err(Diagnostic::new("a type can have only one constructor", s));
+        let (mut fields, mut methods, mut ctor, mut inits) = (Vec::new(), Vec::new(), None, Vec::new());
+        if self.peek() == Some(Token::LBrace) && !self.nl() {
+            self.bump();
+            self.scoped(false, false, |p| {
+                while p.peek() != Some(Token::RBrace) {
+                    match p.peek() {
+                        Some(Token::Semi) => {
+                            p.bump();
+                        }
+                        Some(Token::Fn) => {
+                            let s = p.bump().span;
+                            methods.push(p.fn_decl(s, false)?);
+                        }
+                        Some(Token::Constructor) => {
+                            let s = p.bump().span;
+                            let params = p.params()?;
+                            let body = p.block()?;
+                            if ctor.is_some() {
+                                return Err(Diagnostic::new("a type can have only one constructor", s));
+                            }
+                            ctor = Some(CtorDecl { params, body });
+                        }
+                        Some(Token::Ident)
+                            if p.text(p.toks[p.pos]) == "init" && p.peek_at(1) == Some(Token::LBrace) =>
+                        {
+                            p.bump();
+                            inits.push(p.block()?);
+                        }
+                        Some(Token::Ident) => {
+                            let name = p.ident()?;
+                            p.expect(Token::Colon)?;
+                            let ty = p.type_ref()?;
+                            let init = if p.eat(Token::Eq) { Some(p.expr()?) } else { None };
+                            fields.push(FieldDecl { name, ty, init });
+                        }
+                        _ => return Err(p.expected("a field, `fn`, `constructor` or `init`")),
                     }
-                    ctor = Some(CtorDecl { params, body });
                 }
-                Some(Token::Ident) => {
-                    let name = self.ident()?;
-                    self.expect(Token::Colon)?;
-                    let ty = self.type_ref()?;
-                    fields.push(FieldDecl { name, ty });
-                }
-                _ => return Err(self.expected("a field, `fn` or `constructor`")),
-            }
+                Ok(())
+            })?;
+            self.expect(Token::RBrace)?;
         }
-        self.expect(Token::RBrace)?;
-        Ok(TypeDecl { name, ctor_fields, fields, ctor, methods })
+        Ok(TypeDecl { name, primary, fields, ctor, inits, methods })
     }
 
     // ── statements ──────────────────────────────────────────────
 
     fn block(&mut self) -> Result<Vec<Stmt>> {
         self.expect(Token::LBrace)?;
-        let mut stmts = Vec::new();
-        loop {
-            match self.peek() {
-                Some(Token::RBrace) => {
-                    self.bump();
-                    return Ok(stmts);
+        let stmts = self.scoped(false, false, |p| {
+            let mut stmts = Vec::new();
+            loop {
+                match p.peek() {
+                    Some(Token::RBrace) => return Ok(stmts),
+                    Some(Token::Semi) => {
+                        p.bump();
+                    }
+                    None => return Err(p.expected("`}`")),
+                    Some(_) => stmts.push(p.stmt()?),
                 }
-                Some(Token::Semi) => {
-                    self.bump();
-                }
-                None => return Err(self.expected("`}`")),
-                Some(_) => stmts.push(self.stmt()?),
             }
-        }
+        })?;
+        self.expect(Token::RBrace)?;
+        Ok(stmts)
     }
 
     fn stmt(&mut self) -> Result<Stmt> {
@@ -267,25 +345,46 @@ impl<'a> Parser<'a> {
                 self.bump();
                 let value = match self.peek() {
                     None | Some(Token::RBrace | Token::Semi) => None,
+                    _ if self.nl() => None,
                     _ => Some(self.expr()?),
                 };
                 StmtKind::Return(value)
             }
-            Some(Token::If) => return self.if_stmt(),
             Some(Token::While) => {
                 self.bump();
-                let cond = self.expr()?;
+                let cond = self.header_expr()?;
                 StmtKind::While { cond, body: self.block()? }
+            }
+            Some(Token::For) => {
+                self.bump();
+                let var = self.ident()?;
+                self.expect(Token::In)?;
+                let iter = self.header_expr()?;
+                StmtKind::For { var, iter, body: self.block()? }
+            }
+            Some(Token::Break) => {
+                self.bump();
+                StmtKind::Break
+            }
+            Some(Token::Continue) => {
+                self.bump();
+                StmtKind::Continue
             }
             Some(Token::Ident) if matches!(self.peek_at(1), Some(Token::Colon | Token::ColonEq)) => {
                 let name = self.ident()?;
                 let ty = if self.eat(Token::Colon) { Some(self.type_ref()?) } else { None };
-                let init = if self.eat(Token::ColonEq) { Some(self.expr()?) } else { None };
+                // `x := v`, `x: T := v`, and `x: T = v` (the type already marks a declaration).
+                let init = if self.eat(Token::ColonEq) || (ty.is_some() && self.eat(Token::Eq)) {
+                    Some(self.expr()?)
+                } else {
+                    None
+                };
                 StmtKind::Let { name, ty, init }
             }
             _ => {
                 let lhs = self.expr()?;
                 let op = match self.peek() {
+                    _ if self.nl() => None,
                     Some(Token::Eq) => Some(AssignOp::Set),
                     Some(Token::PlusEq) => Some(AssignOp::Add),
                     Some(Token::MinusEq) => Some(AssignOp::Sub),
@@ -308,27 +407,48 @@ impl<'a> Parser<'a> {
         Ok(Stmt { kind, span: start.to(self.prev_span()) })
     }
 
-    fn if_stmt(&mut self) -> Result<Stmt> {
-        let start = self.bump().span;
-        let cond = self.expr()?;
-        let then = self.block()?;
-        let otherwise = if self.eat(Token::Else) {
-            if self.peek() == Some(Token::If) { Some(vec![self.if_stmt()?]) } else { Some(self.block()?) }
-        } else {
-            None
-        };
-        Ok(Stmt { kind: StmtKind::If { cond, then, otherwise }, span: start.to(self.prev_span()) })
+    fn expr_stmt(e: Expr) -> Stmt {
+        Stmt { span: e.span, kind: StmtKind::Expr(e) }
     }
 
     // ── expressions ─────────────────────────────────────────────
 
     fn expr(&mut self) -> Result<Expr> {
-        self.binary(1)
+        let lhs = self.binary(1)?;
+        if matches!(self.peek(), Some(Token::DotDot | Token::DotDotEq)) && !self.nl() {
+            let inclusive = self.bump().kind == Token::DotDotEq;
+            let end = self.binary(1)?;
+            let span = lhs.span.to(end.span);
+            return Ok(Expr { kind: ExprKind::Range { start: Box::new(lhs), end: Box::new(end), inclusive }, span });
+        }
+        Ok(lhs)
     }
 
     fn binary(&mut self, min_prec: u8) -> Result<Expr> {
         let mut lhs = self.unary()?;
-        while let Some((prec, op)) = self.peek().and_then(binop) {
+        while let Some(tok) = self.peek() {
+            // A line break ends the expression, except before `&&` / `||`.
+            if self.nl() && !matches!(tok, Token::AndAnd | Token::OrOr) {
+                break;
+            }
+            if tok == Token::In {
+                if 4 < min_prec {
+                    break;
+                }
+                self.bump();
+                let lo = self.binary(5)?;
+                let range = if matches!(self.peek(), Some(Token::DotDot | Token::DotDotEq)) {
+                    let inclusive = self.bump().kind == Token::DotDotEq;
+                    let hi = self.binary(5)?;
+                    let span = lo.span.to(hi.span);
+                    Expr { kind: ExprKind::Range { start: Box::new(lo), end: Box::new(hi), inclusive }, span }
+                } else {
+                    return Err(Diagnostic::new("`in` needs a range such as `1..10`", lo.span));
+                };
+                lhs = Self::in_range(lhs, range);
+                continue;
+            }
+            let Some((prec, op)) = binop(tok) else { break };
             if prec < min_prec {
                 break;
             }
@@ -338,6 +458,32 @@ impl<'a> Parser<'a> {
             lhs = Expr { kind: ExprKind::Binary(op, Box::new(lhs), Box::new(rhs)), span };
         }
         Ok(lhs)
+    }
+
+    /// `x in a..b`  ⇒  `{ $t := x;  $t >= a && $t < b }`
+    fn in_range(subject: Expr, range: Expr) -> Expr {
+        let span = subject.span.to(range.span);
+        let tmp = format!("$in{}", span.start);
+        let test = Self::range_test(&tmp, subject.span, range);
+        let bind = Stmt {
+            kind: StmtKind::Let { name: Ident { name: tmp, span }, ty: None, init: Some(subject) },
+            span,
+        };
+        Expr { kind: ExprKind::Block(vec![bind, Self::expr_stmt(test)]), span }
+    }
+
+    /// `name >= start && name < end` (or `<=` when inclusive).
+    fn range_test(name: &str, subject_span: Span, range: Expr) -> Expr {
+        let span = subject_span.to(range.span);
+        let ExprKind::Range { start, end, inclusive } = range.kind else { unreachable!("checked by callers") };
+        let var = || Expr { kind: ExprKind::Name(name.to_string()), span: subject_span };
+        let cmp = |op, l: Expr, r: Box<Expr>| {
+            let span = l.span.to(r.span);
+            Expr { kind: ExprKind::Binary(op, Box::new(l), r), span }
+        };
+        let lower = cmp(BinOp::Ge, var(), start);
+        let upper = cmp(if inclusive { BinOp::Le } else { BinOp::Lt }, var(), end);
+        Expr { kind: ExprKind::Binary(BinOp::And, Box::new(lower), Box::new(upper)), span }
     }
 
     fn unary(&mut self) -> Result<Expr> {
@@ -356,21 +502,16 @@ impl<'a> Parser<'a> {
         let mut e = self.primary()?;
         loop {
             match self.peek() {
+                // A leading `.` continues the chain from the previous line.
                 Some(Token::Dot) => {
                     self.bump();
                     let field = self.ident()?;
                     let span = e.span.to(field.span);
                     e = Expr { kind: ExprKind::Field(Box::new(e), field), span };
                 }
-                Some(Token::LParen) => {
+                Some(Token::LParen) if !self.nl() => {
                     self.bump();
-                    let mut args = Vec::new();
-                    while self.peek() != Some(Token::RParen) {
-                        args.push(self.expr()?);
-                        if !self.eat(Token::Comma) {
-                            break;
-                        }
-                    }
+                    let args = self.scoped(true, false, |p| p.args())?;
                     let close = self.expect(Token::RParen)?;
                     let span = e.span.to(close.span);
                     e = Expr { kind: ExprKind::Call { callee: Box::new(e), args }, span };
@@ -378,6 +519,25 @@ impl<'a> Parser<'a> {
                 _ => return Ok(e),
             }
         }
+    }
+
+    /// Call arguments up to (not including) the closing `)`.
+    fn args(&mut self) -> Result<Vec<Arg>> {
+        let mut args = Vec::new();
+        while self.peek() != Some(Token::RParen) {
+            let name = if self.peek() == Some(Token::Ident) && self.peek_at(1) == Some(Token::Colon) {
+                let n = self.ident()?;
+                self.bump();
+                Some(n)
+            } else {
+                None
+            };
+            args.push(Arg { name, value: self.expr()? });
+            if !self.eat(Token::Comma) {
+                break;
+            }
+        }
+        Ok(args)
     }
 
     fn primary(&mut self) -> Result<Expr> {
@@ -410,16 +570,144 @@ impl<'a> Parser<'a> {
             }
             Token::LParen => {
                 self.bump();
-                let inner = self.expr()?;
+                let inner = self.scoped(true, false, |p| p.expr())?;
                 self.expect(Token::RParen)?;
                 return Ok(inner);
             }
+            Token::If => return self.if_expr(),
+            Token::When => return self.when_expr(),
             _ => return Err(self.expected("an expression")),
         };
         Ok(Expr { kind, span })
     }
 
-    /// Decode escapes and split `${...}` interpolations out of a string literal.
+    fn if_expr(&mut self) -> Result<Expr> {
+        let start = self.bump().span;
+        let cond = self.header_expr()?;
+        let then = self.block()?;
+        let otherwise = if self.eat(Token::Else) {
+            if self.peek() == Some(Token::If) {
+                Some(vec![Self::expr_stmt(self.if_expr()?)])
+            } else {
+                Some(self.block()?)
+            }
+        } else {
+            None
+        };
+        let span = start.to(self.prev_span());
+        Ok(Expr { kind: ExprKind::If { cond: Box::new(cond), then, otherwise }, span })
+    }
+
+    /// `when` is sugar for an if/else-if chain:
+    ///
+    /// ```text
+    /// when x { 1, 2 -> a;  in 3..9 -> b;  else -> c }
+    ///   ⇒  { $w := x;  if $w == 1 || $w == 2 { a } else if $w >= 3 && $w < 9 { b } else { c } }
+    /// ```
+    fn when_expr(&mut self) -> Result<Expr> {
+        let start = self.bump().span;
+        let subject = if self.peek() == Some(Token::LBrace) { None } else { Some(self.header_expr()?) };
+        self.expect(Token::LBrace)?;
+
+        let tmp = format!("$w{}", start.start);
+        let subject_span = subject.as_ref().map(|s| s.span);
+        let mut arms: Vec<(Expr, Vec<Stmt>)> = Vec::new();
+        let mut fallback: Option<Vec<Stmt>> = None;
+
+        self.scoped(false, false, |p| {
+            loop {
+                match p.peek() {
+                    Some(Token::Semi) => {
+                        p.bump();
+                        continue;
+                    }
+                    Some(Token::RBrace) => return Ok(()),
+                    None => return Err(p.expected("`}`")),
+                    _ => {}
+                }
+                if p.peek() == Some(Token::Else) {
+                    p.bump();
+                    p.expect(Token::Arrow)?;
+                    fallback = Some(p.arm_body()?);
+                    continue;
+                }
+                let mut cond: Option<Expr> = None;
+                loop {
+                    let c = if p.peek() == Some(Token::In) {
+                        let at = p.bump().span;
+                        let Some(subject_span) = subject_span else {
+                            return Err(Diagnostic::new("`in` arms need a `when <value>`", at));
+                        };
+                        let range = p.expr()?;
+                        if !matches!(range.kind, ExprKind::Range { .. }) {
+                            return Err(Diagnostic::new("`in` needs a range such as `1..10`", range.span));
+                        }
+                        Self::range_test(&tmp, subject_span, range)
+                    } else {
+                        let e = p.expr()?;
+                        match subject_span {
+                            Some(s) => {
+                                let span = e.span;
+                                let subj = Expr { kind: ExprKind::Name(tmp.clone()), span: s };
+                                Expr { kind: ExprKind::Binary(BinOp::Eq, Box::new(subj), Box::new(e)), span }
+                            }
+                            None => e,
+                        }
+                    };
+                    cond = Some(match cond {
+                        None => c,
+                        Some(prev) => {
+                            let span = prev.span.to(c.span);
+                            Expr { kind: ExprKind::Binary(BinOp::Or, Box::new(prev), Box::new(c)), span }
+                        }
+                    });
+                    if !p.eat(Token::Comma) {
+                        break;
+                    }
+                }
+                p.expect(Token::Arrow)?;
+                arms.push((cond.unwrap(), p.arm_body()?));
+            }
+        })?;
+        let end = self.expect(Token::RBrace)?.span;
+        let span = start.to(end);
+
+        if arms.is_empty() && fallback.is_none() {
+            return Err(Diagnostic::new("`when` needs at least one branch", span));
+        }
+        // Fold the arms into `if … else if … else …`.
+        let mut top = match fallback {
+            Some(body) => Expr { kind: ExprKind::Block(body), span },
+            None => {
+                // No `else`: the innermost arm is an `if` without one.
+                let (cond, body) = arms.pop().expect("checked above");
+                Expr { span: cond.span, kind: ExprKind::If { cond: Box::new(cond), then: body, otherwise: None } }
+            }
+        };
+        for (cond, body) in arms.into_iter().rev() {
+            let otherwise = Some(vec![Self::expr_stmt(top)]);
+            top = Expr { span: cond.span, kind: ExprKind::If { cond: Box::new(cond), then: body, otherwise } };
+        }
+        top.span = span;
+
+        match subject {
+            None => Ok(top),
+            Some(subject) => {
+                let bind = Stmt {
+                    kind: StmtKind::Let { name: Ident { name: tmp, span }, ty: None, init: Some(subject) },
+                    span,
+                };
+                Ok(Expr { kind: ExprKind::Block(vec![bind, Self::expr_stmt(top)]), span })
+            }
+        }
+    }
+
+    /// The right-hand side of a `when` arm: a block or a single expression.
+    fn arm_body(&mut self) -> Result<Vec<Stmt>> {
+        if self.peek() == Some(Token::LBrace) { self.block() } else { Ok(vec![Self::expr_stmt(self.expr()?)]) }
+    }
+
+    /// Decode escapes and split `${...}` / `$name` interpolations out of a string literal.
     fn string_expr(&mut self, tok: Tok) -> Result<Expr> {
         let full = self.text(tok);
         let raw = &full[1..full.len() - 1];
@@ -461,6 +749,18 @@ impl<'a> Parser<'a> {
                         parts.push(InterpPart::Lit(std::mem::take(&mut lit)));
                     }
                     parts.push(InterpPart::Expr(expr));
+                    i = end;
+                }
+                b'$' if bytes.get(i + 1).is_some_and(|b| b.is_ascii_alphabetic() || *b == b'_') => {
+                    let mut end = i + 1;
+                    while bytes.get(end).is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_') {
+                        end += 1;
+                    }
+                    if !lit.is_empty() {
+                        parts.push(InterpPart::Lit(std::mem::take(&mut lit)));
+                    }
+                    let span = Span::new(self.file, raw_off + i + 1, raw_off + end);
+                    parts.push(InterpPart::Expr(Expr { kind: ExprKind::Name(raw[i + 1..end].to_string()), span }));
                     i = end;
                 }
                 _ => {
@@ -511,6 +811,10 @@ mod tests {
         Parser::new(0, src, 0).unwrap().expr().unwrap()
     }
 
+    fn module(src: &str) -> Module {
+        parse_module(0, src).unwrap()
+    }
+
     /// Render an expression as a fully parenthesised string.
     fn show(e: &Expr) -> String {
         match &e.kind {
@@ -521,7 +825,14 @@ mod tests {
             ExprKind::Unary(UnOp::Not, x) => format!("(!{})", show(x)),
             ExprKind::Field(o, f) => format!("{}.{}", show(o), f.name),
             ExprKind::Call { callee, args } => {
-                format!("{}({})", show(callee), args.iter().map(show).collect::<Vec<_>>().join(", "))
+                let args: Vec<String> = args
+                    .iter()
+                    .map(|a| match &a.name {
+                        Some(n) => format!("{}: {}", n.name, show(&a.value)),
+                        None => show(&a.value),
+                    })
+                    .collect();
+                format!("{}({})", show(callee), args.join(", "))
             }
             other => format!("{other:?}"),
         }
@@ -538,22 +849,62 @@ mod tests {
     }
 
     #[test]
-    fn postfix_chains() {
+    fn postfix_chains_and_named_arguments() {
         assert_eq!(show(&parse_expr("a.b.c(1, x.y)")), "a.b.c(1, x.y)");
         assert_eq!(show(&parse_expr("m.f(1).g()")), "m.f(1).g()");
+        assert_eq!(show(&parse_expr("f(1, flag: true, n: 2 + 3)")), "f(1, flag: Bool(true), n: (2 + 3))");
+    }
+
+    #[test]
+    fn a_line_break_ends_the_expression() {
+        // `-3` and `(b)` on their own lines are new statements.
+        let m = module("a := 1\n-3\nb := a\n(b)\n");
+        assert_eq!(m.items.len(), 4);
+        // …but `.`, `&&` and a trailing operator continue it.
+        let m = module("r := x\n    .add(1)\n    .add(2)\nok := a\n    && b\nsum := 1 +\n    2\n");
+        assert_eq!(m.items.len(), 3);
+        // Newlines are ignored inside parentheses.
+        let m = module("f(1,\n  2\n)\n");
+        assert_eq!(m.items.len(), 1);
+    }
+
+    #[test]
+    fn top_level_statements_are_items() {
+        let m = module("import math\nx := 1\nprintln(x)\nfn f() {}\nif x > 0 { println(1) }\n");
+        assert_eq!(m.imports.len(), 1);
+        let kinds: Vec<&str> = m
+            .items
+            .iter()
+            .map(|i| match i {
+                Item::Stmt(_) => "stmt",
+                Item::Fn(_) => "fn",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(kinds, ["stmt", "stmt", "fn", "stmt"]);
     }
 
     #[test]
     fn interpolation_splits_parts_and_keeps_offsets() {
-        let src = r#"  "hi ${name}, ${1 + 2}!" "#;
+        let src = r#"  "hi ${name}, ${1 + 2}! and $other." "#;
         let e = parse_expr(src);
         let ExprKind::Interp(parts) = &e.kind else { panic!("expected interpolation") };
-        assert_eq!(parts.len(), 5);
+        assert_eq!(parts.len(), 7);
+        let slice = |e: &Expr| &src[e.span.start as usize..e.span.end as usize];
+        // Spans point into the original text, not the substring.
         let InterpPart::Expr(name) = &parts[1] else { panic!() };
-        // The span of `name` points into the original text, not the substring.
-        assert_eq!(&src[name.span.start as usize..name.span.end as usize], "name");
+        assert_eq!(slice(name), "name");
         let InterpPart::Expr(sum) = &parts[3] else { panic!() };
-        assert_eq!(&src[sum.span.start as usize..sum.span.end as usize], "1 + 2");
+        assert_eq!(slice(sum), "1 + 2");
+        let InterpPart::Expr(other) = &parts[5] else { panic!() };
+        assert_eq!(slice(other), "other");
+        assert!(matches!(&parts[6], InterpPart::Lit(s) if s == "."));
+    }
+
+    #[test]
+    fn dollar_without_a_name_is_literal() {
+        let ExprKind::Str(s) = parse_expr(r#""cost: $5 or $ ""#).kind else { panic!() };
+        assert_eq!(s, "cost: $5 or $ ");
     }
 
     #[test]
@@ -570,6 +921,59 @@ mod tests {
     }
 
     #[test]
+    fn when_desugars_to_an_if_chain() {
+        let e = parse_expr("when x {\n 1, 2 -> a\n in 3..9 -> b\n else -> c\n}");
+        // { $w := x; if $w == 1 || $w == 2 { a } else if ($w >= 3 && $w < 9) { b } else { c } }
+        let ExprKind::Block(stmts) = &e.kind else { panic!("expected a block, got {e:?}") };
+        assert!(matches!(&stmts[0].kind, StmtKind::Let { .. }));
+        let StmtKind::Expr(chain) = &stmts[1].kind else { panic!() };
+        let ExprKind::If { cond, otherwise, .. } = &chain.kind else { panic!() };
+        assert!(matches!(&cond.kind, ExprKind::Binary(BinOp::Or, ..)));
+        let StmtKind::Expr(second) = &otherwise.as_ref().unwrap()[0].kind else { panic!() };
+        assert!(matches!(&second.kind, ExprKind::If { .. }));
+    }
+
+    #[test]
+    fn when_without_a_subject_uses_the_conditions_directly() {
+        let e = parse_expr("when {\n a > 1 -> 1\n else -> 2\n}");
+        assert!(matches!(&e.kind, ExprKind::If { .. }), "{e:?}");
+    }
+
+    #[test]
+    fn x_in_range_is_sugar_for_two_comparisons() {
+        let e = parse_expr("x in 1..=5");
+        let ExprKind::Block(stmts) = &e.kind else { panic!() };
+        let StmtKind::Expr(test) = &stmts[1].kind else { panic!() };
+        assert!(matches!(&test.kind, ExprKind::Binary(BinOp::And, ..)));
+    }
+
+    #[test]
+    fn type_declarations() {
+        let m = module(
+            "type User(name: String, age: Int = 0) {\n  tag: Int = 3\n  init { x = 1 }\n  fn hi() = name\n}\n\
+             type Plain { a: Int\n constructor(v: Int) { a = v } }\ntype Bare(x: Int)\n\
+             fn User.label() = name\n",
+        );
+        assert_eq!(m.items.len(), 4);
+        let Item::Type(user) = &m.items[0] else { panic!() };
+        let primary = user.primary.as_ref().unwrap();
+        assert_eq!(primary.len(), 2);
+        assert!(primary[1].default.is_some());
+        assert_eq!((user.fields.len(), user.inits.len(), user.methods.len()), (1, 1, 1));
+        let Item::Type(plain) = &m.items[1] else { panic!() };
+        assert!(plain.primary.is_none() && plain.ctor.is_some());
+        assert!(matches!(&m.items[3], Item::Method { owner, .. } if owner.name == "User"));
+    }
+
+    #[test]
+    fn functions_and_externs() {
+        let m = module("fn a(x: Int, y: Int = 2) -> Int = x + y\nextern fn f(a: Int) -> Int = \"c_f\"\nfn b() { }\n");
+        assert_eq!(m.items.len(), 3);
+        assert!(matches!(&m.items[0], Item::Fn(f) if matches!(f.body, FnBody::Expr(_)) && f.ret.is_some()));
+        assert!(matches!(&m.items[1], Item::Fn(f) if matches!(&f.body, FnBody::Extern { symbol: Some(s) } if s == "c_f")));
+    }
+
+    #[test]
     fn bad_input_is_reported_not_swallowed() {
         let err = |src: &str| Parser::new(0, src, 0).and_then(|mut p| p.expr()).unwrap_err().message;
         assert!(err(r#""abc"#).contains("unterminated"));
@@ -577,19 +981,12 @@ mod tests {
         assert!(err("1 +").contains("expected an expression"));
         assert!(err("#").contains("unexpected character"));
         assert!(err("99999999999999999999").contains("too large"));
+        assert!(err("x in 5").contains("needs a range"));
     }
 
     #[test]
-    fn module_structure() {
-        let m = parse_module(
-            0,
-            "import std.math;\nimport utils\ntype T(it.x) { x: Int fn get() -> Int => it.x }\n\
-             fn T::set(v: Int) { it.x = v }\nextern fn f(a: Int) -> Int = \"c_f\"\nfn main() {}",
-        )
-        .unwrap();
-        assert_eq!(m.imports.len(), 2);
-        assert_eq!(m.items.len(), 4);
-        assert!(matches!(&m.items[1], Item::Method { owner, .. } if owner.name == "T"));
-        assert!(matches!(&m.items[2], Item::Fn(f) if matches!(&f.body, FnBody::Extern { symbol: Some(s) } if s == "c_f")));
+    fn a_shebang_line_is_ignored() {
+        let m = module("#!/usr/bin/env aion\nprintln(1)\n");
+        assert_eq!(m.items.len(), 1);
     }
 }

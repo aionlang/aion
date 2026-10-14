@@ -6,12 +6,12 @@ type Pet {
     age: Int
 
     constructor(name: String, age: Int) {
-        it.name = name
-        it.age = age
+        this.name = name
+        this.age = age
     }
 
     fn greet() -> String {
-        return "I'm ${it.name}, age ${it.age}"
+        return "I'm ${this.name}, age ${this.age}"
     }
 }
 

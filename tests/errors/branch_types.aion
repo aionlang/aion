@@ -1,0 +1,4 @@
+// error: the branches have different types: Int and String
+fn main() {
+    x := if true { 1 } else { "s" }
+}

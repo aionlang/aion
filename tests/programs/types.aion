@@ -1,11 +1,9 @@
 // User-defined types: constructors, methods, fields, reference semantics.
 
-type Point(it.x, it.y) {
-    x: Int
-    y: Int
+type Point(x: Int, y: Int) {
 
-    fn sum() -> Int => it.x + it.y
-    fn scaled(k: Int) -> Point => Point(it.x * k, it.y * k)
+    fn sum() -> Int = this.x + this.y
+    fn scaled(k: Int) -> Point = Point(this.x * k, this.y * k)
 }
 
 type Counter {
@@ -13,44 +11,37 @@ type Counter {
     label: String
 
     constructor(label: String) {
-        it.label = label
+        this.label = label
     }
 
     fn inc() {
-        it.count += 1
+        this.count += 1
     }
 
     fn show() -> String {
-        return "${it.label}=${it.count}"
+        return "${this.label}=${this.count}"
     }
 }
 
-fn Counter::reset() {
-    it.count = 0
+fn Counter.reset() {
+    this.count = 0
 }
 
-fn Counter::add(n: Int) -> Counter {
-    it.count += n
-    return it
+fn Counter.add(n: Int) -> Counter {
+    this.count += n
+    return this
 }
 
-type Line {
-    a: Point
-    b: Point
+type Line(a: Point, b: Point) {
 
     fn length2() -> Int {
-        dx := it.b.x - it.a.x
-        dy := it.b.y - it.a.y
+        dx := this.b.x - this.a.x
+        dy := this.b.y - this.a.y
         return dx * dx + dy * dy
     }
 }
 
-type Defaults {
-    i: Int
-    f: Float
-    b: Bool
-    s: String
-}
+type Defaults(i: Int, f: Float, b: Bool, s: String)
 
 fn bump(c: Counter) {
     c.inc()

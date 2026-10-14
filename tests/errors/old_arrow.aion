@@ -1,0 +1,2 @@
+// error: one-line functions are written with `=`, not `=>`
+fn f() => 1

@@ -1,0 +1,4 @@
+// error: `continue` outside of a loop
+fn main() {
+    if true { continue }
+}

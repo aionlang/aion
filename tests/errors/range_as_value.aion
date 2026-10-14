@@ -1,0 +1,4 @@
+// error: a range can only be used in a `for` loop or after `in`
+fn main() {
+    r := 1..3
+}

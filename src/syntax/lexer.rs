@@ -23,6 +23,16 @@ pub enum Token {
     Else,
     #[token("while")]
     While,
+    #[token("for")]
+    For,
+    #[token("in")]
+    In,
+    #[token("when")]
+    When,
+    #[token("break")]
+    Break,
+    #[token("continue")]
+    Continue,
     #[token("return")]
     Return,
     #[token("true")]
@@ -50,6 +60,10 @@ pub enum Token {
     LBrace,
     #[token("}")]
     RBrace,
+    #[token("..")]
+    DotDot,
+    #[token("..=")]
+    DotDotEq,
     #[token(".")]
     Dot,
     #[token(";")]
@@ -58,18 +72,17 @@ pub enum Token {
     Comma,
     #[token("?")]
     Question,
-    #[token("::")]
-    ColonColon,
     #[token(":")]
     Colon,
     /// `:=` and `::=` both declare-and-infer.
     #[token(":=")]
     #[token("::=")]
     ColonEq,
-    #[token("=>")]
-    FatArrow,
     #[token("->")]
     Arrow,
+    /// Not valid syntax; lexed only to explain that `=` replaced it.
+    #[token("=>")]
+    FatArrow,
 
     // ── operators ───────────────────────────────────────────────
     #[token("=")]
@@ -129,6 +142,11 @@ impl Token {
             Token::If => "`if`",
             Token::Else => "`else`",
             Token::While => "`while`",
+            Token::For => "`for`",
+            Token::In => "`in`",
+            Token::When => "`when`",
+            Token::Break => "`break`",
+            Token::Continue => "`continue`",
             Token::Return => "`return`",
             Token::True | Token::False => "a boolean",
             Token::Float | Token::Int => "a number",
@@ -138,15 +156,16 @@ impl Token {
             Token::RParen => "`)`",
             Token::LBrace => "`{`",
             Token::RBrace => "`}`",
+            Token::DotDot => "`..`",
+            Token::DotDotEq => "`..=`",
             Token::Dot => "`.`",
             Token::Semi => "`;`",
             Token::Comma => "`,`",
             Token::Question => "`?`",
-            Token::ColonColon => "`::`",
             Token::Colon => "`:`",
             Token::ColonEq => "`:=`",
-            Token::FatArrow => "`=>`",
             Token::Arrow => "`->`",
+            Token::FatArrow => "`=>`",
             Token::Eq => "`=`",
             Token::PlusEq => "`+=`",
             Token::MinusEq => "`-=`",
@@ -224,24 +243,32 @@ pub(super) fn interpolation_end(b: &[u8], mut i: usize) -> Option<usize> {
 pub struct Tok {
     pub kind: Token,
     pub span: Span,
+    /// A line break separates this token from the previous one.
+    pub nl: bool,
 }
 
 /// Tokenise `src`.  `base` is the offset of `src` inside its file, so that
 /// code embedded in string interpolations still reports accurate spans.
+///
+/// A leading `#!` line (for `#!/usr/bin/env aion` scripts) is ignored.
 pub fn lex(file: u32, src: &str, base: usize) -> Result<Vec<Tok>> {
+    let skip = if base == 0 && src.starts_with("#!") { src.find('\n').unwrap_or(src.len()) } else { 0 };
     let mut out = Vec::new();
-    let mut lexer = Token::lexer(src);
+    let mut lexer = Token::lexer(&src[skip..]);
+    let mut prev_end = 0;
     while let Some(result) = lexer.next() {
         let r = lexer.span();
-        let span = Span::new(file, base + r.start, base + r.end);
+        let span = Span::new(file, base + skip + r.start, base + skip + r.end);
+        let nl = (prev_end == 0 && out.is_empty()) || lexer.source()[prev_end..r.start].contains('\n');
+        prev_end = r.end;
         match result {
-            Ok(kind) => out.push(Tok { kind, span }),
-            Err(()) if src[r.start..].starts_with('"') => {
+            Ok(kind) => out.push(Tok { kind, span, nl }),
+            Err(()) if lexer.source()[r.start..].starts_with('"') => {
                 return Err(Diagnostic::new("unterminated string literal", span));
             }
             Err(()) => {
                 return Err(Diagnostic::new(
-                    format!("unexpected character `{}`", &src[r.clone()]),
+                    format!("unexpected character `{}`", &lexer.source()[r.clone()]),
                     span,
                 ));
             }
