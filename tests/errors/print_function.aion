@@ -1,0 +1,3 @@
+// error: cannot print a function
+f := { x: Int -> x }
+println(f)

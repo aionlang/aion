@@ -1,11 +1,14 @@
 //! Type-checking of function bodies.
 
 use std::collections::{HashMap, HashSet};
+use std::mem::{replace, take};
 
 use super::hir::{self, ExprKind as K, FnId, GlobalId, LocalId, Ty, TypeId};
 use super::{Checker, Const, Sym, Work};
 use crate::diag::{Diagnostic, Result, Span};
 use crate::syntax::ast::{self, AssignOp, ExprKind as A, FnBody, InterpPart, StmtKind};
+
+const MAX_CAPTURES: usize = 63;
 
 pub(super) fn check_fn(ck: &Checker, id: FnId, work: &Work) -> Result<hir::Func> {
     let info = &ck.t.funcs[id];
@@ -21,7 +24,7 @@ pub(super) fn check_fn(ck: &Checker, id: FnId, work: &Work) -> Result<hir::Func>
             if matches!(work, Work::Method(_))
                 && let Ty::Obj(ty) = info.params[0].ty
             {
-                cx.this = Some((0, ty));
+                cx.this = Some(ty);
             }
             match &decl.body {
                 FnBody::Extern { .. } => None,
@@ -38,7 +41,7 @@ pub(super) fn check_fn(ck: &Checker, id: FnId, work: &Work) -> Result<hir::Func>
                 }
                 FnBody::Expr(e) => Some(match info.ret.get() {
                     Some(ret) => {
-                        let v = cx.value(e)?;
+                        let v = cx.value_expected(e, Some(ret))?;
                         vec![hir::Stmt::Return(Some(cx.coerce(v, ret, e.span)?))]
                     }
                     None => {
@@ -54,7 +57,7 @@ pub(super) fn check_fn(ck: &Checker, id: FnId, work: &Work) -> Result<hir::Func>
         Work::Ctor { ty, decl } => {
             let this = cx.new_local("this", Ty::Obj(*ty));
             cx.scopes[0].insert("this".into(), this);
-            cx.this = Some((this, *ty));
+            cx.this = Some(*ty);
             cx.in_ctor = true;
             let mut body = vec![hir::Stmt::Let(this, Some(mk(K::New(*ty), Ty::Obj(*ty))))];
 
@@ -66,8 +69,9 @@ pub(super) fn check_fn(ck: &Checker, id: FnId, work: &Work) -> Result<hir::Func>
             for f in &decl.fields {
                 if let Some(init) = &f.init {
                     let index = ck.t.types[*ty].fields.iter().position(|g| g.name == f.name.name).unwrap();
-                    let v = cx.value(init)?;
-                    let value = cx.coerce(v, ck.t.types[*ty].fields[index].ty, init.span)?;
+                    let want = ck.t.types[*ty].fields[index].ty;
+                    let v = cx.value_expected(init, Some(want))?;
+                    let value = cx.coerce(v, want, init.span)?;
                     body.push(hir::Stmt::SetField { obj: cx.local_expr(this), index, value });
                 }
             }
@@ -91,17 +95,53 @@ pub(super) fn check_fn(ck: &Checker, id: FnId, work: &Work) -> Result<hir::Func>
         }
     };
 
+    cx.flush_lambdas();
     Ok(hir::Func {
         symbol: info.symbol.clone(),
         kind: info.kind,
         ret: info.ret.get().unwrap_or(Ty::Void),
         n_params: info.params.len(),
-        locals: cx.locals,
+        locals: cx.hir_locals(),
         body,
+        captures: Vec::new(),
     })
 }
 
 impl Checker<'_> {
+    /// An adapter that lets declared function `id` be used as a function value:
+    /// `thunk(env, args…) = id(args…)`.
+    fn thunk_for(&self, id: FnId, ret: Ty) -> FnId {
+        if let Some(&t) = self.thunks.borrow().get(&id) {
+            return t;
+        }
+        let thunk = self.reserve_fn();
+        self.thunks.borrow_mut().insert(id, thunk);
+
+        let info = &self.t.funcs[id];
+        let locals: Vec<hir::Local> = info
+            .params
+            .iter()
+            .map(|p| hir::Local { name: p.name.clone(), ty: p.ty, boxed: false })
+            .collect();
+        let args = locals
+            .iter()
+            .enumerate()
+            .map(|(i, l)| mk(K::Local(i), l.ty))
+            .collect();
+        let call = mk(K::Call { func: id, args }, ret);
+        let func = hir::Func {
+            symbol: format!("thunk__{}", info.symbol),
+            kind: hir::FuncKind::Closure,
+            ret,
+            n_params: locals.len(),
+            locals,
+            body: Some(vec![if ret == Ty::Void { hir::Stmt::Expr(call) } else { hir::Stmt::Return(Some(call)) }]),
+            captures: Vec::new(),
+        };
+        self.out.borrow_mut()[thunk] = Some(func);
+        thunk
+    }
+
     /// The `toString` used when an object is printed or interpolated: the
     /// type's own `toString()` if it has one, otherwise a generated
     /// `Name(field=value, …)`.
@@ -136,7 +176,11 @@ impl Checker<'_> {
             let label = if i == 0 { format!("{}=", f.name) } else { format!(", {}=", f.name) };
             acc = concat(acc, text(label));
             let field = mk(K::Field { obj: Box::new(cx.local_expr(this)), index: i }, f.ty);
-            let piece = cx.stringify(field, Span::default())?;
+            let piece = if matches!(f.ty, Ty::Fn(_)) {
+                text("<function>".into())
+            } else {
+                cx.stringify(field, Span::default())?
+            };
             acc = concat(acc, piece);
         }
         acc = concat(acc, text(")".into()));
@@ -146,8 +190,9 @@ impl Checker<'_> {
             kind: hir::FuncKind::Method,
             ret: Ty::Str,
             n_params: 1,
-            locals: cx.locals,
+            locals: cx.hir_locals(),
             body: Some(vec![hir::Stmt::Return(Some(acc))]),
+            captures: Vec::new(),
         };
         self.out.borrow_mut()[id] = Some(func);
         Ok(id)
@@ -177,18 +222,63 @@ struct InitState {
     declared: HashSet<GlobalId>,
 }
 
-struct Cx<'c, 'a> {
-    ck: &'c Checker<'a>,
-    module: usize,
-    locals: Vec<hir::Local>,
+/// A local variable while checking (becomes a [`hir::Local`]).
+struct LocalInfo {
+    name: String,
+    ty: Ty,
+    /// Which source variable this is; a closure's copy shares its origin's.
+    var: usize,
+}
+
+/// Whether a variable is captured by a closure and reassigned, which decides
+/// if it needs a shared heap cell.
+#[derive(Default)]
+struct VarInfo {
+    captured: bool,
+    mutated: bool,
+}
+
+/// The per-function state that is swapped out while checking a lambda body.
+struct Frame {
+    locals: Vec<LocalInfo>,
     scopes: Vec<HashMap<String, LocalId>>,
-    /// `None` while the return type is still being inferred.
     ret: Option<Ty>,
-    /// Inside a method or constructor: the receiver and its type.
-    this: Option<(LocalId, TypeId)>,
+    this: Option<TypeId>,
     in_ctor: bool,
     init: Option<InitState>,
     loops: u32,
+    captures: Vec<hir::Capture>,
+}
+
+/// A checked lambda waiting for the enclosing function to finish, which
+/// settles which of the variables it captures need boxing.
+struct PendingLambda {
+    id: FnId,
+    ret: Ty,
+    n_params: usize,
+    locals: Vec<LocalInfo>,
+    body: Vec<hir::Stmt>,
+    captures: Vec<hir::Capture>,
+}
+
+struct Cx<'c, 'a> {
+    ck: &'c Checker<'a>,
+    module: usize,
+    locals: Vec<LocalInfo>,
+    scopes: Vec<HashMap<String, LocalId>>,
+    /// `None` while the return type is still being inferred.
+    ret: Option<Ty>,
+    /// Inside a method or constructor: the type of `this`.
+    this: Option<TypeId>,
+    in_ctor: bool,
+    init: Option<InitState>,
+    loops: u32,
+    /// Variables this function copies out of its closure object.
+    captures: Vec<hir::Capture>,
+    /// The functions enclosing the one being checked (innermost last).
+    outer: Vec<Frame>,
+    vars: Vec<VarInfo>,
+    lambdas: Vec<PendingLambda>,
 }
 
 fn mk(kind: K, ty: Ty) -> hir::Expr {
@@ -205,8 +295,8 @@ enum Named {
     /// A field of `this`.
     Field(usize, Ty),
     Global(GlobalId),
-    Fn,
-    Type,
+    Fn(FnId),
+    Type(TypeId),
     Module(usize),
 }
 
@@ -215,6 +305,10 @@ enum Target {
     Local(LocalId),
     Global(GlobalId),
     Field { obj: hir::Expr, index: usize },
+}
+
+fn lookup_scopes(scopes: &[HashMap<String, LocalId>], name: &str) -> Option<LocalId> {
+    scopes.iter().rev().find_map(|s| s.get(name).copied())
 }
 
 impl<'c, 'a> Cx<'c, 'a> {
@@ -229,11 +323,16 @@ impl<'c, 'a> Cx<'c, 'a> {
             in_ctor: false,
             init: None,
             loops: 0,
+            captures: Vec::new(),
+            outer: Vec::new(),
+            vars: Vec::new(),
+            lambdas: Vec::new(),
         }
     }
 
     fn new_local(&mut self, name: &str, ty: Ty) -> LocalId {
-        self.locals.push(hir::Local { name: name.to_string(), ty });
+        self.vars.push(VarInfo::default());
+        self.locals.push(LocalInfo { name: name.to_string(), ty, var: self.vars.len() - 1 });
         self.locals.len() - 1
     }
 
@@ -241,33 +340,238 @@ impl<'c, 'a> Cx<'c, 'a> {
         mk(K::Local(id), self.locals[id].ty)
     }
 
-    fn find_local(&self, name: &str) -> Option<LocalId> {
-        self.scopes.iter().rev().find_map(|s| s.get(name).copied())
+    /// Find a variable by name.  If it belongs to an enclosing function, the
+    /// lambda(s) in between capture it, and the local standing for it here is returned.
+    fn find_local(&mut self, name: &str) -> Option<LocalId> {
+        if let Some(id) = lookup_scopes(&self.scopes, name) {
+            return Some(id);
+        }
+        let (k, mut id) = (0..self.outer.len())
+            .rev()
+            .find_map(|k| lookup_scopes(&self.outer[k].scopes, name).map(|id| (k, id)))?;
+        let (ty, var) = {
+            let l = &self.outer[k].locals[id];
+            (l.ty, l.var)
+        };
+        self.vars[var].captured = true;
+        for j in (k + 1)..=self.outer.len() {
+            let (locals, scopes, captures) = if j < self.outer.len() {
+                let f = &mut self.outer[j];
+                (&mut f.locals, &mut f.scopes, &mut f.captures)
+            } else {
+                (&mut self.locals, &mut self.scopes, &mut self.captures)
+            };
+            locals.push(LocalInfo { name: name.to_string(), ty, var });
+            let hidden = locals.len() - 1;
+            scopes[0].insert(name.to_string(), hidden);
+            captures.push(hir::Capture { outer: id, inner: hidden });
+            id = hidden;
+        }
+        Some(id)
+    }
+
+    fn mark_mutated(&mut self, id: LocalId) {
+        let var = self.locals[id].var;
+        self.vars[var].mutated = true;
     }
 
     fn name(&self, ty: Ty) -> String {
         self.ck.t.ty_name(ty)
     }
 
-    fn this_expr(&self) -> Option<hir::Expr> {
-        self.this.map(|(id, _)| self.local_expr(id))
+    fn this_expr(&mut self) -> Option<hir::Expr> {
+        self.this?;
+        let id = self.find_local("this")?;
+        Some(self.local_expr(id))
     }
 
     /// Resolve a bare name: locals, then fields of `this`, then the module.
-    fn resolve(&self, n: &str) -> Option<Named> {
+    fn resolve(&mut self, n: &str) -> Option<Named> {
         if let Some(id) = self.find_local(n) {
             return Some(Named::Local(id));
         }
-        if let Some((_, ty)) = self.this
+        if let Some(ty) = self.this
             && let Some(i) = self.ck.t.types[ty].fields.iter().position(|f| f.name == n)
         {
             return Some(Named::Field(i, self.ck.t.types[ty].fields[i].ty));
         }
         match self.ck.t.lookup(self.module, n) {
-            Some(Sym::Fn(_)) => Some(Named::Fn),
-            Some(Sym::Type(_)) => Some(Named::Type),
+            Some(Sym::Fn(id)) => Some(Named::Fn(id)),
+            Some(Sym::Type(id)) => Some(Named::Type(id)),
             Some(Sym::Global(id)) => Some(Named::Global(id)),
             None => self.ck.t.scopes[self.module].modules.get(n).map(|&m| Named::Module(m)),
+        }
+    }
+
+    // ── lambdas ─────────────────────────────────────────────────
+
+    fn enter_frame(&mut self, ret: Option<Ty>) {
+        let saved = Frame {
+            locals: take(&mut self.locals),
+            scopes: replace(&mut self.scopes, vec![HashMap::new()]),
+            ret: self.ret,
+            this: self.this,
+            in_ctor: self.in_ctor,
+            init: self.init.take(),
+            loops: self.loops,
+            captures: take(&mut self.captures),
+        };
+        self.outer.push(saved);
+        (self.ret, self.in_ctor, self.loops) = (ret, false, 0);
+    }
+
+    fn exit_frame(&mut self) -> (Vec<LocalInfo>, Vec<hir::Capture>) {
+        let f = self.outer.pop().expect("exit_frame pairs with enter_frame");
+        let locals = replace(&mut self.locals, f.locals);
+        let captures = replace(&mut self.captures, f.captures);
+        (self.scopes, self.ret, self.this) = (f.scopes, f.ret, f.this);
+        (self.in_ctor, self.init, self.loops) = (f.in_ctor, f.init, f.loops);
+        (locals, captures)
+    }
+
+    fn convert_locals(&self, locals: Vec<LocalInfo>) -> Vec<hir::Local> {
+        locals
+            .into_iter()
+            .map(|l| {
+                let v = &self.vars[l.var];
+                hir::Local { name: l.name, ty: l.ty, boxed: v.captured && v.mutated }
+            })
+            .collect()
+    }
+
+    fn hir_locals(&mut self) -> Vec<hir::Local> {
+        let locals = take(&mut self.locals);
+        self.convert_locals(locals)
+    }
+
+    /// Hand the finished lambdas to the checker.  Called once the outermost
+    /// function is done, when every variable's capture/mutation status is known.
+    fn flush_lambdas(&mut self) {
+        for l in take(&mut self.lambdas) {
+            let func = hir::Func {
+                symbol: format!("lambda__{}", l.id),
+                kind: hir::FuncKind::Closure,
+                ret: l.ret,
+                n_params: l.n_params,
+                locals: self.convert_locals(l.locals),
+                body: Some(l.body),
+                captures: l.captures,
+            };
+            self.ck.out.borrow_mut()[l.id] = Some(func);
+        }
+    }
+
+    /// Check `{ params -> body }` against the function type it is expected to have.
+    fn lambda(
+        &mut self,
+        params: &[ast::LambdaParam],
+        explicit: bool,
+        body: &[ast::Stmt],
+        expected: Option<Ty>,
+        span: Span,
+    ) -> Result<hir::Expr> {
+        let sig = match expected {
+            Some(Ty::Fn(id)) => Some(self.ck.t.fn_sig(id)),
+            _ => None,
+        };
+
+        let mut ps: Vec<(String, Ty)> = Vec::new();
+        if explicit {
+            if let Some(sig) = &sig
+                && sig.params.len() != params.len()
+            {
+                return Err(Diagnostic::new(
+                    format!(
+                        "a function taking {} parameter(s) is expected here, but this lambda takes {}",
+                        sig.params.len(),
+                        params.len()
+                    ),
+                    span,
+                ));
+            }
+            for (i, p) in params.iter().enumerate() {
+                let written = p.ty.as_ref().map(|t| self.ck.t.resolve_value_type(self.module, t)).transpose()?;
+                let wanted = sig.as_ref().map(|s| s.params[i]);
+                let ty = match (written, wanted) {
+                    (Some(w), Some(e)) if w != e => {
+                        return Err(Diagnostic::new(
+                            format!("`{}` is {}, but {} is expected here", p.name.name, self.name(w), self.name(e)),
+                            p.name.span,
+                        ));
+                    }
+                    (Some(t), _) | (None, Some(t)) => t,
+                    (None, None) => {
+                        return Err(Diagnostic::new(format!("cannot infer the type of `{}`", p.name.name), p.name.span)
+                            .hint(format!("write `{}: Type`", p.name.name)));
+                    }
+                };
+                ps.push((p.name.name.clone(), ty));
+            }
+        } else if let Some(sig) = &sig {
+            match sig.params.len() {
+                0 => {}
+                1 => ps.push(("it".into(), sig.params[0])),
+                n => {
+                    return Err(Diagnostic::new(format!("this lambda must take {n} parameters"), span)
+                        .hint("name them: `{ a, b -> … }`"));
+                }
+            }
+        }
+        let want_ret = sig.as_ref().map(|s| s.ret);
+
+        let id = self.ck.reserve_fn();
+        self.enter_frame(want_ret);
+        for (n, t) in &ps {
+            let l = self.new_local(n, *t);
+            self.scopes[0].insert(n.clone(), l);
+        }
+        let result = self.lambda_body(body, want_ret, span);
+        let (locals, captures) = self.exit_frame();
+        let (stmts, ret) = result?;
+
+        if captures.len() > MAX_CAPTURES {
+            return Err(Diagnostic::new(format!("a lambda can capture at most {MAX_CAPTURES} variables"), span));
+        }
+        self.lambdas.push(PendingLambda { id, ret, n_params: ps.len(), locals, body: stmts, captures });
+        let ty = self.ck.t.intern_fn(ps.iter().map(|p| p.1).collect(), ret);
+        Ok(mk(K::Closure { func: id }, ty))
+    }
+
+    /// The statements of a lambda; the last expression is its result.
+    fn lambda_body(&mut self, body: &[ast::Stmt], want_ret: Option<Ty>, span: Span) -> Result<(Vec<hir::Stmt>, Ty)> {
+        self.scopes.push(HashMap::new());
+        let mut out = Vec::new();
+        let mut result = (want_ret == Some(Ty::Void)).then_some(Ty::Void);
+        for (i, s) in body.iter().enumerate() {
+            match &s.kind {
+                StmtKind::Expr(e) if i + 1 == body.len() && want_ret != Some(Ty::Void) => {
+                    let v = self.expr_expected(e, want_ret)?;
+                    let v = match want_ret {
+                        Some(want) => {
+                            if v.ty == Ty::Void {
+                                return Err(Diagnostic::new(
+                                    format!("this lambda must produce a {}", self.name(want)),
+                                    e.span,
+                                ));
+                            }
+                            self.coerce(v, want, e.span)?
+                        }
+                        None => v,
+                    };
+                    result = Some(v.ty);
+                    out.push(if v.ty == Ty::Void { hir::Stmt::Expr(v) } else { hir::Stmt::Return(Some(v)) });
+                }
+                _ => self.stmt(s, &mut out)?,
+            }
+        }
+        self.scopes.pop();
+        match (want_ret, result) {
+            (Some(want), None) => Err(Diagnostic::new(
+                format!("this lambda must end with a {} value", self.name(want)),
+                span,
+            )),
+            (None, None) => Ok((out, Ty::Void)),
+            (_, Some(ty)) => Ok((out, ty)),
         }
     }
 
@@ -303,7 +607,7 @@ impl<'c, 'a> Cx<'c, 'a> {
         };
         let declared = self.ck.t.globals[gid].ty.get();
         let init_span = init.as_ref().map(|e| e.span);
-        let init = init.as_ref().map(|e| self.value(e)).transpose()?;
+        let init = init.as_ref().map(|e| self.value_expected(e, declared)).transpose()?;
         let value = match (declared, init) {
             (Some(ty), Some(v)) => self.coerce(v, ty, init_span.unwrap())?,
             (Some(ty), None) => default_expr(ty),
@@ -319,9 +623,9 @@ impl<'c, 'a> Cx<'c, 'a> {
     fn stmt(&mut self, s: &ast::Stmt, out: &mut Vec<hir::Stmt>) -> Result<()> {
         match &s.kind {
             StmtKind::Let { name, ty, init } => {
-                let declared = ty.as_ref().map(|t| self.ck.t.resolve_type(self.module, t)).transpose()?;
+                let declared = ty.as_ref().map(|t| self.ck.t.resolve_value_type(self.module, t)).transpose()?;
                 let init_span = init.as_ref().map(|e| e.span);
-                let init = init.as_ref().map(|e| self.value(e)).transpose()?;
+                let init = init.as_ref().map(|e| self.value_expected(e, declared)).transpose()?;
                 let (local_ty, init) = match (declared, init) {
                     (Some(ty), Some(e)) => (ty, Some(self.coerce(e, ty, init_span.unwrap())?)),
                     (Some(ty), None) => (ty, None),
@@ -377,7 +681,7 @@ impl<'c, 'a> Cx<'c, 'a> {
                             .hint("add `-> Type` to the signature"));
                     }
                     (Some(e), _, Some(ret)) => {
-                        let v = self.value(e)?;
+                        let v = self.value_expected(e, Some(ret))?;
                         Some(self.coerce(v, ret, e.span)?)
                     }
                 };
@@ -459,7 +763,8 @@ impl<'c, 'a> Cx<'c, 'a> {
             A::Name(n) => match self.resolve(n) {
                 Some(Named::Local(id)) => Ok((Target::Local(id), self.locals[id].ty)),
                 Some(Named::Field(index, ty)) => {
-                    Ok((Target::Field { obj: self.this_expr().expect("fields imply `this`"), index }, ty))
+                    let obj = self.this_expr().expect("fields imply `this`");
+                    Ok((Target::Field { obj, index }, ty))
                 }
                 Some(Named::Global(g)) => Ok((Target::Global(g), self.global_use(g, target.span)?)),
                 Some(_) => Err(Diagnostic::new(format!("cannot assign to `{n}`"), target.span)),
@@ -487,7 +792,7 @@ impl<'c, 'a> Cx<'c, 'a> {
     ) -> Result<()> {
         let (target, ty) = self.target(target)?;
         let value_span = value.span;
-        let value = self.value(value)?;
+        let value = self.value_expected(value, (op == AssignOp::Set).then_some(ty))?;
 
         // A field target is evaluated once even for `a.b += 1`.
         let target = match target {
@@ -512,6 +817,9 @@ impl<'c, 'a> Cx<'c, 'a> {
             let r = self.binary(bin, current, value, span)?;
             self.coerce(r, ty, span)?
         };
+        if let Target::Local(id) = target {
+            self.mark_mutated(id);
+        }
         out.push(match target {
             Target::Local(id) => hir::Stmt::Set(id, new),
             Target::Global(g) => hir::Stmt::SetGlobal(g, new),
@@ -533,13 +841,13 @@ impl<'c, 'a> Cx<'c, 'a> {
     }
 
     /// `module.name` where `module` is an imported module alias and `name` a global.
-    fn module_global(&self, obj: &ast::Expr, field: &ast::Ident) -> Result<Option<GlobalId>> {
+    fn module_global(&mut self, obj: &ast::Expr, field: &ast::Ident) -> Result<Option<GlobalId>> {
         let A::Name(a) = &obj.kind else { return Ok(None) };
         let Some(Named::Module(m)) = self.resolve(a) else { return Ok(None) };
         match self.ck.t.scopes[m].items.get(&field.name) {
             Some(&Sym::Global(g)) => Ok(Some(g)),
-            Some(_) => Err(Diagnostic::new(format!("`{}.{}` is not a variable", a, field.name), field.span)),
-            None => Err(Diagnostic::new(format!("module `{a}` has no `{}`", field.name), field.span)),
+            // Functions and types are handled by the callers (calls, function values).
+            _ => Ok(None),
         }
     }
 
@@ -547,11 +855,24 @@ impl<'c, 'a> Cx<'c, 'a> {
 
     /// Reject expressions that produce no value.
     fn value(&mut self, e: &ast::Expr) -> Result<hir::Expr> {
-        let v = self.expr(e)?;
+        self.value_expected(e, None)
+    }
+
+    fn value_expected(&mut self, e: &ast::Expr, expected: Option<Ty>) -> Result<hir::Expr> {
+        let v = self.expr_expected(e, expected)?;
         if v.ty == Ty::Void {
             return Err(Diagnostic::new("this expression does not produce a value", e.span));
         }
         Ok(v)
+    }
+
+    /// Check an expression that is expected to have type `expected`.  Only
+    /// lambdas use the hint: it supplies their parameter types.
+    fn expr_expected(&mut self, e: &ast::Expr, expected: Option<Ty>) -> Result<hir::Expr> {
+        match &e.kind {
+            A::Lambda { params, explicit, body } => self.lambda(params, *explicit, body, expected, e.span),
+            _ => self.expr(e),
+        }
     }
 
     fn coerce(&self, e: hir::Expr, to: Ty, span: Span) -> Result<hir::Expr> {
@@ -589,6 +910,7 @@ impl<'c, 'a> Cx<'c, 'a> {
                 );
                 Ok(mk(K::Block(vec![hir::Stmt::Let(tmp, Some(e))], Box::new(cond)), Ty::Str))
             }
+            Ty::Fn(_) => Err(Diagnostic::new("cannot turn a function into text", span)),
             Ty::Void => Err(Diagnostic::new("cannot turn nothing into text", span)),
         }
     }
@@ -623,18 +945,15 @@ impl<'c, 'a> Cx<'c, 'a> {
             A::Name(n) => match self.resolve(n) {
                 Some(Named::Local(id)) => self.local_expr(id),
                 Some(Named::Field(index, ty)) => {
-                    mk(K::Field { obj: Box::new(self.this_expr().expect("fields imply `this`")), index }, ty)
+                    let obj = self.this_expr().expect("fields imply `this`");
+                    mk(K::Field { obj: Box::new(obj), index }, ty)
                 }
                 Some(Named::Global(g)) => {
                     let ty = self.global_use(g, e.span)?;
                     mk(K::Global(g), ty)
                 }
-                Some(Named::Fn) => {
-                    return Err(Diagnostic::new(format!("`{n}` is a function; call it with `{n}(...)`"), e.span));
-                }
-                Some(Named::Type) => {
-                    return Err(Diagnostic::new(format!("`{n}` is a type; construct one with `{n}(...)`"), e.span));
-                }
+                Some(Named::Fn(id)) => self.fn_value(id, e.span)?,
+                Some(Named::Type(ty)) => self.fn_value(self.ck.t.types[ty].ctor, e.span)?,
                 Some(Named::Module(_)) => {
                     return Err(Diagnostic::new(format!("`{n}` is a module, not a value"), e.span)
                         .hint(format!("call one of its functions, e.g. `{n}.name(...)`")));
@@ -655,12 +974,13 @@ impl<'c, 'a> Cx<'c, 'a> {
                     return Ok(mk(K::Global(g), ty));
                 }
                 if let A::Name(a) = &obj.kind
-                    && matches!(self.resolve(a), Some(Named::Module(_)))
+                    && let Some(Named::Module(m)) = self.resolve(a)
                 {
-                    return Err(Diagnostic::new(
-                        format!("`{a}.{}` is not a value; call it with `(...)`", field.name),
-                        e.span,
-                    ));
+                    return match self.ck.t.scopes[m].items.get(&field.name) {
+                        Some(&Sym::Fn(id)) => self.fn_value(id, e.span),
+                        Some(&Sym::Type(ty)) => self.fn_value(self.ck.t.types[ty].ctor, e.span),
+                        _ => Err(Diagnostic::new(format!("module `{a}` has no `{}`", field.name), field.span)),
+                    };
                 }
                 let obj = self.value(obj)?;
                 let (index, ty) = self.field_of(&obj, field)?;
@@ -701,6 +1021,9 @@ impl<'c, 'a> Cx<'c, 'a> {
             A::Range { .. } => {
                 return Err(Diagnostic::new("a range can only be used in a `for` loop or after `in`", e.span));
             }
+
+            // Without an expected function type, only fully annotated lambdas can be checked.
+            A::Lambda { params, explicit, body } => self.lambda(params, *explicit, body, None, e.span)?,
         })
     }
 
@@ -845,21 +1168,30 @@ impl<'c, 'a> Cx<'c, 'a> {
     fn call(&mut self, callee: &ast::Expr, args: &[ast::Arg], span: Span) -> Result<hir::Expr> {
         match &callee.kind {
             A::Name(n) => {
-                if self.find_local(n).is_some() {
-                    return Err(Diagnostic::new(format!("`{n}` is a variable, not a function"), callee.span));
+                // A variable holding a function.
+                if let Some(id) = self.find_local(n) {
+                    let f = self.local_expr(id);
+                    return self.call_value(f, args, span, n);
                 }
-                // A method of the current object can be called bare.
-                if let Some((_, ty)) = self.this
-                    && let Some(&m) = self.ck.t.types[ty].methods.get(n)
-                {
-                    let recv = self.this_expr();
-                    return self.call_fn(m, recv, args, span);
+                if let Some(ty) = self.this {
+                    // A method of the current object can be called bare…
+                    if let Some(&m) = self.ck.t.types[ty].methods.get(n) {
+                        let recv = self.this_expr();
+                        return self.call_fn(m, recv, args, span);
+                    }
+                    // …and so can a field that holds a function.
+                    if let Some(i) = self.ck.t.types[ty].fields.iter().position(|f| f.name == *n) {
+                        let obj = self.this_expr().expect("fields imply `this`");
+                        let f = mk(K::Field { obj: Box::new(obj), index: i }, self.ck.t.types[ty].fields[i].ty);
+                        return self.call_value(f, args, span, n);
+                    }
                 }
                 match self.ck.t.lookup(self.module, n) {
                     Some(Sym::Fn(id)) => self.call_fn(id, None, args, span),
                     Some(Sym::Type(ty)) => self.call_fn(self.ck.t.types[ty].ctor, None, args, span),
-                    Some(Sym::Global(_)) => {
-                        Err(Diagnostic::new(format!("`{n}` is a variable, not a function"), callee.span))
+                    Some(Sym::Global(g)) => {
+                        let ty = self.global_use(g, callee.span)?;
+                        self.call_value(mk(K::Global(g), ty), args, span, n)
                     }
                     None if n == "print" || n == "println" => self.print(n == "println", args, span),
                     None => Err(Diagnostic::new(format!("undefined function `{n}`"), callee.span)),
@@ -874,10 +1206,10 @@ impl<'c, 'a> Cx<'c, 'a> {
                             return match self.ck.t.scopes[target].items.get(&member.name) {
                                 Some(&Sym::Fn(id)) => self.call_fn(id, None, args, span),
                                 Some(&Sym::Type(ty)) => self.call_fn(self.ck.t.types[ty].ctor, None, args, span),
-                                Some(&Sym::Global(_)) => Err(Diagnostic::new(
-                                    format!("`{a}.{}` is a variable, not a function", member.name),
-                                    member.span,
-                                )),
+                                Some(&Sym::Global(g)) => {
+                                    let ty = self.global_use(g, member.span)?;
+                                    self.call_value(mk(K::Global(g), ty), args, span, &format!("{a}.{}", member.name))
+                                }
                                 None => Err(Diagnostic::new(
                                     format!("module `{a}` has no function or type `{}`", member.name),
                                     member.span,
@@ -892,7 +1224,7 @@ impl<'c, 'a> Cx<'c, 'a> {
                     }
                 }
 
-                // `value.method(...)`
+                // `value.method(...)`, or a function stored in a field: `value.callback(...)`
                 let recv = self.value(obj)?;
                 let Ty::Obj(ty) = recv.ty else {
                     return Err(Diagnostic::new(
@@ -900,17 +1232,62 @@ impl<'c, 'a> Cx<'c, 'a> {
                         member.span,
                     ));
                 };
-                match self.ck.t.types[ty].methods.get(&member.name) {
-                    Some(&id) => self.call_fn(id, Some(recv), args, span),
-                    None => Err(Diagnostic::new(
-                        format!("`{}` has no method `{}`", self.ck.t.types[ty].name, member.name),
-                        member.span,
-                    )),
+                if let Some(&id) = self.ck.t.types[ty].methods.get(&member.name) {
+                    return self.call_fn(id, Some(recv), args, span);
                 }
+                if let Some(i) = self.ck.t.types[ty].fields.iter().position(|f| f.name == member.name) {
+                    let fty = self.ck.t.types[ty].fields[i].ty;
+                    let f = mk(K::Field { obj: Box::new(recv), index: i }, fty);
+                    return self.call_value(f, args, span, &member.name);
+                }
+                Err(Diagnostic::new(
+                    format!("`{}` has no method `{}`", self.ck.t.types[ty].name, member.name),
+                    member.span,
+                ))
             }
 
-            _ => Err(Diagnostic::new("this expression cannot be called", callee.span)),
+            // `make()(x)`, `(f)(x)`, …
+            _ => {
+                let f = self.value(callee)?;
+                self.call_value(f, args, span, "this expression")
+            }
         }
+    }
+
+    /// Call a function value.
+    fn call_value(&mut self, callee: hir::Expr, args: &[ast::Arg], span: Span, what: &str) -> Result<hir::Expr> {
+        let Ty::Fn(sig_id) = callee.ty else {
+            return Err(Diagnostic::new(
+                format!("cannot call `{what}`: it is a {}, not a function", self.name(callee.ty)),
+                span,
+            ));
+        };
+        let sig = self.ck.t.fn_sig(sig_id);
+        if let Some(n) = args.iter().find_map(|a| a.name.as_ref()) {
+            return Err(Diagnostic::new("named arguments need a declared function", n.span)
+                .hint("function values take their arguments by position"));
+        }
+        if args.len() != sig.params.len() {
+            return Err(Diagnostic::new(
+                format!("this function takes {} argument(s) but {} were given", sig.params.len(), args.len()),
+                span,
+            ));
+        }
+        let mut out = Vec::new();
+        for (a, &want) in args.iter().zip(&sig.params) {
+            let v = self.value_expected(&a.value, Some(want))?;
+            out.push(self.coerce(v, want, a.value.span)?);
+        }
+        Ok(mk(K::CallValue { callee: Box::new(callee), args: out }, sig.ret))
+    }
+
+    /// A declared function (or constructor) used as a value.
+    fn fn_value(&mut self, id: FnId, span: Span) -> Result<hir::Expr> {
+        let ck = self.ck;
+        let ret = ck.ret_of(id, span)?;
+        let params: Vec<Ty> = ck.t.funcs[id].params.iter().map(|p| p.ty).collect();
+        let thunk = ck.thunk_for(id, ret);
+        Ok(mk(K::Closure { func: thunk }, ck.t.intern_fn(params, ret)))
     }
 
     /// Call `id`, matching arguments to parameters by position and name and
@@ -965,7 +1342,7 @@ impl<'c, 'a> Cx<'c, 'a> {
         // Evaluate arguments in the order they were written.
         let mut values: Vec<Option<hir::Expr>> = (0..params.len()).map(|_| None).collect();
         for (a, &pi) in args.iter().zip(&order) {
-            let v = self.value(&a.value)?;
+            let v = self.value_expected(&a.value, Some(params[pi].ty))?;
             values[pi] = Some(self.coerce(v, params[pi].ty, a.value.span)?);
         }
 
@@ -1008,7 +1385,11 @@ impl<'c, 'a> Cx<'c, 'a> {
                 return Err(Diagnostic::new("`print` doesn't take named arguments", n.span));
             }
             let v = self.value(&a.value)?;
-            out.push(if matches!(v.ty, Ty::Obj(_)) { self.stringify(v, a.value.span)? } else { v });
+            out.push(match v.ty {
+                Ty::Obj(_) => self.stringify(v, a.value.span)?,
+                Ty::Fn(_) => return Err(Diagnostic::new("cannot print a function", a.value.span)),
+                _ => v,
+            });
         }
         Ok(mk(K::Print { newline, args: out }, Ty::Void))
     }
@@ -1020,7 +1401,7 @@ fn default_expr(ty: Ty) -> hir::Expr {
         Ty::Float => mk(K::Float(0.0), Ty::Float),
         Ty::Bool => mk(K::Bool(false), Ty::Bool),
         Ty::Str => mk(K::Str(String::new()), Ty::Str),
-        Ty::Obj(_) => mk(K::Null, ty),
+        Ty::Obj(_) | Ty::Fn(_) => mk(K::Null, ty),
         Ty::Void => unit(),
     }
 }

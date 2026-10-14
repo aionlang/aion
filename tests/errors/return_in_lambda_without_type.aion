@@ -1,0 +1,2 @@
+// error: `return` needs the function to declare its return type
+f := { x: Int -> return x }

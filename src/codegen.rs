@@ -125,7 +125,7 @@ fn ir(ty: Ty) -> &'static str {
         Ty::Int => "i64",
         Ty::Float => "double",
         Ty::Bool => "i1",
-        Ty::Str | Ty::Obj(_) => "ptr",
+        Ty::Str | Ty::Obj(_) | Ty::Fn(_) => "ptr",
         Ty::Void => "void",
     }
 }
@@ -223,9 +223,25 @@ impl<'a> FnGen<'a> {
     }
 
     fn generate(mut self) -> String {
-        for (i, param) in self.f.params().iter().enumerate() {
+        for i in 0..self.f.n_params {
             self.declare(i);
-            self.store_local(i, &format!("%arg{i}"), param.ty);
+            self.init_local(i, &format!("%arg{i}"));
+        }
+        // A closure copies the variables it captured out of its closure object.
+        for (k, c) in self.f.captures.iter().enumerate() {
+            let (ty, boxed) = (self.f.locals[c.inner].ty, self.f.locals[c.inner].boxed);
+            let addr = self.field_addr("%env", k + 1);
+            self.declare(c.inner);
+            if boxed {
+                // The cell itself was captured: share it.
+                let cell = self.tmp();
+                self.line(format!("{cell} = load ptr, ptr {addr}"));
+                let dest = self.local_addr(c.inner);
+                self.line(format!("store ptr {cell}, ptr {dest}"));
+            } else {
+                let v = self.load_cell(&addr, ty);
+                self.store_plain(c.inner, &v);
+            }
         }
         for s in self.f.body.as_ref().expect("only functions with bodies are generated") {
             self.stmt(s);
@@ -239,8 +255,11 @@ impl<'a> FnGen<'a> {
             }
         }
 
-        let params: Vec<String> =
-            self.f.params().iter().enumerate().map(|(i, l)| format!("{} %arg{i}", ir(l.ty))).collect();
+        let mut params: Vec<String> = Vec::new();
+        if self.f.kind == FuncKind::Closure {
+            params.push("ptr %env".to_string());
+        }
+        params.extend(self.f.params().iter().enumerate().map(|(i, l)| format!("{} %arg{i}", ir(l.ty))));
         let mut out = format!("define {} @\"{}\"({}) {{\nentry:\n", ir(self.f.ret), self.f.symbol, params.join(", "));
 
         let n = self.nslots;
@@ -341,7 +360,8 @@ impl<'a> FnGen<'a> {
 
     fn declare(&mut self, id: LocalId) {
         let ty = self.f.locals[id].ty;
-        let st = if ty.is_gc() {
+        // A boxed variable's slot holds the pointer to its shared cell.
+        let st = if ty.is_gc() || self.f.locals[id].boxed {
             Storage::Slot(self.new_slot())
         } else {
             let name = format!("%l{id}");
@@ -378,13 +398,80 @@ impl<'a> FnGen<'a> {
         }
     }
 
-    fn store_local(&mut self, id: LocalId, v: &str, ty: Ty) {
+    /// Write `v` into a 8-byte cell (object field, box, closure slot).
+    /// `Bool` is widened so every cell is a full word.
+    fn store_cell(&mut self, addr: &str, ty: Ty, v: &str) {
+        if ty == Ty::Bool {
+            let z = self.tmp();
+            self.line(format!("{z} = zext i1 {v} to i64"));
+            self.line(format!("store i64 {z}, ptr {addr}"));
+        } else {
+            self.line(format!("store {} {v}, ptr {addr}", ir(ty)));
+        }
+    }
+
+    fn load_cell(&mut self, addr: &str, ty: Ty) -> String {
+        let t = self.tmp();
+        if ty == Ty::Bool {
+            self.line(format!("{t} = load i64, ptr {addr}"));
+            let b = self.tmp();
+            self.line(format!("{b} = icmp ne i64 {t}, 0"));
+            b
+        } else {
+            self.line(format!("{t} = load {}, ptr {addr}", ir(ty)));
+            t
+        }
+    }
+
+    /// Pointer to the shared cell of a boxed local.
+    fn box_ptr(&mut self, id: LocalId) -> String {
+        let addr = self.local_addr(id);
+        let t = self.tmp();
+        self.line(format!("{t} = load ptr, ptr {addr}"));
+        t
+    }
+
+    /// First write to a variable: allocates its cell if it is boxed.
+    fn init_local(&mut self, id: LocalId, v: &str) {
+        let ty = self.f.locals[id].ty;
+        if self.f.locals[id].boxed {
+            let mask = i64::from(ty.is_gc());
+            let cell = self.call_value("ptr", &format!("@aion_new_object(i64 1, i64 {mask})"));
+            let dest = self.local_addr(id);
+            self.line(format!("store ptr {cell}, ptr {dest}"));
+            self.store_cell(&cell, ty, v);
+        } else {
+            self.store_plain(id, v);
+        }
+    }
+
+    /// Reassign an existing variable.
+    fn assign_local(&mut self, id: LocalId, v: &str) {
+        let ty = self.f.locals[id].ty;
+        if self.f.locals[id].boxed {
+            let cell = self.box_ptr(id);
+            self.store_cell(&cell, ty, v);
+        } else {
+            self.store_plain(id, v);
+        }
+    }
+
+    fn store_plain(&mut self, id: LocalId, v: &str) {
+        let ty = self.f.locals[id].ty;
         let addr = self.local_addr(id);
         self.line(format!("store {} {v}, ptr {addr}", ir(ty)));
     }
 
     fn load_local(&mut self, id: LocalId) -> String {
         let ty = self.f.locals[id].ty;
+        if self.f.locals[id].boxed {
+            let cell = self.box_ptr(id);
+            let v = self.load_cell(&cell, ty);
+            if ty.is_gc() {
+                self.root(&v);
+            }
+            return v;
+        }
         let addr = self.local_addr(id);
         let t = self.tmp();
         self.line(format!("{t} = load {}, ptr {addr}", ir(ty)));
@@ -412,24 +499,18 @@ impl<'a> FnGen<'a> {
                     None if ty == Ty::Str => self.pool.operand(""),
                     None => Self::default_value(ty).to_string(),
                 };
-                self.store_local(*id, &v, ty);
+                self.init_local(*id, &v);
             }
             Stmt::Set(id, e) => {
                 let v = self.expr(e);
-                self.store_local(*id, &v, e.ty);
+                self.assign_local(*id, &v);
             }
             Stmt::SetField { obj, index, value } => {
                 let o = self.expr(obj);
                 self.null_check(&o);
                 let v = self.expr(value);
                 let addr = self.field_addr(&o, *index);
-                if value.ty == Ty::Bool {
-                    let z = self.tmp();
-                    self.line(format!("{z} = zext i1 {v} to i64"));
-                    self.line(format!("store i64 {z}, ptr {addr}"));
-                } else {
-                    self.line(format!("store {} {v}, ptr {addr}", ir(value.ty)));
-                }
+                self.store_cell(&addr, value.ty, &v);
             }
             Stmt::Expr(e) => {
                 self.expr(e);
@@ -511,19 +592,11 @@ impl<'a> FnGen<'a> {
                 let o = self.expr(obj);
                 self.null_check(&o);
                 let addr = self.field_addr(&o, *index);
-                let t = self.tmp();
-                if e.ty == Ty::Bool {
-                    self.line(format!("{t} = load i64, ptr {addr}"));
-                    let b = self.tmp();
-                    self.line(format!("{b} = icmp ne i64 {t}, 0"));
-                    b
-                } else {
-                    self.line(format!("{t} = load {}, ptr {addr}", ir(e.ty)));
-                    if e.ty.is_gc() {
-                        self.root(&t);
-                    }
-                    t
+                let t = self.load_cell(&addr, e.ty);
+                if e.ty.is_gc() {
+                    self.root(&t);
                 }
+                t
             }
 
             ExprKind::Call { func, args } => {
@@ -549,6 +622,56 @@ impl<'a> FnGen<'a> {
                 let ret = if is_extern && callee.ret == Ty::Bool { "zeroext i1" } else { ir(callee.ret) };
                 let t = self.call_value(ret, &call);
                 if callee.ret.is_gc() {
+                    self.root(&t);
+                }
+                t
+            }
+
+            ExprKind::Closure { func } => {
+                let f = &self.p.funcs[*func];
+                let (symbol, captures) = (f.symbol.as_str(), &f.captures);
+                // Slot 0 holds the code address (not a pointer the collector follows);
+                // slot k+1 holds captured variable k.
+                let mut mask = 0u64;
+                for (k, c) in captures.iter().enumerate() {
+                    let l = &self.f.locals[c.outer];
+                    if l.boxed || l.ty.is_gc() {
+                        mask |= 1 << (k + 1);
+                    }
+                }
+                let o = self.call_value(
+                    "ptr",
+                    &format!("@aion_new_object(i64 {}, i64 {})", captures.len() + 1, mask as i64),
+                );
+                self.root(&o);
+                self.line(format!("store ptr @\"{symbol}\", ptr {o}"));
+                for (k, c) in captures.iter().enumerate() {
+                    let (ty, boxed) = (self.f.locals[c.outer].ty, self.f.locals[c.outer].boxed);
+                    // A boxed variable is shared by handing over its cell.
+                    let (v, cell_ty) = if boxed { (self.box_ptr(c.outer), Ty::Str) } else { (self.load_local(c.outer), ty) };
+                    let addr = self.field_addr(&o, k + 1);
+                    self.store_cell(&addr, cell_ty, &v);
+                }
+                o
+            }
+
+            ExprKind::CallValue { callee, args } => {
+                let c = self.expr(callee);
+                let mut ops = vec![format!("ptr {c}")];
+                for a in args {
+                    let v = self.expr(a);
+                    ops.push(format!("{} {v}", ir(a.ty)));
+                }
+                self.null_check(&c);
+                let code = self.tmp();
+                self.line(format!("{code} = load ptr, ptr {c}"));
+                let call = format!("{code}({})", ops.join(", "));
+                if e.ty == Ty::Void {
+                    self.line(format!("call void {call}"));
+                    return String::new();
+                }
+                let t = self.call_value(ir(e.ty), &call);
+                if e.ty.is_gc() {
                     self.root(&t);
                 }
                 t

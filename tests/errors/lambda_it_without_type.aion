@@ -1,0 +1,2 @@
+// error: undefined variable `it`
+f := { it + 1 }

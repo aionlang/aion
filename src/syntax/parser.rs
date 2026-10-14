@@ -109,9 +109,25 @@ impl<'a> Parser<'a> {
     }
 
     fn type_ref(&mut self) -> Result<TypeRef> {
+        // `(A, B) -> R`
+        if self.peek() == Some(Token::LParen) {
+            let start = self.bump().span;
+            let mut params = Vec::new();
+            while self.peek() != Some(Token::RParen) {
+                params.push(self.type_ref()?);
+                if !self.eat(Token::Comma) {
+                    break;
+                }
+            }
+            self.expect(Token::RParen)?;
+            self.expect(Token::Arrow)?;
+            let ret = self.type_ref()?;
+            let span = start.to(ret.span);
+            return Ok(TypeRef { kind: TypeKind::Fn { params, ret: Box::new(ret) }, span });
+        }
         let id = self.ident()?;
         self.eat(Token::Question); // nullability is not tracked yet
-        Ok(TypeRef { name: id.name, span: id.span })
+        Ok(TypeRef { kind: TypeKind::Named(id.name), span: id.span })
     }
 
     /// Run `f` with the given newline / brace context, restoring it afterwards.
@@ -516,6 +532,26 @@ impl<'a> Parser<'a> {
                     let span = e.span.to(close.span);
                     e = Expr { kind: ExprKind::Call { callee: Box::new(e), args }, span };
                 }
+                // A trailing lambda: `repeat(3) { … }`, `run { … }`, `xs.each { … }`.
+                Some(Token::LBrace)
+                    if !self.nl()
+                        && !self.no_brace
+                        && matches!(e.kind, ExprKind::Name(_) | ExprKind::Field(..) | ExprKind::Call { .. }) =>
+                {
+                    let lambda = self.lambda()?;
+                    let span = e.span.to(lambda.span);
+                    let arg = Arg { name: None, value: lambda };
+                    e = match e.kind {
+                        ExprKind::Call { callee, mut args } => {
+                            args.push(arg);
+                            Expr { kind: ExprKind::Call { callee, args }, span }
+                        }
+                        kind => Expr {
+                            kind: ExprKind::Call { callee: Box::new(Expr { kind, span: e.span }), args: vec![arg] },
+                            span,
+                        },
+                    };
+                }
                 _ => return Ok(e),
             }
         }
@@ -576,9 +612,56 @@ impl<'a> Parser<'a> {
             }
             Token::If => return self.if_expr(),
             Token::When => return self.when_expr(),
+            Token::LBrace => return self.lambda(),
             _ => return Err(self.expected("an expression")),
         };
         Ok(Expr { kind, span })
+    }
+
+    /// `{ params -> body }` or `{ body }`.
+    fn lambda(&mut self) -> Result<Expr> {
+        let start = self.expect(Token::LBrace)?.span;
+        let (params, explicit, body) = self.scoped(false, false, |p| {
+            let save = p.pos;
+            let (params, explicit) = match p.lambda_params() {
+                Some(params) => (params, true),
+                None => {
+                    p.pos = save;
+                    (Vec::new(), false)
+                }
+            };
+            let mut body = Vec::new();
+            loop {
+                match p.peek() {
+                    Some(Token::RBrace) => break,
+                    Some(Token::Semi) => {
+                        p.bump();
+                    }
+                    None => return Err(p.expected("`}`")),
+                    Some(_) => body.push(p.stmt()?),
+                }
+            }
+            Ok((params, explicit, body))
+        })?;
+        let end = self.expect(Token::RBrace)?.span;
+        Ok(Expr { kind: ExprKind::Lambda { params, explicit, body }, span: start.to(end) })
+    }
+
+    /// `a, b: Int ->`, or just `->`.  `None` if this isn't a parameter list.
+    fn lambda_params(&mut self) -> Option<Vec<LambdaParam>> {
+        let mut params = Vec::new();
+        if self.eat(Token::Arrow) {
+            return Some(params);
+        }
+        loop {
+            let name = self.ident().ok()?;
+            let ty = if self.eat(Token::Colon) { Some(self.type_ref().ok()?) } else { None };
+            params.push(LambdaParam { name, ty });
+            if self.eat(Token::Comma) {
+                continue;
+            }
+            return self.eat(Token::Arrow).then_some(params);
+        }
     }
 
     fn if_expr(&mut self) -> Result<Expr> {
@@ -982,6 +1065,65 @@ mod tests {
         assert!(err("#").contains("unexpected character"));
         assert!(err("99999999999999999999").contains("too large"));
         assert!(err("x in 5").contains("needs a range"));
+    }
+
+    fn lambda_of(e: &Expr) -> (usize, bool, usize) {
+        let ExprKind::Lambda { params, explicit, body } = &e.kind else { panic!("expected a lambda, got {e:?}") };
+        (params.len(), *explicit, body.len())
+    }
+
+    #[test]
+    fn lambda_forms() {
+        assert_eq!(lambda_of(&parse_expr("{ it + 1 }")), (0, false, 1));
+        assert_eq!(lambda_of(&parse_expr("{ x -> x }")), (1, true, 1));
+        assert_eq!(lambda_of(&parse_expr("{ a, b: Int -> a }")), (2, true, 1));
+        assert_eq!(lambda_of(&parse_expr("{ -> 1 }")), (0, true, 1));
+        assert_eq!(lambda_of(&parse_expr("{ n += 1; n }")), (0, false, 2));
+        assert_eq!(lambda_of(&parse_expr("{ f: (Int) -> Int, x: Int -> f(x) }")), (2, true, 1));
+    }
+
+    #[test]
+    fn trailing_lambdas_join_the_call() {
+        let args = |src: &str| {
+            let ExprKind::Call { args, .. } = parse_expr(src).kind else { panic!("not a call") };
+            args.len()
+        };
+        assert_eq!(args("f(1) { it }"), 2);
+        assert_eq!(args("run { 1 }"), 1);
+        assert_eq!(args("xs.each { it }"), 1);
+        assert_eq!(args("f(1, 2) { it }"), 3);
+    }
+
+    #[test]
+    fn a_brace_after_a_header_expression_is_the_body_not_a_lambda() {
+        // `if f(x) { … }` — the block belongs to the `if`.
+        let m = module("if f(x) { g() }
+while ok(1) { step() }
+for i in 0..n(3) { p(i) }
+");
+        assert_eq!(m.items.len(), 3);
+        let Item::Stmt(s) = &m.items[0] else { panic!() };
+        let StmtKind::Expr(e) = &s.kind else { panic!() };
+        let ExprKind::If { cond, then, .. } = &e.kind else { panic!("{e:?}") };
+        assert!(matches!(&cond.kind, ExprKind::Call { args, .. } if args.len() == 1));
+        assert_eq!(then.len(), 1);
+    }
+
+    #[test]
+    fn a_brace_on_a_new_line_is_not_a_trailing_lambda() {
+        let m = module("f(1)
+{ it }
+");
+        assert_eq!(m.items.len(), 2);
+    }
+
+    #[test]
+    fn function_types() {
+        let m = module("fn f(g: (Int, String) -> Bool, h: () -> Unit) -> (Int) -> Int = x\n");
+        let Item::Fn(f) = &m.items[0] else { panic!() };
+        assert!(matches!(&f.params[0].ty.kind, TypeKind::Fn { params, .. } if params.len() == 2));
+        assert!(matches!(&f.params[1].ty.kind, TypeKind::Fn { params, .. } if params.is_empty()));
+        assert!(matches!(&f.ret.as_ref().unwrap().kind, TypeKind::Fn { .. }));
     }
 
     #[test]

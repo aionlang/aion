@@ -18,8 +18,8 @@ use std::collections::HashMap;
 
 use crate::diag::{Diagnostic, Result, Span};
 use crate::loader::Loaded;
-use crate::syntax::ast::{self, ExprKind, Item, StmtKind};
-use hir::{FnId, FuncKind, GlobalId, Ty, TypeId};
+use crate::syntax::ast::{self, ExprKind, Item, StmtKind, TypeKind};
+use hir::{FnId, FnSig, FuncKind, GlobalId, Ty, TypeId};
 
 pub struct TypeInfo {
     pub name: String,
@@ -86,6 +86,8 @@ pub struct Tables {
     pub funcs: Vec<FnInfo>,
     pub globals: Vec<GlobalInfo>,
     pub scopes: Vec<Scope>,
+    /// Interned function types, so equal signatures have equal `Ty`s.
+    fn_types: RefCell<Vec<FnSig>>,
 }
 
 /// What a declared function needs when its body is checked.
@@ -114,6 +116,8 @@ pub struct Checker<'a> {
     inits: Vec<FnId>,
     /// Generated `toString` functions by type.
     tostring: RefCell<HashMap<TypeId, FnId>>,
+    /// Adapters that let a plain function be used as a function value.
+    thunks: RefCell<HashMap<FnId, FnId>>,
 }
 
 impl Tables {
@@ -127,17 +131,48 @@ impl Tables {
             .copied()
     }
 
+    /// Resolve a written type.  `Unit` (no value) is only meaningful as a return type.
     pub fn resolve_type(&self, module: usize, ty: &ast::TypeRef) -> Result<Ty> {
-        Ok(match ty.name.as_str() {
-            "Int" => Ty::Int,
-            "Float" => Ty::Float,
-            "Bool" => Ty::Bool,
-            "String" => Ty::Str,
-            name => match self.lookup(module, name) {
-                Some(Sym::Type(id)) => Ty::Obj(id),
-                _ => return Err(Diagnostic::new(format!("unknown type `{name}`"), ty.span)),
-            },
-        })
+        match &ty.kind {
+            TypeKind::Named(name) => Ok(match name.as_str() {
+                "Int" => Ty::Int,
+                "Float" => Ty::Float,
+                "Bool" => Ty::Bool,
+                "String" => Ty::Str,
+                "Unit" => Ty::Void,
+                name => match self.lookup(module, name) {
+                    Some(Sym::Type(id)) => Ty::Obj(id),
+                    _ => return Err(Diagnostic::new(format!("unknown type `{name}`"), ty.span)),
+                },
+            }),
+            TypeKind::Fn { params, ret } => {
+                let params = params.iter().map(|p| self.resolve_value_type(module, p)).collect::<Result<Vec<_>>>()?;
+                let ret = self.resolve_type(module, ret)?;
+                Ok(self.intern_fn(params, ret))
+            }
+        }
+    }
+
+    /// Like [`Self::resolve_type`], for places that hold a value (variables, fields, parameters).
+    pub fn resolve_value_type(&self, module: usize, ty: &ast::TypeRef) -> Result<Ty> {
+        match self.resolve_type(module, ty)? {
+            Ty::Void => Err(Diagnostic::new("`Unit` means \"no value\"; it can only be a return type", ty.span)),
+            t => Ok(t),
+        }
+    }
+
+    pub fn intern_fn(&self, params: Vec<Ty>, ret: Ty) -> Ty {
+        let sig = FnSig { params, ret };
+        let mut types = self.fn_types.borrow_mut();
+        let id = types.iter().position(|s| *s == sig).unwrap_or_else(|| {
+            types.push(sig);
+            types.len() - 1
+        });
+        Ty::Fn(id)
+    }
+
+    pub fn fn_sig(&self, id: hir::FnTyId) -> FnSig {
+        self.fn_types.borrow()[id].clone()
     }
 
     pub fn ty_name(&self, ty: Ty) -> String {
@@ -147,6 +182,12 @@ impl Tables {
             Ty::Bool => "Bool".into(),
             Ty::Str => "String".into(),
             Ty::Obj(id) => self.types[id].name.clone(),
+            Ty::Fn(id) => {
+                let sig = self.fn_sig(id);
+                let params: Vec<String> = sig.params.iter().map(|&p| self.ty_name(p)).collect();
+                let ret = if sig.ret == Ty::Void { "Unit".to_string() } else { self.ty_name(sig.ret) };
+                format!("({}) -> {ret}", params.join(", "))
+            }
             Ty::Void => "nothing".into(),
         }
     }
@@ -185,6 +226,7 @@ impl<'a> Checker<'a> {
             out: RefCell::new(Vec::new()),
             inits: Vec::new(),
             tostring: RefCell::new(HashMap::new()),
+            thunks: RefCell::new(HashMap::new()),
         };
         for module in 0..loaded.modules.len() {
             ck.declare_module(loaded, module)?;
@@ -252,7 +294,7 @@ impl<'a> Checker<'a> {
                 if fields.iter().any(|g| g.name == name.name) {
                     return Err(Diagnostic::new(format!("duplicate field `{}`", name.name), name.span));
                 }
-                fields.push(hir::Field { name: name.name.clone(), ty: self.t.resolve_type(mi, ty)? });
+                fields.push(hir::Field { name: name.name.clone(), ty: self.t.resolve_value_type(mi, ty)? });
             }
             if fields.len() > 64 {
                 return Err(Diagnostic::new("a type can have at most 64 fields", td.name.span));
@@ -308,7 +350,7 @@ impl<'a> Checker<'a> {
             });
             for s in &top {
                 if let StmtKind::Let { name, ty, .. } = &s.kind {
-                    let declared = ty.as_ref().map(|t| self.t.resolve_type(mi, t)).transpose()?;
+                    let declared = ty.as_ref().map(|t| self.t.resolve_value_type(mi, t)).transpose()?;
                     let gid = self.t.globals.len();
                     self.t.globals.push(GlobalInfo {
                         name: name.name.clone(),
@@ -326,7 +368,7 @@ impl<'a> Checker<'a> {
     }
 
     fn param_info(&self, mi: usize, p: &ast::Param) -> Result<ParamInfo> {
-        let ty = self.t.resolve_type(mi, &p.ty)?;
+        let ty = self.t.resolve_value_type(mi, &p.ty)?;
         let default = p.default.as_ref().map(|e| const_default(e, ty, &self.t)).transpose()?;
         Ok(ParamInfo { name: p.name.name.clone(), ty, default })
     }
@@ -422,6 +464,13 @@ impl<'a> Checker<'a> {
         self.out.borrow_mut()[id] = Some(func);
         self.state.borrow_mut()[id] = State::Done;
         Ok(())
+    }
+
+    /// Allocate an id for a function created while checking another (a lambda or adapter).
+    fn reserve_fn(&self) -> FnId {
+        let mut out = self.out.borrow_mut();
+        out.push(None);
+        out.len() - 1
     }
 
     /// The return type of `id`, inferring it from the body if necessary.

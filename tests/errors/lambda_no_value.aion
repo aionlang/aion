@@ -1,0 +1,3 @@
+// error: this lambda must produce a Int
+fn apply(f: (Int) -> Int, x: Int) = f(x)
+apply({ println("x") }, 1)

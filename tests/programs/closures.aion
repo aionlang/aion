@@ -1,0 +1,144 @@
+// Function values: lambdas, captured variables, function references.
+
+import math
+
+fn apply(f: (Int) -> Int, x: Int) = f(x)
+fn apply2(f: (Int, Int) -> Int, a: Int, b: Int) = f(a, b)
+fn run(action: () -> Unit) = action()
+fn double(n: Int) = n * 2
+
+// ── ways to write a function value ───────────────────────────────────
+println(apply({ it + 1 }, 41))                      // implicit `it`
+println(apply({ x -> x * x }, 7))                   // named parameter
+println(apply2({ a, b -> a * 10 + b }, 4, 2))       // two parameters
+println(apply({ x: Int -> x - 1 }, 10))             // annotated parameter
+println(apply(double, 21))                          // a declared function
+println(apply(double, apply(double, 5)))
+run { println("trailing lambda") }
+run({ -> println("explicit empty parameter list") })
+
+// ── closures keep their own state ────────────────────────────────────
+fn counter() -> () -> Int {
+    n := 0
+    return { n += 1; n }
+}
+
+c1 := counter()
+c2 := counter()
+println(c1(), c1(), c1(), c2())                     // 1 2 3 1
+
+// Two closures (and the enclosing function) share one variable.
+fn shared() {
+    value := 100
+    bump := { value += 5 }
+    bump()
+    bump()
+    println("value is", value)                      // 110
+}
+shared()
+
+// A variable that is never reassigned is copied.
+fn adder(k: Int) = { x: Int -> x + k }
+add5 := adder(5)
+add9 := adder(9)
+println(add5(1), add9(1))
+
+// ── each iteration captures its own variable ─────────────────────────
+type Node(f: (Int) -> Int) {
+    next: Node
+}
+chain := Node({ it })
+for i in 1..=3 {
+    n := Node({ x -> x + i })
+    n.next = chain
+    chain = n
+}
+cur := chain
+for _ in 0..3 {
+    print(cur.f(100), "")
+    cur = cur.next
+}
+println()                                           // 103 102 101
+
+// ── nested lambdas capture through every level ───────────────────────
+fn nested() {
+    total := 0
+    outer := { a: Int ->
+        inner := { b: Int ->
+            total += a * b
+        }
+        inner(2)
+        inner(3)
+    }
+    outer(10)
+    outer(1)
+    println("total", total)                         // 10*2+10*3+1*2+1*3 = 55
+}
+nested()
+
+// ── lambdas inside methods capture `this` ────────────────────────────
+type Tally(label: String) {
+    count: Int = 0
+
+    fn incrementer() = { count += 1 }
+    fn describer() = { "$label=$count" }
+    fn each(n: Int, f: (Int) -> Unit) {
+        for i in 0..n { f(i) }
+    }
+    fn sum(n: Int) -> Int {
+        total := 0
+        each(n) { total += it }
+        return total
+    }
+}
+
+t := Tally("hits")
+inc := t.incrementer()
+show := t.describer()
+inc()
+inc()
+println(show(), t.count)                            // hits=2 2
+println(t.sum(5))                                   // 10
+
+// ── function values stored in fields and globals ─────────────────────
+type Button(name: String, onClick: (String) -> String)
+b := Button("ok", { "clicked $it" })
+println(b.onClick(b.name))
+
+compose := { f: (Int) -> Int, g: (Int) -> Int -> { x: Int -> g(f(x)) } }
+inc_then_double := compose({ it + 1 }, { it * 2 })
+println(inc_then_double(4))                         // 10
+
+curried := { a: Int -> { b: Int -> { c: Int -> a * 100 + b * 10 + c } } }
+println(curried(1)(2)(3))                           // 123
+
+fact: (Int) -> Int = { n -> if n <= 1 { 1 } else { n * fact(n - 1) } }
+println(fact(10))                                   // 3628800
+
+// ── other captured types, and function references ────────────────────
+fn mixed() {
+    name := "ann"
+    ratio := 2.5
+    flag := true
+    pt := Node({ it })
+    f := { "$name $ratio $flag ${pt.f(7)}" }
+    println(f())
+}
+mixed()
+
+sqrt: (Float) -> Float = math.sqrt
+println(sqrt(16.0), sqrt(2))
+mk: (String) -> Button = { s -> Button(s, { s }) }
+println(mk("z").name)
+make_node: ((Int) -> Int) -> Node = Node
+println(make_node({ it * 3 }).f(5))
+
+// ── closures survive garbage collection ──────────────────────────────
+fn make(label: String, n: Int) = { "$label#$n" }
+keep := make("kept", 42)
+total_len := 0
+for i in 0..50000 {
+    f := make("garbage-" + "padding-padding", i)
+    total_len += 1
+}
+println(keep(), total_len)

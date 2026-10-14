@@ -8,6 +8,7 @@ pub type FnId = usize;
 pub type TypeId = usize;
 pub type LocalId = usize;
 pub type GlobalId = usize;
+pub type FnTyId = usize;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ty {
@@ -17,14 +18,23 @@ pub enum Ty {
     Str,
     /// A reference to an instance of a user-defined `type`.
     Obj(TypeId),
+    /// A function value (a closure), identified by its interned signature.
+    Fn(FnTyId),
     Void,
 }
 
 impl Ty {
     /// Values of this type live on the garbage-collected heap.
     pub fn is_gc(self) -> bool {
-        matches!(self, Ty::Str | Ty::Obj(_))
+        matches!(self, Ty::Str | Ty::Obj(_) | Ty::Fn(_))
     }
+}
+
+/// The signature of a function type such as `(Int, String) -> Bool`.
+#[derive(Clone, PartialEq, Eq)]
+pub struct FnSig {
+    pub params: Vec<Ty>,
+    pub ret: Ty,
 }
 
 pub struct Program {
@@ -57,6 +67,17 @@ pub struct Field {
 pub struct Local {
     pub name: String,
     pub ty: Ty,
+    /// Captured by a closure *and* reassigned somewhere, so it lives in a
+    /// shared heap cell instead of directly in the function's frame.
+    pub boxed: bool,
+}
+
+/// A variable a closure takes from the function that created it.
+pub struct Capture {
+    /// The variable in the creating function.
+    pub outer: LocalId,
+    /// The closure's own local standing for it.
+    pub inner: LocalId,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,6 +86,8 @@ pub enum FuncKind {
     /// Takes the receiver (`it`) as its first parameter.
     Method,
     Constructor,
+    /// Called through a function value; receives its closure object as a hidden first argument.
+    Closure,
 }
 
 pub struct Func {
@@ -77,6 +100,8 @@ pub struct Func {
     pub locals: Vec<Local>,
     /// `None` for `extern fn`.
     pub body: Option<Vec<Stmt>>,
+    /// Closures only: the variables copied out of the closure object on entry.
+    pub captures: Vec<Capture>,
 }
 
 impl Func {
@@ -132,6 +157,10 @@ pub enum ExprKind {
     Unit,
     Field { obj: Box<Expr>, index: usize },
     Call { func: FnId, args: Vec<Expr> },
+    /// Call a function value.
+    CallValue { callee: Box<Expr>, args: Vec<Expr> },
+    /// Create a closure of `func`, capturing the variables listed in its `captures`.
+    Closure { func: FnId },
     /// Allocate a zeroed instance (string fields start as `""`).
     New(TypeId),
     Neg(Box<Expr>),

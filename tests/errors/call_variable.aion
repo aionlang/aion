@@ -1,4 +1,4 @@
-// error: `x` is a variable, not a function
+// error: cannot call `x`: it is a Int, not a function
 fn main() {
     x := 1
     x()

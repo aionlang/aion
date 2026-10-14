@@ -1,0 +1,2 @@
+// error: `Unit` means "no value"; it can only be a return type
+x: Unit := 1

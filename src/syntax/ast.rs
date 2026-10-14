@@ -8,11 +8,18 @@ pub struct Ident {
     pub span: Span,
 }
 
-/// A type written in source: `Int`, `String`, `Animal`.
+/// A type written in source: `Int`, `Animal`, `(Int, String) -> Bool`.
 #[derive(Debug, Clone)]
 pub struct TypeRef {
-    pub name: String,
+    pub kind: TypeKind,
     pub span: Span,
+}
+
+#[derive(Debug, Clone)]
+pub enum TypeKind {
+    Named(String),
+    /// `(A, B) -> R`
+    Fn { params: Vec<TypeRef>, ret: Box<TypeRef> },
 }
 
 #[derive(Debug)]
@@ -157,8 +164,17 @@ pub enum ExprKind {
     /// A sequence of statements whose value is the last expression
     /// (produced by desugaring `when`).
     Block(Vec<Stmt>),
+    /// `{ x, y: Int -> body }`; the value of the body is its last expression.
+    /// Without `->` and parameters, a one-parameter lambda gets `it`.
+    Lambda { params: Vec<LambdaParam>, explicit: bool, body: Vec<Stmt> },
     /// `a..b` (exclusive) or `a..=b` (inclusive).
     Range { start: Box<Expr>, end: Box<Expr>, inclusive: bool },
+}
+
+#[derive(Debug)]
+pub struct LambdaParam {
+    pub name: Ident,
+    pub ty: Option<TypeRef>,
 }
 
 #[derive(Debug)]

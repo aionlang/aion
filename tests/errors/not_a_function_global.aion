@@ -1,0 +1,3 @@
+// error: cannot call `n`: it is a Int, not a function
+n := 5
+n()

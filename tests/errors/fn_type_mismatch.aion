@@ -1,0 +1,3 @@
+// error: expected (Int) -> Int, found (String) -> String
+fn shout(s: String) = s
+f: (Int) -> Int = shout

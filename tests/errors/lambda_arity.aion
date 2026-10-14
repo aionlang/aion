@@ -1,0 +1,3 @@
+// error: a function taking 1 parameter(s) is expected here, but this lambda takes 2
+fn apply(f: (Int) -> Int, x: Int) = f(x)
+apply({ a, b -> a }, 1)
