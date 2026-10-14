@@ -120,6 +120,21 @@ method).
 Methods on built-in types (`fn String.shout()`) live in `Checker::ext_methods`,
 keyed by type and name; `extern` ones take the receiver as their first C argument.
 
+### Interfaces
+
+An interface is a `TypeInfo` with `iface = Some(required methods)`, and the type
+of a value of it is an ordinary `Ty::Obj`, so interface values are plain pointers.
+`Checker::satisfies(ty, iface)` compares names, parameter types and result types
+structurally.  `coerce` turns a conforming `T` into the interface with an
+`Upcast` node (a no-op at run time) and records the pair (`T`, interface); a call
+on an interface-typed receiver becomes `CallIface`.  Every object header carries
+the object's type id + 1 above the four flag bits; for each interface method the
+program gets a constant table indexed by that id, filled for the (type, interface)
+pairs seen by `coerce` (and with `toString` implementations when an interface
+value is ever printed).  The call loads the id, indexes the table and calls
+through the pointer.  Bounds (`<T: Shape>`) reuse `satisfies` when a generic is
+instantiated.
+
 ### `defer` and `try` (`body/mod.rs`, `runtime/core.c`)
 
 Both are built from closures and a few runtime functions declared in the prelude

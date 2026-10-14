@@ -44,6 +44,10 @@ migration notes at the end of this section.
   { return }`, `&&`/`||`, loops that walk `node = node.next`). `Int?`/`Float?`/`Bool?`
   are boxed; optional strings, objects and functions are plain pointers. Library:
   `getOrNull`, `firstOrNull`, `lastOrNull`, `find`, `Map.getOrNull`, `toIntOrNull`.
+- **Interfaces.** `interface Shape { fn area() -> Float }`, satisfied by shape (no
+  `implements`), converted automatically, dispatched at run time; lists of mixed
+  kinds work and print through each real type's `toString`. Bounds on type
+  parameters: `fn total<T: Shape>(…)`, `type Holder<T: Shape>`.
 - **`defer` and `try` / `catch`.** `defer cleanup()` / `defer { … }` runs when the
   enclosing block is left (end, `return`, `break`, `continue`, panic); `try { … }
   catch e { … }` is an expression that catches `panic(...)` and runtime errors

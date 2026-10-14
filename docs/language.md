@@ -484,6 +484,82 @@ Collections of optionals work (`List<Int?>`, `Map<String, Int?>`), and
 the standard library uses them: `list.firstOrNull()`, `list.find { … }`,
 `map.getOrNull(key)`, `"42".toIntOrNull()`.
 
+## Interfaces
+
+An `interface` lists methods; any type that has them can be used as the interface.
+There is no `implements`: satisfaction is checked by the shape of the type (like Go).
+
+```aion
+interface Shape {
+    fn area() -> Float
+    fn name() -> String
+}
+
+type Circle(r: Float) {
+    fn area() = 3.0 * r * r
+    fn name() = "circle"
+}
+type Square(side: Float) {
+    fn area() = side * side
+    fn name() = "square"
+    fn toString() = "Square($side)"
+}
+
+fn describe(s: Shape) = "${s.name()} with area ${s.area()}"
+println(describe(Circle(2)), describe(Square(3)))
+
+shapes: List<Shape> = [Circle(1), Square(2), Circle(3)]   // mixed kinds in one list
+total := 0.0
+for s in shapes { total += s.area() }
+println(total)
+println(shapes)                                           // each element prints as its own type
+```
+
+A `Circle` converts to a `Shape` automatically wherever a `Shape` is expected —
+arguments, variables, fields, list elements, return values, `Shape?`.  The
+methods must match in name, parameter types and result type; the error says what
+is missing: ``Blob does not implement `Shape`: it needs `fn area() -> Float` ``.
+Calls through the interface look up the real type at run time (a table indexed
+by a type number kept in every object).  Interface methods have no default bodies
+and cannot be generic or take named arguments, and interfaces cannot be
+instantiated or inherit from each other.  Only object types (declared with `type`)
+become interface values; use a wrapper type for an `Int` or `String`.
+
+## Constraints on type parameters
+
+`<T: Shape>` says what a type parameter must be able to do.  The check happens
+where `T` becomes known, so a mistake is reported at the call, not inside the
+function:
+
+```aion
+interface Shape { fn area() -> Float }
+type Circle(r: Float) { fn area() = 3.0 * r * r }
+type Square(side: Float) { fn area() = side * side }
+shapes: List<Shape> = [Circle(1), Square(2)]
+
+fn totalArea<T: Shape>(items: List<T>) -> Float {
+    total := 0.0
+    for item in items { total += item.area() }
+    return total
+}
+println(totalArea([Circle(1), Circle(2)]))     // 15: T is Circle
+println(totalArea(shapes))                      // 7: T can be the interface itself
+
+type Holder<T: Shape>(item: T) {
+    fn describe() = "holds area ${item.area()}"
+}
+println(Holder(Square(2)).describe())
+
+interface Loud { fn shout() -> String }
+fn String.shout() = this.upper() + "!"          // methods added to built-in types count
+fn twice<T: Loud>(x: T) = x.shout() + x.shout()
+println(twice("hey"))                           // HEY!HEY!
+```
+
+Without a bound, a generic function still works for any type whose operations
+the body happens to use (each instance is checked as ordinary code); a bound
+just makes the requirement visible and the error early.
+
 ## Cleanup and errors
 
 `defer` schedules code to run when the **enclosing block** is left: by reaching
@@ -630,6 +706,6 @@ memory, and `panic(...)` — unless a [`try`](#cleanup-and-errors) catches it.
 
 ## Not (yet) in the language
 
-Interfaces and constraints on type parameters, concurrency, inheritance, `char`,
-reading input, slices, and user-defined hashing for map keys.  (Plain object types are not checked against
+Concurrency, inheritance, generic interfaces, `char`, reading input, slices, and
+user-defined hashing for map keys.  (Plain object types are not checked against
 being unset; use `T?` where a value may be missing.)
