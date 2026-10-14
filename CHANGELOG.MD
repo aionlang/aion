@@ -44,6 +44,10 @@ migration notes at the end of this section.
   { return }`, `&&`/`||`, loops that walk `node = node.next`). `Int?`/`Float?`/`Bool?`
   are boxed; optional strings, objects and functions are plain pointers. Library:
   `getOrNull`, `firstOrNull`, `lastOrNull`, `find`, `Map.getOrNull`, `toIntOrNull`.
+- **`defer` and `try` / `catch`.** `defer cleanup()` / `defer { … }` runs when the
+  enclosing block is left (end, `return`, `break`, `continue`, panic); `try { … }
+  catch e { … }` is an expression that catches `panic(...)` and runtime errors
+  (the message is a String, or `it` without a name).
 - **Methods on built-in types.** `fn String.shout() = "$this!"`, `fn Int.double()`;
   `String` gains `length() contains() startsWith() indexOf() substring() trim()
   replace() split() toIntOr() upper() lower()` as methods.

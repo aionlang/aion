@@ -120,6 +120,21 @@ method).
 Methods on built-in types (`fn String.shout()`) live in `Checker::ext_methods`,
 keyed by type and name; `extern` ones take the receiver as their first C argument.
 
+### `defer` and `try` (`body/mod.rs`, `runtime/core.c`)
+
+Both are built from closures and a few runtime functions declared in the prelude
+(`__defer_push`, `__defer_mark`, `__defer_run`, `__try_*`).  `defer body` is a
+lambda pushed on a runtime stack of GC roots; the first `defer` of a block also
+records the stack depth in a hidden local, and every way out of the block —
+falling off the end, `return` (value computed into a temporary first), `break`,
+`continue` — gets a `__defer_run(depth)` call from the checker, which tracks the
+open blocks per function.  `try` checks the body and handler as lambdas and calls
+`aion_try_*` (one per result kind: Unit, Int, Float, Bool, pointer), which runs the
+body under `setjmp`.  `aion_panic` pops the innermost `try`, runs the defers
+registered since, restores the shadow stack and `longjmp`s; with no `try` it runs
+all defers and exits.  Doing it in C keeps `setjmp` away from optimised LLVM
+locals.
+
 ### Optional types (`narrow.rs`)
 
 `T?` is `Ty::Opt(i)`, an interned wrapper (an optional of an optional is the same

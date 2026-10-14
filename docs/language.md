@@ -484,6 +484,81 @@ Collections of optionals work (`List<Int?>`, `Map<String, Int?>`), and
 the standard library uses them: `list.firstOrNull()`, `list.find { … }`,
 `map.getOrNull(key)`, `"42".toIntOrNull()`.
 
+## Cleanup and errors
+
+`defer` schedules code to run when the **enclosing block** is left: by reaching
+its end, `return` (after the result has been computed), `break`, `continue`, or a
+panic.  Several defers in one block run newest first.
+
+```aion
+fn work(n: Int) -> Int {
+    println("start", n)
+    defer println("cleanup 1")
+    defer {
+        println("cleanup 2")
+    }
+    if n > 5 {
+        defer println("leaving the if")
+        return n * 2
+    }
+    return n
+}
+println(work(9))        // start 9, leaving the if, cleanup 2, cleanup 1, then 18
+
+for i in 0..3 {
+    defer println("  end of iteration", i)     // once per iteration
+    if i == 1 { continue }
+    println("body", i)
+}
+
+fn counter() {
+    count := 0
+    defer println("final count:", count)       // runs later, so it sees 6, not 0
+    count += 6
+}
+counter()
+```
+
+A deferred statement is a closure: it sees the variables' values *when it runs*
+(unlike Go, which evaluates the arguments immediately).  A `defer` at the top of a
+file runs when the file's own code has finished.
+
+**Errors** are panics.  `panic("message")` and the runtime errors — index out of
+range, division by zero, `!!` on null, a missing map key — stop the program, unless
+a `try` is watching:
+
+```aion
+fn parse(text: String) -> Int {
+    n := text.toIntOrNull()
+    if n == null { panic("not a number: $text") }
+    return n
+}
+
+a := try { parse("42") } catch e { -1 }
+b := try { parse("x") } catch e { println("caught:", e); -1 }
+println(a, b)                                  // 42, then "caught: not a number: x", then -1
+
+try {
+    println(10 / (a - 42))
+} catch {
+    println("failed with", it)                 // without a name the message is `it`
+}
+
+fn cleanup() {
+    defer println("  (cleanup still runs)")
+    panic("something broke")
+}
+try { cleanup() } catch e { println("handled:", e) }
+```
+
+`try` is an expression: its value is the body's last expression, or the handler's
+if something panicked, and the two must have the same type (a declared type
+decides when there is one: `n: Int? = try { … } catch e { null }`).  The message
+is a `String`.  Pending `defer`s run before the handler does.  Because the two
+blocks run as closures, `return`, `break` and `continue` cannot leave them; assign
+to a variable, or use the value of the `try`.  An uncaught panic runs the
+remaining `defer`s, prints `[aion] panic: message` and exits with status 1.
+
 ## Line breaks
 
 A line break ends a statement, with these exceptions:
@@ -550,11 +625,11 @@ println(llabs(-5))
 ## Runtime errors
 
 The program stops with exit code 1 and a message on stderr for: division by
-zero, using a null object or function, out of memory, and `panic(...)`.
+zero, using a null object or function, indexing outside an array or list, out of
+memory, and `panic(...)` — unless a [`try`](#cleanup-and-errors) catches it.
 
 ## Not (yet) in the language
 
-Interfaces and constraints on type parameters, `defer`, a way to recover from
-errors, concurrency, inheritance, `char`, reading input, slices, and
-user-defined hashing for map keys.  (Plain object types are not checked against
+Interfaces and constraints on type parameters, concurrency, inheritance, `char`,
+reading input, slices, and user-defined hashing for map keys.  (Plain object types are not checked against
 being unset; use `T?` where a value may be missing.)
