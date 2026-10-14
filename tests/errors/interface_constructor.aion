@@ -1,0 +1,3 @@
+// error: is an interface, so it has no constructor
+interface Shape { fn area() -> Float }
+x := Shape()

@@ -1,0 +1,5 @@
+// error: takes 0 argument(s) but 1 were given
+interface Shape { fn area() -> Float }
+type Sq(x: Float) { fn area() = x * x }
+s: Shape = Sq(2)
+println(s.area(1))

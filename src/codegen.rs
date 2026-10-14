@@ -29,7 +29,7 @@ use crate::sema::hir::*;
 
 const RUNTIME_DECLS: &str = "\
 @aion_frame_top = external global ptr
-declare ptr @aion_new_object(i64, i64)
+declare ptr @aion_new_object(i64, i64, i64)
 declare ptr @aion_concat(ptr, ptr)
 declare ptr @aion_int_to_str(i64)
 declare ptr @aion_float_to_str(double)
@@ -84,6 +84,22 @@ pub fn emit(p: &Program) -> String {
         let _ = writeln!(out, "declare {}{} @\"{}\"({})", zext(f.ret), ir(f.ret), f.symbol, params.join(", "));
     }
     out.push('\n');
+
+    // Interface dispatch: one table per interface method, indexed by the object's type id.
+    for d in &p.dispatch {
+        let n = p.types.len() + 1;
+        let mut slots = vec!["ptr null".to_string(); n];
+        for &(ty, func) in &d.entries {
+            slots[ty + 1] = format!("ptr @\"{}\"", p.funcs[func].symbol);
+        }
+        let _ = writeln!(
+            out,
+            "@\"dispatch.{}.{}\" = internal constant [{n} x ptr] [{}]",
+            d.iface,
+            d.method,
+            slots.join(", ")
+        );
+    }
 
     // Module-level variables, and the table the collector reads them from.
     for g in &p.globals {
@@ -442,7 +458,7 @@ impl<'a> FnGen<'a> {
         let ty = self.f.locals[id].ty;
         if self.f.locals[id].boxed {
             let mask = i64::from(ty.is_gc());
-            let cell = self.call_value("ptr", &format!("@aion_new_object(i64 1, i64 {mask})"));
+            let cell = self.call_value("ptr", &format!("@aion_new_object(i64 1, i64 {mask}, i64 0)"));
             let dest = self.local_addr(id);
             self.line(format!("store ptr {cell}, ptr {dest}"));
             self.store_cell(&cell, ty, v);
@@ -686,7 +702,7 @@ impl<'a> FnGen<'a> {
                 }
                 let o = self.call_value(
                     "ptr",
-                    &format!("@aion_new_object(i64 {}, i64 {})", captures.len() + 1, mask as i64),
+                    &format!("@aion_new_object(i64 {}, i64 {}, i64 0)", captures.len() + 1, mask as i64),
                 );
                 self.root(&o);
                 self.line(format!("store ptr @\"{symbol}\", ptr {o}"));
@@ -782,12 +798,47 @@ impl<'a> FnGen<'a> {
                 self.array_len(&a)
             }
 
+            ExprKind::Upcast(inner) => self.expr(inner),
+
+            ExprKind::CallIface { iface, method, args } => {
+                let mut ops = Vec::new();
+                for a in args {
+                    let v = self.expr(a);
+                    ops.push((a.ty, v));
+                }
+                let recv = ops[0].1.clone();
+                self.null_check(&recv);
+                // The object header holds the type id above its four flag bits, 12 bytes before the payload.
+                let (at, flags, shifted, id, slot, target) =
+                    (self.tmp(), self.tmp(), self.tmp(), self.tmp(), self.tmp(), self.tmp());
+                self.line(format!("{at} = getelementptr inbounds i8, ptr {recv}, i64 -12"));
+                self.line(format!("{flags} = load i32, ptr {at}"));
+                self.line(format!("{shifted} = lshr i32 {flags}, 4"));
+                self.line(format!("{id} = zext i32 {shifted} to i64"));
+                let n = self.p.types.len() + 1;
+                self.line(format!(
+                    "{slot} = getelementptr inbounds [{n} x ptr], ptr @\"dispatch.{iface}.{method}\", i64 0, i64 {id}"
+                ));
+                self.line(format!("{target} = load ptr, ptr {slot}"));
+                let rendered: Vec<String> = ops.iter().map(|(ty, v)| format!("{} {v}", ir(*ty))).collect();
+                let call = format!("{target}({})", rendered.join(", "));
+                if e.ty == Ty::Void {
+                    self.line(format!("call void {call}"));
+                    return String::new();
+                }
+                let t = self.call_value(ir(e.ty), &call);
+                if e.ty.is_gc() {
+                    self.root(&t);
+                }
+                t
+            }
+
             ExprKind::Wrap(inner) => {
                 let v = self.expr(inner);
                 if inner.ty.is_gc() {
                     return v; // an optional pointer is the pointer itself
                 }
-                let b = self.call_value("ptr", "@aion_new_object(i64 1, i64 0)");
+                let b = self.call_value("ptr", "@aion_new_object(i64 1, i64 0, i64 0)");
                 self.root(&b);
                 self.store_cell(&b, inner.ty, &v);
                 b
@@ -814,7 +865,7 @@ impl<'a> FnGen<'a> {
                     .enumerate()
                     .filter(|(_, f)| f.ty.is_gc())
                     .fold(0u64, |m, (i, _)| m | 1 << i);
-                let o = self.call_value("ptr", &format!("@aion_new_object(i64 {}, i64 {})", def.fields.len(), mask as i64));
+                let o = self.call_value("ptr", &format!("@aion_new_object(i64 {}, i64 {}, i64 {})", def.fields.len(), mask as i64, *ty + 1));
                 self.root(&o);
                 for (i, f) in def.fields.iter().enumerate() {
                     if f.ty == Ty::Str {

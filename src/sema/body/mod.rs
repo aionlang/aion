@@ -175,7 +175,7 @@ impl Checker<'_> {
     /// The `toString` used when an object is printed or interpolated: the
     /// type's own `toString()` if it has one, otherwise a generated
     /// `Name(field=value, …)`.
-    fn tostring_fn(&self, ty: TypeId) -> Result<FnId> {
+    pub(in crate::sema) fn tostring_fn(&self, ty: TypeId) -> Result<FnId> {
         if let Some(&f) = self.tostring.borrow().get(&ty) {
             return Ok(f);
         }
@@ -1505,6 +1505,17 @@ impl<'c, 'a> Cx<'c, 'a> {
             (a, b) if a == b => Ok(e),
             (Ty::Int, Ty::Float) => Ok(mk(K::IntToFloat(Box::new(e)), Ty::Float)),
             (Ty::Null, Ty::Opt(_)) => Ok(mk(K::Null, to)),
+            // an object used as an interface it implements (same pointer)
+            (Ty::Obj(a), Ty::Obj(b)) if self.is_upcast(a, b) => self.upcast(e, a, b, to, span),
+            (Ty::Opt(x), Ty::Opt(y))
+                if matches!(
+                    (self.ck.t.opt_inner(x), self.ck.t.opt_inner(y)),
+                    (Ty::Obj(a), Ty::Obj(b)) if self.is_upcast(a, b)
+                ) =>
+            {
+                let (Ty::Obj(a), Ty::Obj(b)) = (self.ck.t.opt_inner(x), self.ck.t.opt_inner(y)) else { unreachable!() };
+                self.upcast(e, a, b, to, span)
+            }
             // `T` → `T?` (and `Int` → `Float?`)
             (found, Ty::Opt(id)) if !matches!(found, Ty::Opt(_) | Ty::Null | Ty::Void) => {
                 let inner = self.ck.t.opt_inner(id);
@@ -1514,6 +1525,31 @@ impl<'c, 'a> Cx<'c, 'a> {
                 }
             }
             (found, _) => Err(self.mismatch(to, found, span)),
+        }
+    }
+
+    /// The constructor of `ty`; interfaces have none.
+    fn ctor_of(&self, ty: TypeId, span: Span) -> Result<FnId> {
+        let info = self.ck.t.ty(ty);
+        if info.iface.is_some() {
+            return Err(Diagnostic::new(format!("`{}` is an interface, so it has no constructor", info.name), span)
+                .hint("create a type that implements it"));
+        }
+        Ok(info.ctor)
+    }
+
+    /// Is `to` an interface and `from` an ordinary type?
+    fn is_upcast(&self, from: TypeId, to: TypeId) -> bool {
+        self.ck.t.ty(to).iface.is_some() && self.ck.t.ty(from).iface.is_none() && self.ck.t.ty(from).array_elem.is_none()
+    }
+
+    fn upcast(&self, e: hir::Expr, from: TypeId, to_iface: TypeId, to: Ty, span: Span) -> Result<hir::Expr> {
+        match self.ck.conforms(from, to_iface) {
+            Ok(()) => {
+                self.ck.register_upcast(from, to_iface);
+                Ok(mk(K::Upcast(Box::new(e)), to))
+            }
+            Err(why) => Err(self.mismatch(to, e.ty, span).hint(why)),
         }
     }
 
@@ -1548,6 +1584,23 @@ impl<'c, 'a> Cx<'c, 'a> {
             Ty::Obj(ty) if self.ck.t.ty(ty).array_elem.is_some() => {
                 Err(Diagnostic::new(format!("a {} has no text form", self.name(e.ty)), span)
                     .hint("an Array is a building block; a List can be printed"))
+            }
+            Ty::Obj(ty) if self.ck.t.ty(ty).iface.is_some() => {
+                // dispatch to the real type's `toString`
+                self.ck.stringified.borrow_mut().insert(ty);
+                let slot = self.ck.t.ty(ty).iface.as_ref().map_or(0, Vec::len);
+                let tmp = self.new_local("$obj", e.ty);
+                let is_null = mk(K::IsNull(Box::new(self.local_expr(tmp))), Ty::Bool);
+                let call = mk(K::CallIface { iface: ty, method: slot, args: vec![self.local_expr(tmp)] }, Ty::Str);
+                let cond = mk(
+                    K::Cond {
+                        cond: Box::new(is_null),
+                        then: Box::new(mk(K::Str("null".into()), Ty::Str)),
+                        otherwise: Box::new(call),
+                    },
+                    Ty::Str,
+                );
+                Ok(mk(K::Block(vec![hir::Stmt::Let(tmp, Some(e))], Box::new(cond)), Ty::Str))
             }
             Ty::Obj(ty) => {
                 let f = self.ck.tostring_fn(ty)?;
@@ -1634,7 +1687,10 @@ impl<'c, 'a> Cx<'c, 'a> {
                         .hint(format!("call it, e.g. `{n}(…)`, or give its type arguments: `{n}<Int>(…)`")));
                 }
                 Some(Named::Fn(id)) => self.fn_value(id, e.span)?,
-                Some(Named::Type(ty)) => self.fn_value(self.ck.t.ty(ty).ctor, e.span)?,
+                Some(Named::Type(ty)) => {
+                    let ctor = self.ctor_of(ty, e.span)?;
+                    self.fn_value(ctor, e.span)?
+                }
                 Some(Named::Module(_)) => {
                     return Err(Diagnostic::new(format!("`{n}` is a module, not a value"), e.span)
                         .hint(format!("call one of its functions, e.g. `{n}.name(...)`")));
@@ -1659,7 +1715,10 @@ impl<'c, 'a> Cx<'c, 'a> {
                 {
                     return match self.ck.t.scopes[m].items.get(&field.name) {
                         Some(&Sym::Fn(id)) => self.fn_value(id, e.span),
-                        Some(&Sym::Type(ty)) => self.fn_value(self.ck.t.ty(ty).ctor, e.span),
+                        Some(&Sym::Type(ty)) => {
+                            let ctor = self.ctor_of(ty, e.span)?;
+                            self.fn_value(ctor, e.span)
+                        }
                         _ => Err(Diagnostic::new(format!("module `{a}` has no `{}`", field.name), field.span)),
                     };
                 }
@@ -2073,7 +2132,7 @@ impl<'c, 'a> Cx<'c, 'a> {
                 match self.ck.t.lookup(self.module, n) {
                     Some(Sym::Fn(id)) if type_args.is_empty() => self.call_fn(id, None, args, span),
                     Some(Sym::Type(ty)) if type_args.is_empty() => {
-                        let ctor = self.ck.t.ty(ty).ctor;
+                        let ctor = self.ctor_of(ty, callee.span)?;
                         self.call_fn(ctor, None, args, span)
                     }
                     Some(Sym::Fn(_) | Sym::Type(_)) => Err(not_generic(n)),
@@ -2099,7 +2158,7 @@ impl<'c, 'a> Cx<'c, 'a> {
                             return match self.ck.t.scopes[target].items.get(&member.name).copied() {
                                 Some(Sym::Fn(id)) if type_args.is_empty() => self.call_fn(id, None, args, span),
                                 Some(Sym::Type(ty)) if type_args.is_empty() => {
-                                    let ctor = self.ck.t.ty(ty).ctor;
+                                    let ctor = self.ctor_of(ty, callee.span)?;
                                     self.call_fn(ctor, None, args, span)
                                 }
                                 Some(Sym::Fn(_) | Sym::Type(_)) => Err(not_generic(&what)),
@@ -2173,6 +2232,9 @@ impl<'c, 'a> Cx<'c, 'a> {
             return Err(self.null_hint(recv.ty, d));
         };
         let info = self.ck.t.ty(ty);
+        if let Some(methods) = &info.iface {
+            return self.interface_call(recv, ty, methods, member, type_args, args, span);
+        }
         if info.array_elem.is_some() {
             if !type_args.is_empty() {
                 return Err(not_generic(&member.name));
@@ -2196,6 +2258,46 @@ impl<'c, 'a> Cx<'c, 'a> {
             format!("`{}` has no method `{}`", info.name, member.name),
             member.span,
         ))
+    }
+
+    /// `shape.area()` on a value whose type is an interface.
+    #[allow(clippy::too_many_arguments)]
+    fn interface_call(
+        &mut self,
+        recv: hir::Expr,
+        iface: TypeId,
+        methods: &[super::IfaceMethod],
+        member: &ast::Ident,
+        type_args: &[ast::TypeRef],
+        args: &[ast::Arg],
+        span: Span,
+    ) -> Result<hir::Expr> {
+        let name = &self.ck.t.ty(iface).name;
+        let Some(index) = methods.iter().position(|m| m.name == member.name) else {
+            return Err(Diagnostic::new(format!("`{name}` has no method `{}`", member.name), member.span));
+        };
+        if !type_args.is_empty() {
+            return Err(Diagnostic::new(
+                format!("`{}` is not generic, so it takes no type arguments", member.name),
+                member.span,
+            ));
+        }
+        let m = &methods[index];
+        if let Some(n) = args.iter().find_map(|a| a.name.as_ref()) {
+            return Err(Diagnostic::new("methods called through an interface don't take named arguments", n.span));
+        }
+        if args.len() != m.params.len() {
+            return Err(Diagnostic::new(
+                format!("`{}` takes {} argument(s) but {} were given", m.name, m.params.len(), args.len()),
+                span,
+            ));
+        }
+        let mut call_args = vec![recv];
+        for (a, &want) in args.iter().zip(&m.params) {
+            let v = self.value_expected(&a.value, Some(want))?;
+            call_args.push(self.coerce(v, want, a.value.span)?);
+        }
+        Ok(mk(K::CallIface { iface, method: index, args: call_args }, m.ret))
     }
 
     /// Run `access` on the non-null value of `recv`, or give null: `recv?.…`

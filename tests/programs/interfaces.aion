@@ -1,0 +1,81 @@
+// Interfaces: structural satisfaction, dynamic dispatch, printing through the real type
+interface Shape {
+    fn area() -> Float
+    fn name() -> String
+}
+
+type Circle(r: Float) {
+    fn area() = 3.0 * r * r
+    fn name() = "circle"
+}
+type Square(side: Float) {
+    fn area() = side * side
+    fn name() = "square"
+    fn toString() = "Square($side)"
+}
+type Blob(x: Int)    // not a shape
+
+fn describe(s: Shape) = "${s.name()} with area ${s.area()}"
+
+c := Circle(2)
+println(describe(c))
+println(describe(Square(3)))
+
+shapes: List<Shape> = [Circle(1), Square(2), Circle(3)]
+total := 0.0
+for s in shapes { total += s.area() }
+println(total, shapes.size())
+println(shapes.map { it.name() })
+println(shapes)                 // uses each real type's toString
+println(shapes[1])
+
+biggest: Shape = shapes[0]
+for s in shapes {
+    if s.area() > biggest.area() { biggest = s }
+}
+println("biggest:", biggest.name(), biggest.area())
+
+type Canvas(label: String) {
+    items: List<Shape> = List<Shape>()
+    current: Shape?
+    fn add(s: Shape) { items.add(s) }
+}
+cv := Canvas("main")
+cv.add(Circle(1))
+cv.current = Square(5)
+println(cv.items.size(), cv.current?.area(), cv.current?.name())
+maybe: Shape? = null
+println(maybe?.area())
+
+// an interface can mention itself
+interface Tree {
+    fn label() -> String
+    fn child() -> Tree?
+}
+type Leaf(name: String) {
+    fn label() = name
+    fn child() -> Tree? = null
+}
+type Branch(name: String, below: Tree) {
+    fn label() = name
+    fn child() -> Tree? = below
+}
+fn path(t: Tree) -> String {
+    c := t.child()
+    if c == null { return t.label() }
+    return t.label() + "/" + path(c)
+}
+println(path(Branch("a", Branch("b", Leaf("c")))))
+
+// a type that gains the method later still satisfies the interface
+interface Named { fn title() -> String }
+type Book(name: String)
+fn Book.title() = "Book: $name"
+n: Named = Book("Dune")
+println(n.title(), n)
+
+// methods with arguments
+interface Scaler { fn scale(by: Float, times: Int) -> Float }
+type Doubler(x: Float) { fn scale(by: Float, times: Int) = x * by * times }
+sc: Scaler = Doubler(1.5)
+println(sc.scale(2, 3))

@@ -172,6 +172,7 @@ impl<'a> Checker<'a> {
             generic_methods: HashMap::new(),
             ctor: usize::MAX,
             array_elem: None,
+            iface: None,
         });
         // Register before resolving anything, so a self-referential type (`next: Node<T>`) finds itself.
         gt.instances.borrow_mut().insert(args.clone(), id);

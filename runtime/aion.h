@@ -37,6 +37,7 @@ void aion_panic(const char *msg) __attribute__((noreturn));
 #define AION_F_STATIC 2u /* emitted by the compiler; never freed        */
 #define AION_F_SCAN 4u   /* object: payload slots listed in ptr_mask    */
 #define AION_F_PTRS 8u   /* array: every payload slot is a pointer      */
+#define AION_F_TYPE_SHIFT 4 /* the bits above hold the object's type id + 1 */
 
 /* Precedes every String and object; the value pointer is `header + 1`. */
 typedef struct AionHeader {

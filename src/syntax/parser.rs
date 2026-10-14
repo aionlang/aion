@@ -370,7 +370,7 @@ impl<'a> Parser<'a> {
                         p.bump();
                     }
                     Some(Token::Fn) => {
-                        let start = p.bump().span;
+                        p.bump();
                         let name = p.ident()?;
                         let params = p.params()?;
                         let ret = if p.eat(Token::Arrow) { Some(p.type_ref()?) } else { None };
@@ -380,7 +380,7 @@ impl<'a> Parser<'a> {
                                 p.here(),
                             ));
                         }
-                        methods.push(MethodSig { name, params, ret, span: start.to(p.prev_span()) });
+                        methods.push(MethodSig { name, params, ret });
                     }
                     _ => return Err(p.expected("`fn` or `}`")),
                 }

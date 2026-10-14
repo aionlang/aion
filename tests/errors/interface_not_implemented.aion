@@ -1,0 +1,5 @@
+// error: does not implement `Shape`: it needs `fn area() -> Float`
+interface Shape { fn area() -> Float }
+type Blob(x: Int)
+fn f(s: Shape) = s.area()
+f(Blob(1))

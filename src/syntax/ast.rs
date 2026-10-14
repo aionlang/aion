@@ -124,7 +124,6 @@ pub struct MethodSig {
     pub name: Ident,
     pub params: Vec<Param>,
     pub ret: Option<TypeRef>,
-    pub span: Span,
 }
 
 #[derive(Debug)]

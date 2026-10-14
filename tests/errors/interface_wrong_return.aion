@@ -1,0 +1,5 @@
+// error: `Bad.area` returns Int, but `Shape` needs `fn area() -> Float`
+interface Shape { fn area() -> Float }
+type Bad(x: Int) { fn area() = x }
+fn f(s: Shape) = s.area()
+f(Bad(1))

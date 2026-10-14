@@ -240,8 +240,10 @@ int64_t aion_gc_object_count(void) {
 
 /* ── Objects & strings ────────────────────────────────────────── */
 
-void *aion_new_object(int64_t nslots, int64_t ptr_mask) {
-    return gc_alloc((size_t)nslots * 8, AION_F_SCAN, (uint64_t)ptr_mask);
+/* `type_id` is the compiler's number for the object's type plus one (0: not a
+ * user type); calls through an interface read it back from the header. */
+void *aion_new_object(int64_t nslots, int64_t ptr_mask, int64_t type_id) {
+    return gc_alloc((size_t)nslots * 8, AION_F_SCAN | ((uint32_t)type_id << AION_F_TYPE_SHIFT), (uint64_t)ptr_mask);
 }
 
 /* An Array<T>: `len` 8-byte slots, all set to `fill` (the slot's bit pattern).

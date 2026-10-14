@@ -1,0 +1,4 @@
+// error: `Two.scale` takes (Int), but `Scaler` needs `fn scale(Float) -> Float`
+interface Scaler { fn scale(by: Float) -> Float }
+type Two(x: Float) { fn scale(by: Int) = x * by }
+s: Scaler = Two(2)

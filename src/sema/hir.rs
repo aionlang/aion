@@ -46,12 +46,23 @@ pub struct FnSig {
 
 pub struct Program {
     pub types: Vec<TypeDef>,
+    /// Dispatch tables for calls through interface-typed values.
+    pub dispatch: Vec<Dispatch>,
     pub globals: Vec<Global>,
     pub funcs: Vec<Func>,
     /// Module initialisers (top-level statements), in dependency order.
     pub inits: Vec<FnId>,
     /// The entry module's `fn main()`, run after all initialisers.
     pub main: Option<FnId>,
+}
+
+/// How one method of an interface is found at run time: for each concrete type
+/// that is used as the interface, the function that implements it.
+pub struct Dispatch {
+    pub iface: TypeId,
+    /// Index into the interface's methods; one past the end means `toString`.
+    pub method: usize,
+    pub entries: Vec<(TypeId, FnId)>,
 }
 
 /// A module-level variable.
@@ -175,6 +186,11 @@ pub enum ExprKind {
     Closure { func: FnId },
     /// Allocate a zeroed instance (string fields start as `""`).
     New(TypeId),
+    /// A value of a type that implements an interface, used as that interface
+    /// (the same pointer; the object header says which type it really is).
+    Upcast(Box<Expr>),
+    /// Call a method of an interface through the object's real type; `args[0]` is the receiver.
+    CallIface { iface: TypeId, method: usize, args: Vec<Expr> },
     /// `T` → `T?` (boxes an Int, Float or Bool).
     Wrap(Box<Expr>),
     /// `T?` → `T`; panics if it is null.

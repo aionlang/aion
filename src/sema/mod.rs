@@ -15,7 +15,7 @@ mod generics;
 pub mod hir;
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::diag::{Diagnostic, Result, Span};
@@ -36,6 +36,16 @@ pub struct TypeInfo {
     pub ctor: FnId,
     /// `Some(T)` for the built-in `Array<T>`, whose operations are intrinsics.
     pub array_elem: Option<Ty>,
+    /// For an `interface`: the methods a type needs to be used as it.
+    pub iface: Option<Vec<IfaceMethod>>,
+}
+
+/// One method an interface requires (the receiver is not included in `params`).
+#[derive(Clone)]
+pub struct IfaceMethod {
+    pub name: String,
+    pub params: Vec<Ty>,
+    pub ret: Ty,
 }
 
 /// A generic function (or a generic method of a generic type's instance):
@@ -187,6 +197,10 @@ pub struct Checker<'a> {
     /// Names of module variables that functions, lambdas or other modules assign:
     /// these are never narrowed by null checks.
     unstable_globals: HashSet<String>,
+    /// (concrete type, interface) pairs where a value of the first is used as the second.
+    upcasts: RefCell<BTreeSet<(TypeId, TypeId)>>,
+    /// Interfaces whose values are turned into text (they then dispatch `toString` too).
+    stringified: RefCell<BTreeSet<TypeId>>,
 }
 
 impl Tables {
@@ -222,6 +236,7 @@ impl Tables {
             generic_methods: HashMap::new(),
             ctor: usize::MAX,
             array_elem: Some(elem),
+            iface: None,
         });
         self.arrays.borrow_mut().insert(elem, id);
         Ty::Obj(id)
@@ -315,6 +330,17 @@ pub fn analyze(loaded: &Loaded) -> Result<hir::Program> {
             }
             id += 1;
         }
+        // Types used as an interface that gets printed need their `toString` compiled.
+        let pending: Vec<TypeId> = {
+            let (ups, shown) = (ck.upcasts.borrow(), ck.stringified.borrow());
+            ups.iter().filter(|(_, i)| shown.contains(i)).map(|&(t, _)| t).collect()
+        };
+        for t in pending {
+            if !ck.tostring.borrow().contains_key(&t) {
+                ck.tostring_fn(t)?;
+                checked = true;
+            }
+        }
         if !checked {
             break;
         }
@@ -338,6 +364,8 @@ impl<'a> Checker<'a> {
             depth: Cell::new(0),
             ext_methods: RefCell::new(HashMap::new()),
             unstable_globals: unstable_globals(loaded),
+            upcasts: RefCell::new(BTreeSet::new()),
+            stringified: RefCell::new(BTreeSet::new()),
         };
         for module in 0..loaded.modules.len() {
             ck.declare_module(loaded, module)?;
@@ -352,6 +380,7 @@ impl<'a> Checker<'a> {
 
         // 1. Names of types and generic items, so any signature or field can mention them.
         let mut own_types: Vec<(TypeId, &ast::TypeDecl)> = Vec::new();
+        let mut own_ifaces: Vec<(TypeId, &ast::InterfaceDecl)> = Vec::new();
         for item in &module.ast.items {
             match item {
                 Item::Type(td) if td.type_params.is_empty() => {
@@ -362,9 +391,23 @@ impl<'a> Checker<'a> {
                         generic_methods: HashMap::new(),
                         ctor: usize::MAX,
                         array_elem: None,
+                        iface: None,
                     });
                     self.t.define(mi, &td.name, Sym::Type(id))?;
                     own_types.push((id, td));
+                }
+                Item::Interface(d) => {
+                    let id = self.t.add_type(TypeInfo {
+                        name: d.name.name.clone(),
+                        fields: Vec::new(),
+                        methods: HashMap::new(),
+                        generic_methods: HashMap::new(),
+                        ctor: usize::MAX,
+                        array_elem: None,
+                        iface: Some(Vec::new()),
+                    });
+                    self.t.define(mi, &d.name, Sym::Type(id))?;
+                    own_ifaces.push((id, d));
                 }
                 Item::Type(td) => {
                     let g = self.add_generic_type(mi, td);
@@ -383,9 +426,6 @@ impl<'a> Checker<'a> {
                         instances: RefCell::new(HashMap::new()),
                     });
                     self.t.define(mi, &decl.name, Sym::GenericFn(g))?;
-                }
-                Item::Interface(d) => {
-                    return Err(Diagnostic::new("interfaces are not available yet", d.name.span));
                 }
                 _ => {}
             }
@@ -422,6 +462,29 @@ impl<'a> Checker<'a> {
             {
                 self.add_extra_method(g, mi, owner, owner_params, decl)?;
             }
+        }
+
+        // 3a. What each interface requires.
+        for &(id, d) in &own_ifaces {
+            let mut methods: Vec<IfaceMethod> = Vec::new();
+            for m in &d.methods {
+                if methods.iter().any(|x| x.name == m.name.name) {
+                    return Err(Diagnostic::new(format!("duplicate method `{}`", m.name.name), m.name.span));
+                }
+                let mut params = Vec::new();
+                for p in &m.params {
+                    if p.default.is_some() {
+                        return Err(Diagnostic::new("interface methods cannot have default arguments", p.name.span));
+                    }
+                    params.push(self.resolve_value_type(mi, &p.ty, &empty)?);
+                }
+                let ret = match &m.ret {
+                    Some(r) => self.resolve_type(mi, r, &empty)?,
+                    None => Ty::Void,
+                };
+                methods.push(IfaceMethod { name: m.name.name.clone(), params, ret });
+            }
+            self.t.update_type(id, |ti| ti.iface = Some(methods));
         }
 
         // 3. Field types: primary-constructor parameters first, then body fields.
@@ -807,6 +870,84 @@ impl<'a> Checker<'a> {
         Ok(g.ty.get().expect("checking the initialiser fixes global types"))
     }
 
+    /// Why a value of type `ty` cannot be used as interface `iface`, if it can't.
+    pub fn conforms(&self, ty: TypeId, iface: TypeId) -> std::result::Result<(), String> {
+        let (t, i) = (self.t.ty(ty), self.t.ty(iface));
+        let Some(required) = &i.iface else { return Err(format!("`{}` is not an interface", i.name)) };
+        let show = |m: &IfaceMethod| {
+            let params: Vec<String> = m.params.iter().map(|&p| self.t.ty_name(p)).collect();
+            let ret = if m.ret == Ty::Void { String::new() } else { format!(" -> {}", self.t.ty_name(m.ret)) };
+            format!("{}({}){ret}", m.name, params.join(", "))
+        };
+        for m in required {
+            if t.generic_methods.contains_key(&m.name) {
+                return Err(format!("`{}.{}` is generic, so it can't implement `{}`", t.name, m.name, i.name));
+            }
+            let Some(&f) = t.methods.get(&m.name) else {
+                return Err(format!("`{}` does not implement `{}`: it needs `fn {}`", t.name, i.name, show(m)));
+            };
+            let info = self.func(f);
+            let actual: Vec<Ty> = info.params[1..].iter().map(|p| p.ty).collect();
+            if actual != m.params {
+                let have: Vec<String> = actual.iter().map(|&p| self.t.ty_name(p)).collect();
+                return Err(format!(
+                    "`{}.{}` takes ({}), but `{}` needs `fn {}`",
+                    t.name,
+                    m.name,
+                    have.join(", "),
+                    i.name,
+                    show(m)
+                ));
+            }
+            let ret = self.ret_of(f, Span::default()).map_err(|d| d.message)?;
+            if ret != m.ret {
+                return Err(format!(
+                    "`{}.{}` returns {}, but `{}` needs `fn {}`",
+                    t.name,
+                    m.name,
+                    self.t.ty_name(ret),
+                    i.name,
+                    show(m)
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Note that values of `ty` are used as `iface`, so dispatch tables include it.
+    pub fn register_upcast(&self, ty: TypeId, iface: TypeId) {
+        self.upcasts.borrow_mut().insert((ty, iface));
+    }
+
+    /// The dispatch tables for interface calls.
+    fn dispatch_tables(&self) -> Vec<hir::Dispatch> {
+        let ups = self.upcasts.borrow();
+        let shown = self.stringified.borrow();
+        let mut tables = Vec::new();
+        let ifaces: BTreeSet<TypeId> = ups.iter().map(|&(_, i)| i).collect();
+        for iface in ifaces {
+            let info = self.t.ty(iface);
+            let methods = info.iface.as_ref().expect("only interfaces are upcast to");
+            for (index, m) in methods.iter().enumerate() {
+                let entries = ups
+                    .iter()
+                    .filter(|&&(_, i)| i == iface)
+                    .map(|&(t, _)| (t, self.t.ty(t).methods[&m.name]))
+                    .collect();
+                tables.push(hir::Dispatch { iface, method: index, entries });
+            }
+            if shown.contains(&iface) {
+                let entries = ups
+                    .iter()
+                    .filter(|&&(_, i)| i == iface)
+                    .map(|&(t, _)| (t, self.tostring.borrow()[&t]))
+                    .collect();
+                tables.push(hir::Dispatch { iface, method: methods.len(), entries });
+            }
+        }
+        tables
+    }
+
     fn finish(self, entry_module: usize) -> Result<hir::Program> {
         let main = match self.t.scopes[entry_module].items.get("main") {
             Some(&Sym::Fn(id)) => Some(id),
@@ -824,6 +965,7 @@ impl<'a> Checker<'a> {
                 .hint("write statements directly in the file, or define `fn main() { … }`"));
         }
 
+        let dispatch = self.dispatch_tables();
         let globals = self
             .t
             .globals
@@ -847,7 +989,7 @@ impl<'a> Checker<'a> {
             .into_iter()
             .map(|slot| slot.func.unwrap_or_else(unused_func))
             .collect();
-        Ok(hir::Program { types, globals, funcs, inits: self.inits, main })
+        Ok(hir::Program { types, dispatch, globals, funcs, inits: self.inits, main })
     }
 }
 
