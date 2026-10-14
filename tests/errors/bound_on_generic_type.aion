@@ -1,0 +1,4 @@
+// error: can't be used for `T: Shape`
+interface Shape { fn area() -> Float }
+type Holder<T: Shape>(item: T)
+h := Holder(5)

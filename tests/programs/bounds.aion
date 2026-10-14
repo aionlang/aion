@@ -1,0 +1,33 @@
+// Type parameter bounds: fn f<T: Shape>(…) is checked where T becomes known
+interface Shape { fn area() -> Float }
+type Circle(r: Float) { fn area() = 3.0 * r * r }
+type Square(s: Float) { fn area() = s * s }
+type Blob(x: Int)
+
+// the bound is checked when T is known; inside, T's methods are available
+fn totalArea<T: Shape>(items: List<T>) -> Float {
+    total := 0.0
+    for it in items { total += it.area() }
+    return total
+}
+fn largest<T: Shape>(a: T, b: T) = if a.area() >= b.area() { a } else { b }
+
+println(totalArea([Circle(1), Circle(2)]))
+println(largest(Square(2), Square(3)).s)
+println(largest(Circle(1), Circle(0.5)).r)
+
+// T can be the interface itself
+shapes: List<Shape> = [Circle(1), Square(5)]
+println(totalArea(shapes))
+
+// a generic type with a bound
+type Holder<T: Shape>(item: T) {
+    fn describe() = "holds area ${item.area()}"
+}
+println(Holder(Circle(2)).describe())
+
+// bounds can be satisfied by methods added to built-in types
+interface Loud { fn shout() -> String }
+fn String.shout() = this.upper() + "!"
+fn twice<T: Loud>(x: T) = x.shout() + x.shout()
+println(twice("hey"))

@@ -136,6 +136,37 @@ impl<'a> Checker<'a> {
         self.declare_method(&self.module_names[module], module, ty, decl, &subst)
     }
 
+    /// `fn f<T: Shape>(…)`: check that the type given for `T` has what `Shape` requires.
+    fn check_bounds(
+        &self,
+        module: usize,
+        tparams: &[String],
+        bounds: &[Option<ast::TypeRef>],
+        args: &[Ty],
+        span: Span,
+    ) -> Result<()> {
+        for ((name, bound), &arg) in tparams.iter().zip(bounds).zip(args) {
+            let Some(bound) = bound else { continue };
+            let want = match self.resolve_type(module, bound, &self.empty)? {
+                Ty::Obj(b) if self.t.ty(b).iface.is_some() => b,
+                other => {
+                    return Err(Diagnostic::new(
+                        format!("the bound of `{name}` must be an interface, not {}", self.t.ty_name(other)),
+                        bound.span,
+                    ));
+                }
+            };
+            self.satisfies(arg, want).map_err(|why| {
+                Diagnostic::new(
+                    format!("{} can't be used for `{name}: {}`", self.t.ty_name(arg), self.t.ty_name(Ty::Obj(want))),
+                    span,
+                )
+                .hint(why)
+            })?;
+        }
+        Ok(())
+    }
+
     /// The concrete type `List<Int>` for template `g` and arguments `[Int]`.
     pub(super) fn instantiate_type(&self, g: usize, args: Vec<Ty>, span: Span) -> Result<TypeId> {
         let gt = self.generic_types.borrow()[g].clone();
@@ -153,6 +184,7 @@ impl<'a> Checker<'a> {
         if let Some(&id) = gt.instances.borrow().get(&args) {
             return Ok(id);
         }
+        self.check_bounds(gt.module, &gt.tparams, &gt.decl.bounds, &args, span)?;
         if self.depth.get() > MAX_DEPTH {
             return Err(Diagnostic::new("generic types nest too deeply", span));
         }
@@ -200,6 +232,7 @@ impl<'a> Checker<'a> {
         if let Some(&id) = gf.instances.borrow().get(&targs) {
             return Ok(id);
         }
+        self.check_bounds(gf.module, &gf.tparams, &gf.decl.bounds, &targs, span)?;
         if self.depth.get() > MAX_DEPTH {
             return Err(Diagnostic::new("generic functions nest too deeply", span));
         }

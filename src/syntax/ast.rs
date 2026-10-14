@@ -67,6 +67,8 @@ pub struct FnDecl {
     pub name: Ident,
     /// `fn map<T, R>(…)`
     pub type_params: Vec<Ident>,
+    /// `fn show<T: Shape>(…)`: one entry per type parameter.
+    pub bounds: Vec<Option<TypeRef>>,
     pub params: Vec<Param>,
     pub ret: Option<TypeRef>,
     pub body: FnBody,
@@ -101,6 +103,7 @@ pub struct TypeDecl {
     pub name: Ident,
     /// `type Box<T>(…)`
     pub type_params: Vec<Ident>,
+    pub bounds: Vec<Option<TypeRef>>,
     /// `type User(name: String, age: Int = 0)` — each parameter is also a field.
     pub primary: Option<Vec<Param>>,
     pub fields: Vec<FieldDecl>,

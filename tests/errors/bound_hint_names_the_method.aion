@@ -1,0 +1,4 @@
+// error: it needs `fn area() -> Float`
+interface Shape { fn area() -> Float }
+fn size<T: Shape>(item: T) = item.area()
+println(size(5))

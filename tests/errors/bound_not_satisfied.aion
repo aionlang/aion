@@ -1,0 +1,5 @@
+// error: Blob can't be used for `T: Shape`
+interface Shape { fn area() -> Float }
+type Blob(x: Int)
+fn size<T: Shape>(item: T) = item.area()
+println(size(Blob(1)))

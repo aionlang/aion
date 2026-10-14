@@ -149,18 +149,24 @@ impl<'a> Parser<'a> {
 
     /// `<T, R>` after a declaration's name (empty if absent).
     fn type_params(&mut self) -> Result<Vec<Ident>> {
-        let mut params = Vec::new();
+        Ok(self.bounded_type_params()?.0)
+    }
+
+    /// `<T, R: Shape>`: the names, and the interface each must satisfy.
+    fn bounded_type_params(&mut self) -> Result<(Vec<Ident>, Vec<Option<TypeRef>>)> {
+        let (mut params, mut bounds) = (Vec::new(), Vec::new());
         if self.peek() == Some(Token::Lt) {
             self.bump();
             loop {
                 params.push(self.ident()?);
+                bounds.push(if self.eat(Token::Colon) { Some(self.type_ref()?) } else { None });
                 if !self.eat(Token::Comma) {
                     break;
                 }
             }
             self.expect(Token::Gt)?;
         }
-        Ok(params)
+        Ok((params, bounds))
     }
 
     /// `<Int, String>` in an expression, if that is what follows; otherwise
@@ -331,7 +337,7 @@ impl<'a> Parser<'a> {
     /// Parse after `fn` (and the optional `Type.`): name, signature, body.
     fn fn_decl(&mut self, start: Span, is_extern: bool) -> Result<FnDecl> {
         let name = self.ident()?;
-        let type_params = self.type_params()?;
+        let (type_params, bounds) = self.bounded_type_params()?;
         let params = self.params()?;
         let ret = if self.eat(Token::Arrow) { Some(self.type_ref()?) } else { None };
         let body = if is_extern {
@@ -353,7 +359,7 @@ impl<'a> Parser<'a> {
         } else {
             return Err(self.expected("`{` or `=`"));
         };
-        Ok(FnDecl { name, type_params, params, ret, body, span: start.to(self.prev_span()) })
+        Ok(FnDecl { name, type_params, bounds, params, ret, body, span: start.to(self.prev_span()) })
     }
 
     /// `interface Name { fn method(params) -> Type … }`
@@ -393,7 +399,7 @@ impl<'a> Parser<'a> {
     fn type_decl(&mut self) -> Result<TypeDecl> {
         self.bump(); // `type`
         let name = self.ident()?;
-        let type_params = self.type_params()?;
+        let (type_params, bounds) = self.bounded_type_params()?;
         if self.peek() == Some(Token::Colon) {
             return Err(Diagnostic::new("type inheritance is not supported", self.here()));
         }
@@ -441,7 +447,7 @@ impl<'a> Parser<'a> {
             })?;
             self.expect(Token::RBrace)?;
         }
-        Ok(TypeDecl { name, type_params, primary, fields, ctor, inits, methods })
+        Ok(TypeDecl { name, type_params, bounds, primary, fields, ctor, inits, methods })
     }
 
     // ── statements ──────────────────────────────────────────────
@@ -1401,6 +1407,16 @@ mod tests {
         assert!(i.methods[0].ret.is_some() && i.methods[2].ret.is_none());
         let err = Parser::new(0, "interface A { fn f() = 1 }", 0).and_then(|mut p| p.module()).unwrap_err();
         assert!(err.message.contains("only a signature"));
+    }
+
+    #[test]
+    fn type_parameter_bounds() {
+        let m = module("fn f<T: Shape, R>(a: T) -> R = a\ntype Box<T: Shape>(item: T)\n");
+        let Item::Fn(f) = &m.items[0] else { panic!("expected a function") };
+        assert_eq!(f.type_params.len(), 2);
+        assert!(f.bounds[0].is_some() && f.bounds[1].is_none());
+        let Item::Type(t) = &m.items[1] else { panic!("expected a type") };
+        assert!(t.bounds[0].is_some());
     }
 
     #[test]

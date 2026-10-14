@@ -1,0 +1,4 @@
+// error: the bound of `T` must be an interface
+type Point(x: Int)
+fn f<T: Point>(item: T) = item
+println(f(Point(1)).x)

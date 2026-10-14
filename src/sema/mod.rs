@@ -872,38 +872,60 @@ impl<'a> Checker<'a> {
 
     /// Why a value of type `ty` cannot be used as interface `iface`, if it can't.
     pub fn conforms(&self, ty: TypeId, iface: TypeId) -> std::result::Result<(), String> {
-        let (t, i) = (self.t.ty(ty), self.t.ty(iface));
+        self.satisfies(Ty::Obj(ty), iface)
+    }
+
+    /// Does `ty` — any type, including `Int` with added methods — have everything `iface` requires?
+    pub fn satisfies(&self, ty: Ty, iface: TypeId) -> std::result::Result<(), String> {
+        let i = self.t.ty(iface);
         let Some(required) = &i.iface else { return Err(format!("`{}` is not an interface", i.name)) };
+        if ty == Ty::Obj(iface) {
+            return Ok(());
+        }
+        let name = self.t.ty_name(ty);
         let show = |m: &IfaceMethod| {
             let params: Vec<String> = m.params.iter().map(|&p| self.t.ty_name(p)).collect();
             let ret = if m.ret == Ty::Void { String::new() } else { format!(" -> {}", self.t.ty_name(m.ret)) };
             format!("{}({}){ret}", m.name, params.join(", "))
         };
         for m in required {
-            if t.generic_methods.contains_key(&m.name) {
-                return Err(format!("`{}.{}` is generic, so it can't implement `{}`", t.name, m.name, i.name));
-            }
-            let Some(&f) = t.methods.get(&m.name) else {
-                return Err(format!("`{}` does not implement `{}`: it needs `fn {}`", t.name, i.name, show(m)));
+            // the method's parameter types (without the receiver) and result type, if `ty` has it
+            let found: Option<(Vec<Ty>, Ty)> = match ty {
+                Ty::Obj(t) if self.t.ty(t).generic_methods.contains_key(&m.name) => {
+                    return Err(format!("`{name}.{}` is generic, so it can't implement `{}`", m.name, i.name));
+                }
+                Ty::Obj(t) if self.t.ty(t).iface.is_some() => self
+                    .t
+                    .ty(t)
+                    .iface
+                    .as_ref()
+                    .and_then(|ms| ms.iter().find(|x| x.name == m.name))
+                    .map(|x| (x.params.clone(), x.ret)),
+                Ty::Obj(t) => match self.t.ty(t).methods.get(&m.name) {
+                    Some(&f) => Some(self.signature_of(f)?),
+                    None => None,
+                },
+                other => match self.ext_method(other, &m.name) {
+                    Some(f) => Some(self.signature_of(f)?),
+                    None => None,
+                },
             };
-            let info = self.func(f);
-            let actual: Vec<Ty> = info.params[1..].iter().map(|p| p.ty).collect();
+            let Some((actual, ret)) = found else {
+                return Err(format!("`{name}` does not implement `{}`: it needs `fn {}`", i.name, show(m)));
+            };
             if actual != m.params {
                 let have: Vec<String> = actual.iter().map(|&p| self.t.ty_name(p)).collect();
                 return Err(format!(
-                    "`{}.{}` takes ({}), but `{}` needs `fn {}`",
-                    t.name,
+                    "`{name}.{}` takes ({}), but `{}` needs `fn {}`",
                     m.name,
                     have.join(", "),
                     i.name,
                     show(m)
                 ));
             }
-            let ret = self.ret_of(f, Span::default()).map_err(|d| d.message)?;
             if ret != m.ret {
                 return Err(format!(
-                    "`{}.{}` returns {}, but `{}` needs `fn {}`",
-                    t.name,
+                    "`{name}.{}` returns {}, but `{}` needs `fn {}`",
                     m.name,
                     self.t.ty_name(ret),
                     i.name,
@@ -912,6 +934,14 @@ impl<'a> Checker<'a> {
             }
         }
         Ok(())
+    }
+
+    /// Parameter types (without the receiver) and result type of method `f`.
+    fn signature_of(&self, f: FnId) -> std::result::Result<(Vec<Ty>, Ty), String> {
+        let info = self.func(f);
+        let params = info.params[1..].iter().map(|p| p.ty).collect();
+        let ret = self.ret_of(f, Span::default()).map_err(|d| d.message)?;
+        Ok((params, ret))
     }
 
     /// Note that values of `ty` are used as `iface`, so dispatch tables include it.
