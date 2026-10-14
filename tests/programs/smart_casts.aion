@@ -1,0 +1,50 @@
+// Smart casts: after a null check an optional variable can be used as a plain value.
+type Node(v: Int) { next: Node?; name: String? }
+
+fn show(n: Node?) {
+    if n != null { println("node", n.v) } else { println("none") }
+}
+show(Node(4))
+show(null)
+
+fn len(s: String?) -> Int {
+    if s == null { return -1 }
+    return s.length()
+}
+println(len("abcd"), len(null))
+
+fn both(a: String?, b: String?) = if a != null && b != null { a + b } else { "-" }
+println(both("x", "y"), both("x", null))
+
+fn either(a: Int?, b: Int?) = if a == null || b == null { 0 } else { a + b }
+println(either(1, 2), either(null, 2))
+
+fn negated(s: String?) = if !(s == null) { s.upper() } else { "?" }
+println(negated("q"), negated(null))
+
+// a list walk: the loop variable is reassigned
+head := Node(1)
+head.next = Node(2)
+head.next!!.next = Node(3)
+total := 0
+cur: Node? = head
+while cur != null {
+    total += cur.v
+    cur = cur.next
+}
+println(total)
+
+// narrowing inside lambdas
+fn twice(n: Node?) {
+    if n != null {
+        [1, 2].forEach { println(n.v * it) }
+    }
+}
+twice(Node(5))
+
+// a global
+g: Int? = 7
+if g != null { println(g + 1) }
+h: String? = null
+if h == null { println("h is null") } else { println(h.length()) }
+

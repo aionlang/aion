@@ -10,6 +10,9 @@ use crate::diag::{Diagnostic, Result, Span};
 use crate::syntax::ast::{self, AssignOp, ExprKind as A, FnBody, InterpPart, StmtKind};
 
 mod generic_calls;
+mod narrow;
+
+pub(super) use narrow::{Assign, lambda_assigned, walk_expr, walk_stmt, walk_stmts};
 
 const MAX_CAPTURES: usize = 63;
 
@@ -21,6 +24,21 @@ pub(super) fn check_fn(ck: &Checker, id: FnId, work: &Work) -> Result<hir::Func>
         cx.scopes[0].insert(p.name.clone(), local);
     }
     cx.ret = info.ret.get();
+    cx.lambda_assigned = match work {
+        Work::Fn { decl, .. } | Work::Method { decl, .. } => match &decl.body {
+            FnBody::Block(stmts) => lambda_assigned(|f| walk_stmts(stmts, false, f)),
+            FnBody::Expr(e) => lambda_assigned(|f| walk_expr(e, false, f)),
+            FnBody::Extern { .. } => HashSet::new(),
+        },
+        Work::Ctor { decl, .. } => lambda_assigned(|f| {
+            decl.fields.iter().filter_map(|fl| fl.init.as_ref()).for_each(|e| walk_expr(e, false, f));
+            decl.inits.iter().for_each(|blk| walk_stmts(blk, false, f));
+            if let Some(c) = &decl.ctor {
+                walk_stmts(&c.body, false, f);
+            }
+        }),
+        Work::Init { stmts } => lambda_assigned(|f| stmts.iter().for_each(|s| walk_stmt(s, false, f))),
+    };
 
     let body = match work {
         Work::Fn { decl, subst } | Work::Method { decl, subst } => {
@@ -94,7 +112,9 @@ pub(super) fn check_fn(ck: &Checker, id: FnId, work: &Work) -> Result<hir::Func>
             cx.init = Some(InitState { fn_id: id, declared: HashSet::new() });
             let mut out = Vec::new();
             for s in stmts {
+                let after = cx.kill_before(s);
                 cx.top_stmt(s, &mut out)?;
+                cx.kill_after(&after);
             }
             Some(out)
         }
@@ -294,6 +314,10 @@ struct Cx<'c, 'a> {
     outer: Vec<Frame>,
     vars: Vec<VarInfo>,
     lambdas: Vec<PendingLambda>,
+    /// Optional variables currently known to be non-null (see `narrow.rs`).
+    narrowed: Vec<narrow::Narrow>,
+    /// Names assigned inside lambdas of the function being checked: never narrowed.
+    lambda_assigned: HashSet<String>,
 }
 
 fn mk(kind: K, ty: Ty) -> hir::Expr {
@@ -347,6 +371,8 @@ impl<'c, 'a> Cx<'c, 'a> {
             outer: Vec::new(),
             vars: Vec::new(),
             lambdas: Vec::new(),
+            narrowed: Vec::new(),
+            lambda_assigned: HashSet::new(),
         }
     }
 
@@ -630,10 +656,23 @@ impl<'c, 'a> Cx<'c, 'a> {
     /// Check statements in a fresh lexical scope.
     fn block(&mut self, stmts: &[ast::Stmt]) -> Result<Vec<hir::Stmt>> {
         self.scopes.push(HashMap::new());
+        let saved = self.narrowed.clone();
         let mut out = Vec::new();
-        let result = stmts.iter().try_for_each(|s| self.stmt(s, &mut out));
+        let result = stmts.iter().try_for_each(|s| self.stmt_narrowing(s, &mut out));
+        self.narrowed = saved;
         self.scopes.pop();
         result.map(|()| out)
+    }
+
+    /// [`Self::stmt`], keeping the null-check knowledge of `narrow.rs` up to date.
+    fn stmt_narrowing(&mut self, s: &ast::Stmt, out: &mut Vec<hir::Stmt>) -> Result<()> {
+        let after = self.kill_before(s);
+        self.stmt(s, out)?;
+        self.kill_after(&after);
+        if let (StmtKind::Expr(e), Some(done)) = (&s.kind, out.last()) {
+            self.guard_facts(e, done);
+        }
+        Ok(())
     }
 
     /// A top-level statement of a module: `x := …` defines a global.
@@ -681,10 +720,11 @@ impl<'c, 'a> Cx<'c, 'a> {
 
             StmtKind::Expr(e) => out.push(self.stmt_expr(e)?),
 
-            StmtKind::While { cond, body } => {
-                let cond = self.condition(cond)?;
+            StmtKind::While { cond: test, body } => {
+                let cond = self.condition(test)?;
+                let facts = self.facts(test, true);
                 self.loops += 1;
-                let body = self.block(body);
+                let body = self.with_facts(facts, |cx| cx.block(body));
                 self.loops -= 1;
                 out.push(hir::Stmt::While { cond, body: body?, step: Vec::new() });
             }
@@ -731,11 +771,16 @@ impl<'c, 'a> Cx<'c, 'a> {
     /// An expression used as a statement: its value (if any) is discarded.
     fn stmt_expr(&mut self, e: &ast::Expr) -> Result<hir::Stmt> {
         Ok(hir::Stmt::Expr(match &e.kind {
-            A::If { cond, then, otherwise } => {
-                let cond = self.condition(cond)?;
-                let then = mk(K::Block(self.block(then)?, Box::new(unit())), Ty::Void);
+            A::If { cond: test, then, otherwise } => {
+                let cond = self.condition(test)?;
+                let (when_true, when_false) = (self.facts(test, true), self.facts(test, false));
+                let then = self.with_facts(when_true, |cx| cx.block(then))?;
+                let then = mk(K::Block(then, Box::new(unit())), Ty::Void);
                 let otherwise = match otherwise {
-                    Some(b) => mk(K::Block(self.block(b)?, Box::new(unit())), Ty::Void),
+                    Some(b) => {
+                        let b = self.with_facts(when_false, |cx| cx.block(b))?;
+                        mk(K::Block(b, Box::new(unit())), Ty::Void)
+                    }
                     None => unit(),
                 };
                 mk(K::Cond { cond: Box::new(cond), then: Box::new(then), otherwise: Box::new(otherwise) }, Ty::Void)
@@ -1406,14 +1451,17 @@ impl<'c, 'a> Cx<'c, 'a> {
             }
 
             A::Name(n) => match self.resolve(n) {
-                Some(Named::Local(id)) => self.local_expr(id),
+                Some(Named::Local(id)) => {
+                    let value = self.local_expr(id);
+                    self.narrowed_var(value, self.locals[id].var)
+                }
                 Some(Named::Field(index, ty)) => {
                     let obj = self.this_expr().expect("fields imply `this`");
                     mk(K::Field { obj: Box::new(obj), index }, ty)
                 }
                 Some(Named::Global(g)) => {
                     let ty = self.global_use(g, e.span)?;
-                    mk(K::Global(g), ty)
+                    self.narrowed_global(mk(K::Global(g), ty), g)
                 }
                 Some(Named::Generic) => {
                     return Err(Diagnostic::new(format!("`{n}` is generic, so it can't be used without arguments"), e.span)
@@ -1475,6 +1523,14 @@ impl<'c, 'a> Cx<'c, 'a> {
                 }
             }
 
+            // `a && b` checks `b` knowing `a` held; `a || b` knowing it did not.
+            A::Binary(op @ (ast::BinOp::And | ast::BinOp::Or), l, r) => {
+                let l_val = self.value(l)?;
+                let facts = self.facts(l, *op == ast::BinOp::And);
+                let r_val = self.with_facts(facts, |cx| cx.value(r))?;
+                self.binary(*op, l_val, r_val, e.span)?
+            }
+
             A::Binary(op, l, r) => {
                 // `null` can only be compared (`x == null`), not computed with.
                 let equality = matches!(op, ast::BinOp::Eq | ast::BinOp::Ne);
@@ -1531,13 +1587,17 @@ impl<'c, 'a> Cx<'c, 'a> {
     /// Statements followed by a value: the last expression of the block.
     fn block_value(&mut self, stmts: &[ast::Stmt]) -> Result<hir::Expr> {
         self.scopes.push(HashMap::new());
+        let saved = self.narrowed.clone();
         let result = (|| {
             let mut out = Vec::new();
             let mut tail = unit();
             for (i, s) in stmts.iter().enumerate() {
                 match &s.kind {
-                    StmtKind::Expr(e) if i + 1 == stmts.len() => tail = self.expr(e)?,
-                    _ => self.stmt(s, &mut out)?,
+                    StmtKind::Expr(e) if i + 1 == stmts.len() => {
+                        self.kill_before(s);
+                        tail = self.expr(e)?;
+                    }
+                    _ => self.stmt_narrowing(s, &mut out)?,
                 }
             }
             Ok(if out.is_empty() {
@@ -1547,6 +1607,7 @@ impl<'c, 'a> Cx<'c, 'a> {
                 mk(K::Block(out, Box::new(tail)), ty)
             })
         })();
+        self.narrowed = saved;
         self.scopes.pop();
         result
     }
@@ -1559,10 +1620,12 @@ impl<'c, 'a> Cx<'c, 'a> {
         otherwise: Option<&[ast::Stmt]>,
         span: Span,
     ) -> Result<hir::Expr> {
-        let cond = self.condition(cond)?;
-        let mut then = self.block_value(then)?;
+        let test = cond;
+        let cond = self.condition(test)?;
+        let (when_true, when_false) = (self.facts(test, true), self.facts(test, false));
+        let mut then = self.with_facts(when_true, |cx| cx.block_value(then))?;
         let mut other = match otherwise {
-            Some(b) => self.block_value(b)?,
+            Some(b) => self.with_facts(when_false, |cx| cx.block_value(b))?,
             None => unit(),
         };
         if otherwise.is_none() && then.ty != Ty::Void {

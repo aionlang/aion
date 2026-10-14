@@ -1,0 +1,7 @@
+// error: cannot apply `+` to Int? and Int
+fn f(x: Int?) {
+    if x != null {
+        x = null
+        println(x + 1)
+    }
+}

@@ -1,0 +1,4 @@
+// error: cannot apply `+` to Int? and Int
+g: Int? = 5
+fn reset() { g = null }
+if g != null { println(g + 1) }

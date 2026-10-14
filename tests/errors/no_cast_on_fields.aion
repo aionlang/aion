@@ -1,0 +1,5 @@
+// error: a Node? has no field `v`
+type Node(v: Int) { next: Node? }
+fn f(n: Node) {
+    if n.next != null { println(n.next.v) }
+}

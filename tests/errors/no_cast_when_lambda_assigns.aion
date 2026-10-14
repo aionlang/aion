@@ -1,0 +1,8 @@
+// error: cannot apply `+` to Int? and Int
+fn f(x: Int?) {
+    clear := { x = null }
+    if x != null {
+        clear()
+        println(x + 1)
+    }
+}

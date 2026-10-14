@@ -15,7 +15,7 @@ mod generics;
 pub mod hir;
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::diag::{Diagnostic, Result, Span};
@@ -184,6 +184,9 @@ pub struct Checker<'a> {
     depth: Cell<u32>,
     /// Methods added to the built-in types: `fn String.shout() = …`.
     ext_methods: RefCell<HashMap<(u8, String), FnId>>,
+    /// Names of module variables that functions, lambdas or other modules assign:
+    /// these are never narrowed by null checks.
+    unstable_globals: HashSet<String>,
 }
 
 impl Tables {
@@ -334,6 +337,7 @@ impl<'a> Checker<'a> {
             empty: Rc::new(HashMap::new()),
             depth: Cell::new(0),
             ext_methods: RefCell::new(HashMap::new()),
+            unstable_globals: unstable_globals(loaded),
         };
         for module in 0..loaded.modules.len() {
             ck.declare_module(loaded, module)?;
@@ -838,6 +842,47 @@ impl<'a> Checker<'a> {
             .collect();
         Ok(hir::Program { types, globals, funcs, inits: self.inits, main })
     }
+}
+
+/// Names that some function body, lambda or `module.name = …` assigns.  Top-level
+/// statements assigning their own variables in sequence do not count.
+fn unstable_globals(loaded: &Loaded) -> HashSet<String> {
+    use ast::FnBody;
+    let mut names = HashSet::new();
+    let mut anywhere = |a: body::Assign<'_>| {
+        names.insert(a.name.to_string());
+    };
+    let fn_decl = |d: &ast::FnDecl, note: &mut dyn FnMut(body::Assign<'_>)| match &d.body {
+        FnBody::Block(stmts) => body::walk_stmts(stmts, false, note),
+        FnBody::Expr(e) => body::walk_expr(e, false, note),
+        FnBody::Extern { .. } => {}
+    };
+    let mut top_level = Vec::new();
+    for module in &loaded.modules {
+        for item in &module.ast.items {
+            match item {
+                Item::Fn(d) | Item::Method { decl: d, .. } => fn_decl(d, &mut anywhere),
+                Item::Type(td) => {
+                    td.fields.iter().filter_map(|f| f.init.as_ref()).for_each(|e| body::walk_expr(e, false, &mut anywhere));
+                    td.inits.iter().for_each(|b| body::walk_stmts(b, false, &mut anywhere));
+                    if let Some(c) = &td.ctor {
+                        body::walk_stmts(&c.body, false, &mut anywhere);
+                    }
+                    td.methods.iter().for_each(|m| fn_decl(m, &mut anywhere));
+                }
+                Item::Stmt(s) => top_level.push(s),
+            }
+        }
+    }
+    // Plain top-level assignments are straight-line code; only lambdas and `a.b = …` count.
+    for s in top_level {
+        body::walk_stmt(s, false, &mut |a| {
+            if a.in_lambda || a.field {
+                names.insert(a.name.to_string());
+            }
+        });
+    }
+    names
 }
 
 /// Stands in for a function that was never checked (see [`FnSlot::lazy`]), so ids stay valid.

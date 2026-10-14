@@ -1,0 +1,4 @@
+// error: cannot apply `+` to Int? and Int
+fn f(x: Int?, c: Bool) {
+    if c || x != null { println(x + 1) }
+}
