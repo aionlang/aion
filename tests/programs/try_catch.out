@@ -1,0 +1,17 @@
+20
+caught: negative: -3
+-1
+caught: division by zero
+0
+before
+handled negative: -1
+ok failed: boom
+3 true
+null
+[1, 2, 3]
+rethrown inner 111
+  cleanup in guarded
+caught from guarded
+-1
+unexpected null value
+done

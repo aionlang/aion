@@ -174,6 +174,8 @@ pub enum ExprKind {
     Elvis(Box<Expr>, Box<Expr>),
     /// The `null` literal.
     Null,
+    /// `try { … } catch e { … }`: the value of the block, or of the handler if something panicked.
+    Try { body: Vec<Stmt>, catch_name: Option<Ident>, handler: Vec<Stmt> },
     /// `f(x)`, `List<Int>()`: explicit type arguments are optional.
     Call { callee: Box<Expr>, type_args: Vec<TypeRef>, args: Vec<Arg> },
     /// `xs[i]`

@@ -408,3 +408,8 @@ extern fn __defer_push(action: () -> Unit) = "aion_defer_push"
 extern fn __defer_mark() -> Int = "aion_defer_mark"
 extern fn __defer_run(mark: Int) = "aion_defer_run"
 extern fn __try(body: () -> Unit, handler: (String) -> Unit) = "aion_try"
+// …and one per kind of result: the compiler passes closures returning that kind
+extern fn __try_int(body: () -> Int, handler: (String) -> Int) -> Int = "aion_try_word"
+extern fn __try_float(body: () -> Float, handler: (String) -> Float) -> Float = "aion_try_float"
+extern fn __try_bool(body: () -> Bool, handler: (String) -> Bool) -> Bool = "aion_try_bool"
+extern fn __try_ptr(body: () -> String, handler: (String) -> String) -> String = "aion_try_ptr"

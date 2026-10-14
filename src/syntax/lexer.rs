@@ -37,6 +37,10 @@ pub enum Token {
     Return,
     #[token("defer")]
     Defer,
+    #[token("try")]
+    Try,
+    #[token("catch")]
+    Catch,
     #[token("true")]
     True,
     #[token("false")]
@@ -163,6 +167,8 @@ impl Token {
             Token::Continue => "`continue`",
             Token::Return => "`return`",
             Token::Defer => "`defer`",
+            Token::Try => "`try`",
+            Token::Catch => "`catch`",
             Token::True | Token::False => "a boolean",
             Token::Null => "`null`",
             Token::Float | Token::Int => "a number",

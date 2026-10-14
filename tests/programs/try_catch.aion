@@ -1,0 +1,62 @@
+// try / catch: panics (user and runtime errors) are caught; defers run on the way out
+fn risky(n: Int) -> Int {
+    if n < 0 { panic("negative: $n") }
+    return 100 / n
+}
+
+r := try { risky(5) } catch e { -1 }
+println(r)
+r2 := try { risky(-3) } catch e { println("caught:", e); -1 }
+println(r2)
+r3 := try { risky(0) } catch e { println("caught:", e); 0 }   // division by zero
+println(r3)
+
+// as a statement; the handler can use `it`
+try {
+    println("before")
+    risky(-1)
+    println("not reached")
+} catch {
+    println("handled", it)
+}
+
+// other result kinds
+s: String = try { "ok" } catch e { "failed" }
+t: String = try { panic("boom"); "ok" } catch e { "failed: " + e }
+println(s, t)
+f := try { 1.5 * 2 } catch e { 0.0 }
+b := try { 1 == 1 } catch e { false }
+println(f, b)
+o: Int? = try { risky(0) } catch e { null }
+println(o)
+xs := try { [1, 2, 3] } catch e { List<Int>() }
+println(xs)
+
+// nested, and variables set inside
+total := 0
+try {
+    total += 1
+    try {
+        total += 10
+        panic("inner")
+    } catch e {
+        total += 100
+        panic("rethrown " + e)
+    }
+} catch e {
+    println(e, total)
+}
+
+// defers run on the way out
+fn guarded() {
+    defer println("  cleanup in guarded")
+    panic("from guarded")
+}
+try { guarded() } catch e { println("caught", e) }
+
+// runtime errors are catchable too
+arr := Array(2, 0)
+println(try { arr[5] } catch e { -1 })
+n: Int? = null
+println(try { "${n!!}" } catch e { e })
+println("done")

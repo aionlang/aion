@@ -1,0 +1,5 @@
+// exit: 1
+// stderr: panic: fatal
+defer println("cleanup runs even when the program dies")
+println("working")
+panic("fatal")

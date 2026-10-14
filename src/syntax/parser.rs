@@ -768,6 +768,7 @@ impl<'a> Parser<'a> {
                 return Ok(inner);
             }
             Token::If => return self.if_expr(),
+            Token::Try => return self.try_expr(),
             Token::When => return self.when_expr(),
             Token::LBrace => return self.brace_expr(),
             Token::LBracket => {
@@ -873,6 +874,20 @@ impl<'a> Parser<'a> {
             }
             return self.eat(Token::Arrow).then_some(params);
         }
+    }
+
+    /// `try { body } catch e { handler }`; the name is optional (then the message is `it`).
+    fn try_expr(&mut self) -> Result<Expr> {
+        let start = self.bump().span;
+        let body = self.block()?;
+        if self.peek() != Some(Token::Catch) {
+            return Err(self.expected("`catch` after the `try` block"));
+        }
+        self.bump();
+        let catch_name = if self.peek() == Some(Token::Ident) { Some(self.ident()?) } else { None };
+        let handler = self.block()?;
+        let span = start.to(self.prev_span());
+        Ok(Expr { kind: ExprKind::Try { body, catch_name, handler }, span })
     }
 
     fn if_expr(&mut self) -> Result<Expr> {
@@ -1320,6 +1335,25 @@ mod tests {
         let e = parse_expr("!!a");
         assert!(matches!(&e.kind, ExprKind::Unary(UnOp::Not, inner) if matches!(inner.kind, ExprKind::Unary(UnOp::Not, _))));
         assert!(matches!(parse_expr("a != b").kind, ExprKind::Binary(BinOp::Ne, ..)));
+    }
+
+    #[test]
+    fn defer_and_try_syntax() {
+        let m = module("fn f() {\n    defer cleanup()\n    defer { a()\n b() }\n}\n");
+        let Item::Fn(f) = &m.items[0] else { panic!("expected a function") };
+        let FnBody::Block(body) = &f.body else { panic!("expected a block body") };
+        assert!(matches!(&body[0].kind, StmtKind::Defer(s) if s.len() == 1));
+        assert!(matches!(&body[1].kind, StmtKind::Defer(s) if s.len() == 2));
+
+        let e = parse_expr("try { a() } catch e { b(e) }");
+        let ExprKind::Try { body, catch_name, handler } = &e.kind else { panic!("expected try, got {e:?}") };
+        assert_eq!((body.len(), handler.len()), (1, 1));
+        assert_eq!(catch_name.as_ref().unwrap().name, "e");
+        // the name is optional, and `catch` may start a line
+        let e = parse_expr("try { a() }\ncatch { b(it) }");
+        assert!(matches!(&e.kind, ExprKind::Try { catch_name: None, .. }));
+        // `try` is an ordinary expression
+        assert!(matches!(parse_expr("1 + try { 2 } catch { 3 }").kind, ExprKind::Binary(..)));
     }
 
     #[test]

@@ -137,6 +137,11 @@ fn walk_expr_kind<'a>(kind: &'a A, lambda: bool, f: &mut dyn FnMut(Assign<'a>)) 
             }
         }
         A::Block(stmts) => walk_stmts(stmts, lambda, f),
+        // both parts run as closures
+        A::Try { body, handler, .. } => {
+            walk_stmts(body, true, f);
+            walk_stmts(handler, true, f);
+        }
         A::Lambda { body, .. } => walk_stmts(body, true, f),
     }
 }

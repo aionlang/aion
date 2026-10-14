@@ -1,0 +1,2 @@
+// error: expected `catch` after the `try` block
+x := try { 1 }

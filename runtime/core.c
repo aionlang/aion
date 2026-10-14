@@ -92,7 +92,33 @@ void aion_panic(const char *msg) {
     exit(1);
 }
 
-/* try { body } catch (message) { handler }: both are closures. */
+/* try { body } catch (message) { handler }: both are closures.  One entry point per
+ * kind of result the closures return (the compiler picks the one that matches). */
+#define DEFINE_TRY(NAME, RET, CODE_RET, FIX)                                                      \
+    RET NAME(void *body, void *handler) {                                                         \
+        TryContext ctx;                                                                           \
+        ctx.prev = try_top;                                                                       \
+        ctx.frame = aion_frame_top;                                                               \
+        ctx.defers = defer_len;                                                                   \
+        CODE_RET raw;                                                                             \
+        try_top = &ctx;                                                                           \
+        if (setjmp(ctx.jump) == 0) {                                                              \
+            raw = (*(CODE_RET (**)(void *))body)(body);                                           \
+            try_top = ctx.prev;                                                                   \
+        } else {                                                                                  \
+            aion_frame_top = ctx.frame;                                                           \
+            raw = (*(CODE_RET (**)(void *, const char *))handler)(handler, aion_string(panic_message)); \
+        }                                                                                         \
+        return FIX(raw);                                                                          \
+    }
+
+#define KEEP(x) (x)
+#define AS_BOOL(x) ((bool)((x) & 1)) /* the upper bits of an i1 return are unspecified */
+DEFINE_TRY(aion_try_word, int64_t, int64_t, KEEP)
+DEFINE_TRY(aion_try_float, double, double, KEEP)
+DEFINE_TRY(aion_try_ptr, const char *, const char *, KEEP)
+DEFINE_TRY(aion_try_bool, bool, uint8_t, AS_BOOL)
+
 void aion_try(void *body, void *handler) {
     TryContext ctx;
     ctx.prev = try_top;

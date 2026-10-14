@@ -288,6 +288,7 @@ struct Frame {
     captures: Vec<hir::Capture>,
     block_defers: Vec<Option<LocalId>>,
     loop_bases: Vec<usize>,
+    in_try: bool,
 }
 
 /// A checked lambda waiting for the enclosing function to finish, which
@@ -326,6 +327,10 @@ struct Cx<'c, 'a> {
     block_defers: Vec<Option<LocalId>>,
     /// `block_defers.len()` at the start of each enclosing loop body.
     loop_bases: Vec<usize>,
+    /// Checking the body or handler of a `try` (which run as closures)?
+    in_try: bool,
+    /// The next lambda frame is the body of a `try`.
+    pending_try: bool,
     /// Optional variables currently known to be non-null (see `narrow.rs`).
     narrowed: Vec<narrow::Narrow>,
     /// Names assigned inside lambdas of the function being checked: never narrowed.
@@ -385,6 +390,8 @@ impl<'c, 'a> Cx<'c, 'a> {
             lambdas: Vec::new(),
             block_defers: Vec::new(),
             loop_bases: Vec::new(),
+            in_try: false,
+            pending_try: false,
             narrowed: Vec::new(),
             lambda_assigned: HashSet::new(),
         }
@@ -478,9 +485,11 @@ impl<'c, 'a> Cx<'c, 'a> {
             captures: take(&mut self.captures),
             block_defers: take(&mut self.block_defers),
             loop_bases: take(&mut self.loop_bases),
+            in_try: self.in_try,
         };
         self.outer.push(saved);
         (self.ret, self.in_ctor, self.loops) = (ret, false, 0);
+        self.in_try = replace(&mut self.pending_try, false);
     }
 
     fn exit_frame(&mut self) -> (Vec<LocalInfo>, Vec<hir::Capture>) {
@@ -489,7 +498,7 @@ impl<'c, 'a> Cx<'c, 'a> {
         let captures = replace(&mut self.captures, f.captures);
         (self.scopes, self.ret, self.this) = (f.scopes, f.ret, f.this);
         (self.in_ctor, self.init, self.loops) = (f.in_ctor, f.init, f.loops);
-        (self.block_defers, self.loop_bases) = (f.block_defers, f.loop_bases);
+        (self.block_defers, self.loop_bases, self.in_try) = (f.block_defers, f.loop_bases, f.in_try);
         (locals, captures)
     }
 
@@ -836,6 +845,11 @@ impl<'c, 'a> Cx<'c, 'a> {
                 out.push(hir::Stmt::Expr(push));
             }
 
+            StmtKind::Return(_) if self.in_try => {
+                return Err(Diagnostic::new("`return` is not allowed inside `try` or `catch`", s.span)
+                    .hint("set a variable inside, and return after the `try`; or make the `try` the last expression"));
+            }
+
             StmtKind::Return(value) => {
                 let value = match (value, self.in_ctor, self.ret) {
                     (None, true, _) => self.this_expr(),
@@ -883,6 +897,9 @@ impl<'c, 'a> Cx<'c, 'a> {
                 mk(K::Cond { cond: Box::new(cond), then: Box::new(then), otherwise: Box::new(otherwise) }, Ty::Void)
             }
             A::Block(stmts) => mk(K::Block(self.block(stmts)?, Box::new(unit())), Ty::Void),
+            A::Try { body, catch_name, handler } => {
+                self.try_expr(body, catch_name.as_ref(), handler, Some(Ty::Void), e.span)?
+            }
             _ => self.expr(e)?,
         }))
     }
@@ -1254,6 +1271,45 @@ impl<'c, 'a> Cx<'c, 'a> {
         ))
     }
 
+    /// `try { body } catch e { handler }`
+    ///
+    /// Both parts become closures handed to the runtime's `aion_try`, which runs the
+    /// body and, if anything panics, calls the handler with the message.  The result
+    /// type is the expected type if there is one, else the body's.
+    fn try_expr(
+        &mut self,
+        body: &[ast::Stmt],
+        catch_name: Option<&ast::Ident>,
+        handler: &[ast::Stmt],
+        expected: Option<Ty>,
+        span: Span,
+    ) -> Result<hir::Expr> {
+        let want = expected.filter(|t| *t != Ty::Null);
+        self.pending_try = true;
+        let body_fn = self.lambda_sig(&[], true, body, Some(LamSig { params: Vec::new(), ret: want }), span)?;
+        let Ty::Fn(sig) = body_fn.ty else { unreachable!("a lambda is a function") };
+        let result = self.ck.t.fn_sig(sig).ret;
+
+        let named: Vec<ast::LambdaParam> =
+            catch_name.map(|n| ast::LambdaParam { name: n.clone(), ty: None }).into_iter().collect();
+        self.pending_try = true;
+        let sig = Some(LamSig { params: vec![Ty::Str], ret: Some(result) });
+        let handler_fn = self.lambda_sig(&named, catch_name.is_some(), handler, sig, span)?;
+
+        let runner = match result {
+            Ty::Void => "__try",
+            Ty::Int => "__try_int",
+            Ty::Float => "__try_float",
+            Ty::Bool => "__try_bool",
+            _ => "__try_ptr",
+        };
+        let Some(&Sym::Fn(func)) = self.ck.t.scopes[0].items.get(runner) else {
+            return Err(Diagnostic::new(format!("the prelude has no `{runner}`"), span));
+        };
+        self.ck.ret_of(func, span)?;
+        Ok(mk(K::Call { func, args: vec![body_fn, handler_fn] }, result))
+    }
+
     /// `hashOf(value)`
     fn hash_of(&mut self, args: &[ast::Arg], span: Span) -> Result<hir::Expr> {
         let [arg] = args else {
@@ -1431,6 +1487,9 @@ impl<'c, 'a> Cx<'c, 'a> {
             A::Call { callee, type_args, args } => self.call(callee, type_args, args, e.span, expected),
             A::List(items) => self.list_literal(items, expected, e.span),
             A::Map(entries) => self.map_literal(entries, expected, e.span),
+            A::Try { body, catch_name, handler } => {
+                self.try_expr(body, catch_name.as_ref(), handler, expected, e.span)
+            }
             _ => self.expr(e),
         }
     }
@@ -1654,6 +1713,8 @@ impl<'c, 'a> Cx<'c, 'a> {
             }
 
             A::Null => mk(K::Null, Ty::Null),
+
+            A::Try { body, catch_name, handler } => self.try_expr(body, catch_name.as_ref(), handler, None, e.span)?,
 
             A::NotNull(inner) => {
                 let v = self.value(inner)?;
