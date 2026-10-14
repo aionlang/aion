@@ -1,0 +1,2 @@
+// error: Array` takes 1 type argument
+fn f(a: Array<Int, Int>) = 1

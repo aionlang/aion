@@ -1,0 +1,117 @@
+// Arrays, lists, maps, sets; indexing, `for … in`, `in`, literals.
+
+// ── Array: fixed size, bounds-checked ──
+a := Array(5, 0)
+for i in 0..5 { a[i] = i * i }
+total := 0
+for v in a { total += v }
+println(a.size(), a[3], total)
+a[2] += 10
+println(a.get(2))
+f := Array<Float>(3, 1.5)
+f[1] = 2
+println(f[0] + f[1])
+words := Array(3, "x")
+words[1] = "y"
+println(words[0] + words[1] + words[2])
+flags := Array(2, true)
+flags[0] = false
+println(flags[0], flags[1])
+grid := Array<Array<Int>>(3)
+for i in 0..3 { grid[i] = Array(3, i) }
+println(grid[2][1], Array<String>(2)[0] == "")
+
+// ── List ──
+xs := List<Int>()
+xs.add(3)
+xs.add(1)
+xs.add(2)
+println(xs, xs.size(), xs[0], xs.contains(2), xs.indexOf(2))
+xs[1] = 10
+xs[0] += 5
+println(xs, xs.first(), xs.last())
+for x in xs { print(x, "") }
+println()
+println(xs.map { it * 2 })
+println(xs.filter { it > 2 }.map { "n$it" })
+println(xs.fold(0) { acc, x -> acc + x }, xs.reduce { a, b -> if a > b { a } else { b } })
+println(xs.any { it > 9 }, xs.all { it > 9 }, xs.count { it > 2 })
+println(xs.sortedWith { a, b -> a - b }, xs.reversed(), xs.take(2), xs.drop(2))
+println(xs.removeAt(0), xs.pop(), xs)
+xs.addAll([7, 8, 9])
+println(xs.join(" | "), xs.size())
+xs.clear()
+println(xs.isEmpty(), xs)
+
+lit := [1, 2, 3, 4]
+println(lit, lit.size(), 3 in lit, 9 in lit)
+mixed: List<Float> = [1, 2.5]
+println(mixed)
+empty: List<String> = []
+println(empty.isEmpty(), empty)
+names := ["bo", "al", "cy"]
+println(names.sortedWith { a, b -> if a < b { -1 } else { 1 } })
+nested := [[1, 2], [3]]
+println(nested, nested[0][1], nested.map { it.size() })
+
+// ── Map ──
+m := Map<String, Int>()
+m["a"] = 1
+m["b"] = 2
+m["a"] += 10
+println(m, m.size(), m["a"], m.containsKey("b"), "z" in m)
+for e in m { println(e.key, e.value) }
+println(m.keys(), m.values(), m.getOr("zzz", -1))
+println(m.remove("a"), m.remove("a"), m)
+ages := {"ann": 31, "bob": 25}
+println(ages["bob"], ages)
+ages.forEach { name, age -> println("$name is $age") }
+
+big := Map<Int, Int>()
+for i in 0..100 { big[i] = i * i }
+println(big.size(), big[99], big[50])
+for i in 0..90 { big.remove(i) }
+println(big.size(), big.keys())
+sum := 0
+big.forEach { k, v -> sum += v }
+println(sum)
+
+// ── Set ──
+s := setOf([3, 1, 3, 2, 1])
+println(s, s.size(), 3 in s, 7 in s, s.add(3), s.add(9))
+for x in s { print(x, "") }
+println()
+
+// ── your own types can join in ──
+type Ring(size: Int) {
+    fn get(i: Int) = (i * i) % size
+}
+type Bag(label: String) {
+    items: List<String> = List<String>()
+    fn iter() = items
+    fn contains(x: String) = items.contains(x)
+}
+r := Ring(7)
+println(r[3], r[4])
+bag := Bag("b")
+bag.items.add("x")
+bag.items.add("y")
+for item in bag { print(item, "") }
+println("y" in bag, "q" in bag)
+
+// ── objects as elements and keys ──
+type P(name: String)
+p1 := P("one")
+p2 := P("two")
+ps := [p1, p2]
+println(ps, ps.map { it.name }, ps.contains(p2), ps.indexOf(P("two")))
+owners := Map<P, String>()
+owners[p1] = "ann"
+owners[p2] = "bob"
+println(owners[p2], owners.size(), hashOf(p1) == hashOf(p1))
+println(hashOf(5) == hashOf(5), hashOf("a") == hashOf("a"), hashOf("a") == hashOf("b"), hashOf(2.5) >= 0, hashOf(true) >= 0)
+
+// ── closures stored in collections ──
+fs := [{ x: Int -> x + 1 }, { x: Int -> x * 2 }]
+for f in fs { print(f(10), "") }
+println(fs.size())

@@ -61,6 +61,12 @@ impl<'a> Checker<'a> {
                             .collect::<Result<Vec<_>>>()?;
                         Ok(Ty::Obj(self.instantiate_type(g, targs, ty.span)?))
                     }
+                    None if name == "Array" => {
+                        let [elem] = args.as_slice() else {
+                            return Err(Diagnostic::new("`Array` takes 1 type argument, e.g. `Array<Int>`", ty.span));
+                        };
+                        Ok(self.t.array_of(self.resolve_value_type(module, elem, subst)?))
+                    }
                     _ => Err(Diagnostic::new(format!("unknown type `{name}`"), ty.span)),
                 }
             }
@@ -161,6 +167,7 @@ impl<'a> Checker<'a> {
             methods: HashMap::new(),
             generic_methods: HashMap::new(),
             ctor: usize::MAX,
+            array_elem: None,
         });
         // Register before resolving anything, so a self-referential type (`next: Node<T>`) finds itself.
         gt.instances.borrow_mut().insert(args.clone(), id);

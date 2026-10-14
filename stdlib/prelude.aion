@@ -16,3 +16,368 @@ extern fn String.contains(needle: String) -> Bool = "aion_strings_contains"
 extern fn String.startsWith(prefix: String) -> Bool = "aion_strings_starts_with"
 extern fn String.upper() -> String = "aion_strings_upper"
 extern fn String.lower() -> String = "aion_strings_lower"
+// Bytes [start, end); stops the program if the range is invalid.
+extern fn String.substring(start: Int, end: Int) -> String = "aion_strings_substring"
+// Byte offset of the first `needle`, or -1.
+extern fn String.indexOf(needle: String) -> Int = "aion_strings_index_of"
+extern fn String.trim() -> String = "aion_strings_trim"
+extern fn String.replace(from: String, to: String) -> String = "aion_strings_replace"
+// The number the text spells, or `fallback` if it is not a whole number.
+extern fn String.toIntOr(fallback: Int) -> Int = "aion_strings_to_int_or"
+
+fn String.split(separator: String) -> List<String> {
+    parts := List<String>()
+    if separator.length() == 0 {
+        parts.add(this)
+        return parts
+    }
+    rest := this
+    at := rest.indexOf(separator)
+    while at >= 0 {
+        parts.add(rest.substring(0, at))
+        rest = rest.substring(at + separator.length(), rest.length())
+        at = rest.indexOf(separator)
+    }
+    parts.add(rest)
+    return parts
+}
+
+// ── Collections ─────────────────────────────────────────────────
+//
+// `Array<T>` is built into the compiler: a fixed-size block of slots with
+// size(), get(i), set(i, v) and clear(i), also written a[i] and a[i] = v.
+// Everything below is ordinary Aion built on top of it.
+//
+// Conventions the compiler relies on (so your own types can join in):
+//   x[i]        calls  x.get(i)         x[i] = v   calls  x.set(i, v)
+//   a in x      calls  x.contains(a)
+//   for v in x  uses   x.size() and x.get(i), or loops over x.iter() if there is one
+//   [a, b]      is a List,  {k: v} is a Map
+
+// A growable list.
+type List<T> {
+    items: Array<T> = Array<T>(8)
+    count: Int
+
+    fn size() = count
+    fn isEmpty() = count == 0
+
+    fn get(index: Int) -> T {
+        checkIndex(index)
+        return items[index]
+    }
+    fn set(index: Int, value: T) {
+        checkIndex(index)
+        items[index] = value
+    }
+    fn checkIndex(index: Int) {
+        if index < 0 || index >= count {
+            panic("index $index is out of bounds for size $count")
+        }
+    }
+
+    fn add(value: T) {
+        if count == items.size() {
+            bigger := Array<T>(count * 2)
+            for i in 0..count { bigger[i] = items[i] }
+            items = bigger
+        }
+        items[count] = value
+        count += 1
+    }
+    fn addAll(other: List<T>) {
+        for x in other { add(x) }
+    }
+    fn removeAt(index: Int) -> T {
+        checkIndex(index)
+        removed := items[index]
+        for i in index..count - 1 { items[i] = items[i + 1] }
+        count -= 1
+        items.clear(count)
+        return removed
+    }
+    fn pop() -> T = removeAt(count - 1)
+    fn clear() {
+        for i in 0..count { items.clear(i) }
+        count = 0
+    }
+
+    fn first() -> T = get(0)
+    fn last() -> T = get(count - 1)
+
+    fn contains(value: T) = indexOf(value) >= 0
+    fn indexOf(value: T) -> Int {
+        for i in 0..count {
+            if items[i] == value { return i }
+        }
+        return -1
+    }
+
+    fn copy() -> List<T> {
+        out := List<T>()
+        for x in this { out.add(x) }
+        return out
+    }
+    fn reversed() -> List<T> {
+        out := List<T>()
+        for i in 0..count { out.add(items[count - 1 - i]) }
+        return out
+    }
+    fn take(n: Int) -> List<T> {
+        out := List<T>()
+        for i in 0..count {
+            if i < n { out.add(items[i]) }
+        }
+        return out
+    }
+    fn drop(n: Int) -> List<T> {
+        out := List<T>()
+        for i in n..count { out.add(items[i]) }
+        return out
+    }
+
+    fn forEach(f: (T) -> Unit) {
+        for i in 0..count { f(items[i]) }
+    }
+    fn map<R>(f: (T) -> R) -> List<R> {
+        out := List<R>()
+        for i in 0..count { out.add(f(items[i])) }
+        return out
+    }
+    fn filter(keep: (T) -> Bool) -> List<T> {
+        out := List<T>()
+        for i in 0..count {
+            if keep(items[i]) { out.add(items[i]) }
+        }
+        return out
+    }
+    fn fold<R>(initial: R, f: (R, T) -> R) -> R {
+        acc := initial
+        for i in 0..count { acc = f(acc, items[i]) }
+        return acc
+    }
+    fn reduce(f: (T, T) -> T) -> T {
+        if count == 0 { panic("reduce of an empty list") }
+        acc := items[0]
+        for i in 1..count { acc = f(acc, items[i]) }
+        return acc
+    }
+    fn any(test: (T) -> Bool) -> Bool {
+        for i in 0..count {
+            if test(items[i]) { return true }
+        }
+        return false
+    }
+    fn all(test: (T) -> Bool) -> Bool {
+        for i in 0..count {
+            if !test(items[i]) { return false }
+        }
+        return true
+    }
+    fn count(test: (T) -> Bool) -> Int {
+        n := 0
+        for i in 0..count {
+            if test(items[i]) { n += 1 }
+        }
+        return n
+    }
+
+    // A new list, sorted by `compare(a, b)`: negative if a goes first, positive if b does.
+    fn sortedWith(compare: (T, T) -> Int) -> List<T> {
+        out := copy()
+        // insertion sort: simple, stable, fine for the sizes scripts deal with
+        for i in 1..count {
+            x := out.items[i]
+            j := i - 1
+            while j >= 0 && compare(out.items[j], x) > 0 {
+                out.items[j + 1] = out.items[j]
+                j -= 1
+            }
+            out.items[j + 1] = x
+        }
+        return out
+    }
+
+    fn join(separator: String = ", ") -> String {
+        out := ""
+        for i in 0..count {
+            if i > 0 { out += separator }
+            out += "${items[i]}"
+        }
+        return out
+    }
+    fn toString() = "[" + join() + "]"
+}
+
+// One key/value pair of a Map.
+type Entry<K, V>(key: K, value: V) {
+    fn toString() = "$key: $value"
+}
+
+// A hash map that remembers insertion order.  Keys are compared with `==`
+// (objects by identity) and hashed by `hashOf`.
+type Map<K, V> {
+    keyArr: Array<K> = Array<K>(8)
+    valArr: Array<V> = Array<V>(8)
+    live: Array<Bool> = Array<Bool>(8)
+    // open-addressing table of entry numbers; -1 is an empty slot
+    table: Array<Int> = Array(16, -1)
+    used: Int
+    count: Int
+
+    fn size() = count
+    fn isEmpty() = count == 0
+
+    // Entry number of `key`, or -1.
+    fn find(key: K) -> Int {
+        slot := hashOf(key) % table.size()
+        while table[slot] != -1 {
+            e := table[slot]
+            if live[e] && keyArr[e] == key { return e }
+            slot = (slot + 1) % table.size()
+        }
+        return -1
+    }
+
+    fn containsKey(key: K) = find(key) >= 0
+    fn contains(key: K) = find(key) >= 0
+
+    fn get(key: K) -> V {
+        e := find(key)
+        if e < 0 { panic("no such key: $key") }
+        return valArr[e]
+    }
+    fn getOr(key: K, fallback: V) -> V {
+        e := find(key)
+        if e < 0 { return fallback }
+        return valArr[e]
+    }
+
+    fn set(key: K, value: V) {
+        e := find(key)
+        if e >= 0 {
+            valArr[e] = value
+            return
+        }
+        if used == keyArr.size() {
+            capacity := keyArr.size()
+            if count * 2 >= capacity { capacity *= 2 }
+            rebuild(capacity)
+        }
+        keyArr[used] = key
+        valArr[used] = value
+        live[used] = true
+        place(used)
+        used += 1
+        count += 1
+    }
+
+    // Is `key` there? Removes it and says whether it was.
+    fn remove(key: K) -> Bool {
+        e := find(key)
+        if e < 0 { return false }
+        live[e] = false
+        keyArr.clear(e)
+        valArr.clear(e)
+        count -= 1
+        return true
+    }
+
+    fn clear() {
+        keyArr = Array<K>(8)
+        valArr = Array<V>(8)
+        live = Array<Bool>(8)
+        table = Array(16, -1)
+        used = 0
+        count = 0
+    }
+
+    // Put entry `e` in the first free table slot after its hash.
+    fn place(e: Int) {
+        slot := hashOf(keyArr[e]) % table.size()
+        while table[slot] != -1 { slot = (slot + 1) % table.size() }
+        table[slot] = e
+    }
+
+    // Copy the live entries into fresh arrays with room for `capacity` entries.
+    fn rebuild(capacity: Int) {
+        oldKeys := keyArr
+        oldVals := valArr
+        oldLive := live
+        oldUsed := used
+        keyArr = Array<K>(capacity)
+        valArr = Array<V>(capacity)
+        live = Array<Bool>(capacity)
+        table = Array(capacity * 2, -1)
+        used = 0
+        for i in 0..oldUsed {
+            if oldLive[i] {
+                keyArr[used] = oldKeys[i]
+                valArr[used] = oldVals[i]
+                live[used] = true
+                place(used)
+                used += 1
+            }
+        }
+    }
+
+    fn keys() -> List<K> {
+        out := List<K>()
+        for i in 0..used {
+            if live[i] { out.add(keyArr[i]) }
+        }
+        return out
+    }
+    fn values() -> List<V> {
+        out := List<V>()
+        for i in 0..used {
+            if live[i] { out.add(valArr[i]) }
+        }
+        return out
+    }
+    fn entries() -> List<Entry<K, V>> {
+        out := List<Entry<K, V>>()
+        for i in 0..used {
+            if live[i] { out.add(Entry(keyArr[i], valArr[i])) }
+        }
+        return out
+    }
+    fn iter() = entries()
+
+    fn forEach(f: (K, V) -> Unit) {
+        for i in 0..used {
+            if live[i] { f(keyArr[i], valArr[i]) }
+        }
+    }
+
+    fn toString() = "{" + entries().join() + "}"
+}
+
+// A set of distinct values, in insertion order.
+type Set<T> {
+    members: Map<T, Bool> = Map<T, Bool>()
+
+    fn size() = members.size()
+    fn isEmpty() = members.isEmpty()
+    fn contains(value: T) = members.containsKey(value)
+    // Adds `value`; says whether it was new.
+    fn add(value: T) -> Bool {
+        had := members.containsKey(value)
+        members.set(value, true)
+        return !had
+    }
+    fn remove(value: T) = members.remove(value)
+    fn clear() { members.clear() }
+    fn toList() = members.keys()
+    fn iter() = members.keys()
+    fn toString() = "{" + members.keys().join() + "}"
+}
+
+// The distinct values of a list.  (A function rather than a List method:
+// List's methods are declared whenever a List is, and one that mentioned Set
+// would pull in Map, which mentions List again, for ever.)
+fn setOf<T>(items: List<T>) -> Set<T> {
+    out := Set<T>()
+    for x in items { out.add(x) }
+    return out
+}

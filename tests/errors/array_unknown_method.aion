@@ -1,0 +1,3 @@
+// error: an Array has no method `push`
+a := Array(3, 0)
+a.push(1)

@@ -42,6 +42,10 @@ declare void @aion_print_float(double, i64)
 declare void @aion_print_bool(i64, i64)
 declare void @aion_panic_null() noreturn
 declare void @aion_panic_div_zero() noreturn
+declare void @aion_panic_index(i64, i64) noreturn
+declare ptr @aion_array_new(i64, i64, i64)
+declare i64 @aion_hash_int(i64)
+declare i64 @aion_hash_str(ptr)
 declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
 ";
 
@@ -49,7 +53,7 @@ declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
 const RUNTIME_SYMBOLS: &[&str] = &[
     "aion_new_object", "aion_concat", "aion_int_to_str", "aion_float_to_str", "aion_bool_to_str",
     "aion_str_eq", "aion_str_cmp", "aion_print_str", "aion_print_int", "aion_print_float", "aion_print_bool",
-    "aion_panic_null", "aion_panic_div_zero", "aion_frame_top",
+    "aion_panic_null", "aion_panic_div_zero", "aion_panic_index", "aion_array_new", "aion_hash_int", "aion_hash_str", "aion_frame_top",
 ];
 
 pub fn emit(p: &Program) -> String {
@@ -71,7 +75,7 @@ pub fn emit(p: &Program) -> String {
     }
 
     let mut declared = BTreeSet::new();
-    for f in p.funcs.iter().filter(|f| f.body.is_none()) {
+    for f in p.funcs.iter().filter(|f| f.body.is_none() && f.kind != FuncKind::Unused) {
         if RUNTIME_SYMBOLS.contains(&f.symbol.as_str()) || !declared.insert(f.symbol.clone()) {
             continue;
         }
@@ -513,6 +517,13 @@ impl<'a> FnGen<'a> {
                 let addr = self.field_addr(&o, *index);
                 self.store_cell(&addr, value.ty, &v);
             }
+            Stmt::SetElem { array, index, value } => {
+                let a = self.expr(array);
+                let i = self.expr(index);
+                let v = self.expr(value);
+                let addr = self.elem_addr(&a, &i);
+                self.store_cell(&addr, value.ty, &v);
+            }
             Stmt::Expr(e) => {
                 self.expr(e);
             }
@@ -568,6 +579,33 @@ impl<'a> FnGen<'a> {
     fn field_addr(&mut self, obj: &str, index: usize) -> String {
         let t = self.tmp();
         self.line(format!("{t} = getelementptr inbounds i64, ptr {obj}, i64 {index}"));
+        t
+    }
+
+    /// Number of elements of an array (null-checked).
+    fn array_len(&mut self, array: &str) -> String {
+        self.null_check(array);
+        let (sizep, size, wide, len) = (self.tmp(), self.tmp(), self.tmp(), self.tmp());
+        // The collector's header sits just before the payload; `size` (bytes) is at offset -16.
+        self.line(format!("{sizep} = getelementptr inbounds i8, ptr {array}, i64 -16"));
+        self.line(format!("{size} = load i32, ptr {sizep}"));
+        self.line(format!("{wide} = zext i32 {size} to i64"));
+        self.line(format!("{len} = lshr i64 {wide}, 3"));
+        len
+    }
+
+    /// Address of `array[index]`, panicking if the index is out of range.
+    fn elem_addr(&mut self, array: &str, index: &str) -> String {
+        let len = self.array_len(array);
+        let (ok, inb, oob) = (self.tmp(), self.label("inbounds"), self.label("oob"));
+        self.line(format!("{ok} = icmp ult i64 {index}, {len}"));
+        self.term(format!("br i1 {ok}, label %{inb}, label %{oob}"));
+        self.begin(&oob);
+        self.line(format!("call void @aion_panic_index(i64 {index}, i64 {len})"));
+        self.term("unreachable");
+        self.begin(&inb);
+        let t = self.tmp();
+        self.line(format!("{t} = getelementptr inbounds i64, ptr {array}, i64 {index}"));
         t
     }
 
@@ -676,6 +714,66 @@ impl<'a> FnGen<'a> {
                     self.root(&t);
                 }
                 t
+            }
+
+            ExprKind::ArrayNew { elem, len, fill } => {
+                let n = self.expr(len);
+                let f = self.expr(fill);
+                let bits = match elem {
+                    Ty::Int => f,
+                    Ty::Float => {
+                        let t = self.tmp();
+                        self.line(format!("{t} = bitcast double {f} to i64"));
+                        t
+                    }
+                    Ty::Bool => {
+                        let t = self.tmp();
+                        self.line(format!("{t} = zext i1 {f} to i64"));
+                        t
+                    }
+                    _ => {
+                        let t = self.tmp();
+                        self.line(format!("{t} = ptrtoint ptr {f} to i64"));
+                        t
+                    }
+                };
+                let is_ptr = i64::from(elem.is_gc());
+                let a = self.call_value("ptr", &format!("@aion_array_new(i64 {n}, i64 {is_ptr}, i64 {bits})"));
+                self.root(&a);
+                a
+            }
+
+            ExprKind::Elem { array, index } => {
+                let a = self.expr(array);
+                let i = self.expr(index);
+                let addr = self.elem_addr(&a, &i);
+                let t = self.load_cell(&addr, e.ty);
+                if e.ty.is_gc() {
+                    self.root(&t);
+                }
+                t
+            }
+
+            ExprKind::Hash(inner) => {
+                let v = self.expr(inner);
+                match inner.ty {
+                    Ty::Str => self.call_value("i64", &format!("@aion_hash_str(ptr {v})")),
+                    ty => {
+                        let bits = self.tmp();
+                        match ty {
+                            Ty::Int => return self.call_value("i64", &format!("@aion_hash_int(i64 {v})")),
+                            Ty::Float => self.line(format!("{bits} = bitcast double {v} to i64")),
+                            Ty::Bool => self.line(format!("{bits} = zext i1 {v} to i64")),
+                            _ => self.line(format!("{bits} = ptrtoint ptr {v} to i64")),
+                        }
+                        self.call_value("i64", &format!("@aion_hash_int(i64 {bits})"))
+                    }
+                }
+            }
+
+            ExprKind::ArrayLen(array) => {
+                let a = self.expr(array);
+                self.array_len(&a)
             }
 
             ExprKind::New(ty) => {

@@ -1,0 +1,2 @@
+// error: cannot infer the element type of an empty list
+xs := []

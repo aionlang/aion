@@ -1,0 +1,23 @@
+// exit: 1
+// stderr: substring(2, 5) is out of range for length 3
+s := "  Hello, World  "
+println("[" + s.trim() + "]", s.length(), s.trim().length())
+t := s.trim()
+println(t.substring(0, 5), t.substring(7, 12), t.substring(3, 3) == "")
+println(t.indexOf("World"), t.indexOf("o"), t.indexOf("xyz"))
+println(t.replace("l", "L"), t.replace("World", "there"), t.replace("", "!") == t, "aaa".replace("a", "bb"))
+println(t.upper(), t.lower(), t.contains("lo, W"), t.startsWith("Hell"), t.startsWith("ell"))
+
+parts := "a,b,,c".split(",")
+println(parts, parts.size(), parts[2] == "")
+println("no separators".split(","), "x".split("x"), "abc".split(""))
+println("a--b--c".split("--").join("/"))
+
+println("42".toIntOr(0), "-7".toIntOr(0), "4x".toIntOr(-1), "".toIntOr(-2), " 5".toIntOr(-3), "99999999999999999999".toIntOr(-4))
+
+// a tiny word-length report, using the pieces together
+line := "  the quick  brown fox "
+words := line.trim().split(" ").filter { it.length() > 0 }
+println(words, words.map { it.length() }.fold(0) { a, b -> a + b })
+println("héllo".length(), "héllo".upper())
+println("abc".substring(2, 5))

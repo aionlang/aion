@@ -1,0 +1,6 @@
+// exit: 1
+// stderr: index -1 is out of bounds for size 2
+a := Array(2, 0)
+a[1] = 5
+println(a[1])
+a[-1] = 1

@@ -89,6 +89,8 @@ pub enum FuncKind {
     Constructor,
     /// Called through a function value; receives its closure object as a hidden first argument.
     Closure,
+    /// A method of a generic instance that nothing calls; it was never checked and has no code.
+    Unused,
 }
 
 pub struct Func {
@@ -117,6 +119,8 @@ pub enum Stmt {
     Set(LocalId, Expr),
     SetGlobal(GlobalId, Expr),
     SetField { obj: Expr, index: usize, value: Expr },
+    /// `array[index] = value`, with a bounds check.
+    SetElem { array: Expr, index: Expr, value: Expr },
     Expr(Expr),
     /// `step` runs after the body and is where `continue` jumps to.
     While { cond: Expr, body: Vec<Stmt>, step: Vec<Stmt> },
@@ -164,6 +168,13 @@ pub enum ExprKind {
     Closure { func: FnId },
     /// Allocate a zeroed instance (string fields start as `""`).
     New(TypeId),
+    /// A new `Array<elem>` of `len` slots, each set to `fill`.
+    ArrayNew { elem: Ty, len: Box<Expr>, fill: Box<Expr> },
+    /// `array[index]`, with a bounds check.
+    Elem { array: Box<Expr>, index: Box<Expr> },
+    ArrayLen(Box<Expr>),
+    /// `hashOf(value)`: a non-negative hash of an Int, Float, Bool, String or object identity.
+    Hash(Box<Expr>),
     Neg(Box<Expr>),
     Not(Box<Expr>),
     /// Both operands have the same type; `Str + Str` is concatenation.

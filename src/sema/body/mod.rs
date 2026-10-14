@@ -317,6 +317,8 @@ enum Target {
     Local(LocalId),
     Global(GlobalId),
     Field { obj: hir::Expr, index: usize },
+    /// `obj[index]`: an array element, or `obj.set(index, value)` for other types.
+    Index { obj: hir::Expr, index: hir::Expr },
 }
 
 fn lookup_scopes(scopes: &[HashMap<String, LocalId>], name: &str) -> Option<LocalId> {
@@ -740,8 +742,7 @@ impl<'c, 'a> Cx<'c, 'a> {
 
     fn for_loop(&mut self, var: &ast::Ident, iter: &ast::Expr, body: &[ast::Stmt], out: &mut Vec<hir::Stmt>) -> Result<()> {
         let A::Range { start, end, inclusive } = &iter.kind else {
-            return Err(Diagnostic::new("`for` needs a range such as `0..10`", iter.span)
-                .hint("looping over collections is not available yet"));
+            return self.for_each(var, iter, body, out);
         };
         let int = |cx: &mut Self, e: &ast::Expr| -> Result<hir::Expr> {
             let v = cx.value(e)?;
@@ -781,6 +782,74 @@ impl<'c, 'a> Cx<'c, 'a> {
         Ok(())
     }
 
+    /// `for x in collection { body }`, for anything with `size()` and `get(index)`:
+    ///
+    /// ```text
+    /// $coll := collection; $i := 0
+    /// while $i < $coll.size() { x := $coll.get($i); body; $i += 1 }
+    /// ```
+    fn for_each(&mut self, var: &ast::Ident, iter: &ast::Expr, body: &[ast::Stmt], out: &mut Vec<hir::Stmt>) -> Result<()> {
+        let mut coll = self.value(iter)?;
+        // A type can say what to loop over with `iter()` (a Map loops over its entries).
+        for _ in 0..4 {
+            let Ty::Obj(t) = coll.ty else { break };
+            let Some(&iter_fn) = self.ck.t.ty(t).methods.get("iter") else { break };
+            coll = self.call_values(iter_fn, Some(coll), Vec::new(), iter.span)?;
+        }
+        let looping = match coll.ty {
+            Ty::Obj(t) => {
+                let info = self.ck.t.ty(t);
+                info.array_elem.is_some() || (info.methods.contains_key("size") && info.methods.contains_key("get"))
+            }
+            _ => false,
+        };
+        if !looping {
+            return Err(Diagnostic::new(format!("cannot loop over a {}", self.name(coll.ty)), iter.span)
+                .hint("`for` takes a range such as `0..10`, or a collection with `size()` and `get(index)`"));
+        }
+        self.scopes.push(HashMap::new());
+        let all = self.new_local("$coll", coll.ty);
+        let counter = self.new_local("$i", Ty::Int);
+        out.push(hir::Stmt::Let(all, Some(coll)));
+        out.push(hir::Stmt::Let(counter, Some(mk(K::Int(0), Ty::Int))));
+        let size = self.size_of(self.local_expr(all), iter.span)?;
+        let cond = mk(K::Binary(hir::BinOp::Lt, Box::new(self.local_expr(counter)), Box::new(size)), Ty::Bool);
+        let item = self.get_element(self.local_expr(all), self.local_expr(counter), iter.span)?;
+
+        self.scopes.push(HashMap::new());
+        let v = self.new_local(&var.name, item.ty);
+        self.scopes.last_mut().unwrap().insert(var.name.clone(), v);
+        self.loops += 1;
+        let inner = self.block(body);
+        self.loops -= 1;
+        self.scopes.pop();
+        self.scopes.pop();
+
+        let mut full = vec![hir::Stmt::Let(v, Some(item))];
+        full.extend(inner?);
+        let bump = mk(
+            K::Binary(hir::BinOp::Add, Box::new(self.local_expr(counter)), Box::new(mk(K::Int(1), Ty::Int))),
+            Ty::Int,
+        );
+        out.push(hir::Stmt::While { cond, body: full, step: vec![hir::Stmt::Set(counter, bump)] });
+        Ok(())
+    }
+
+    /// `collection.size()`
+    fn size_of(&mut self, coll: hir::Expr, span: Span) -> Result<hir::Expr> {
+        if let Ty::Obj(t) = coll.ty {
+            let info = self.ck.t.ty(t);
+            if info.array_elem.is_some() {
+                return Ok(mk(K::ArrayLen(Box::new(coll)), Ty::Int));
+            }
+            if let Some(&size) = info.methods.get("size") {
+                let call = self.call_values(size, Some(coll), Vec::new(), span)?;
+                return self.coerce(call, Ty::Int, span);
+            }
+        }
+        Err(Diagnostic::new(format!("a {} has no `size()`", self.name(coll.ty)), span))
+    }
+
     fn condition(&mut self, e: &ast::Expr) -> Result<hir::Expr> {
         let v = self.value(e)?;
         self.coerce(v, Ty::Bool, e.span)
@@ -808,7 +877,13 @@ impl<'c, 'a> Cx<'c, 'a> {
                 let (index, ty) = self.field_of(&obj, field)?;
                 Ok((Target::Field { obj, index }, ty))
             }
-            _ => unreachable!("the parser only accepts names and fields as targets"),
+            A::Index { obj, index } => {
+                let obj = self.value(obj)?;
+                let index = self.value(index)?;
+                let ty = self.element_type(&obj, target.span)?;
+                Ok((Target::Index { obj, index }, ty))
+            }
+            _ => unreachable!("the parser only accepts names, fields and indexing as targets"),
         }
     }
 
@@ -831,6 +906,19 @@ impl<'c, 'a> Cx<'c, 'a> {
                 out.push(hir::Stmt::Let(tmp, Some(obj)));
                 Target::Field { obj: self.local_expr(tmp), index }
             }
+            Target::Index { obj, index } if op != AssignOp::Set => {
+                let mut spill = |cx: &mut Self, e: hir::Expr, name: &str| {
+                    if matches!(e.kind, K::Local(_) | K::Int(_)) {
+                        return e;
+                    }
+                    let tmp = cx.new_local(name, e.ty);
+                    out.push(hir::Stmt::Let(tmp, Some(e)));
+                    cx.local_expr(tmp)
+                };
+                let obj = spill(self, obj, "$recv");
+                let index = spill(self, index, "$idx");
+                Target::Index { obj, index }
+            }
             other => other,
         };
 
@@ -843,7 +931,7 @@ impl<'c, 'a> Cx<'c, 'a> {
                 AssignOp::Mul => ast::BinOp::Mul,
                 _ => ast::BinOp::Div,
             };
-            let current = self.read(&target, ty);
+            let current = self.read(&target, ty, span)?;
             let r = self.binary(bin, current, value, span)?;
             self.coerce(r, ty, span)?
         };
@@ -854,19 +942,302 @@ impl<'c, 'a> Cx<'c, 'a> {
             Target::Local(id) => hir::Stmt::Set(id, new),
             Target::Global(g) => hir::Stmt::SetGlobal(g, new),
             Target::Field { obj, index } => hir::Stmt::SetField { obj, index, value: new },
+            Target::Index { obj, index } => self.set_element(obj, index, new, span)?,
         });
         Ok(())
     }
 
     /// Read the current value of a target (for `+=` and friends).
-    fn read(&self, target: &Target, ty: Ty) -> hir::Expr {
-        match target {
+    fn read(&mut self, target: &Target, ty: Ty, span: Span) -> Result<hir::Expr> {
+        Ok(match target {
             Target::Local(id) => self.local_expr(*id),
             Target::Global(g) => mk(K::Global(*g), ty),
             Target::Field { obj, index } => {
                 let K::Local(id) = obj.kind else { unreachable!("compound targets are spilled to locals") };
                 mk(K::Field { obj: Box::new(self.local_expr(id)), index: *index }, ty)
             }
+            Target::Index { obj, index } => {
+                let (obj, index) = (self.copy_of(obj), self.copy_of(index));
+                self.get_element(obj, index, span)?
+            }
+        })
+    }
+
+    /// A second use of an already-spilled expression (a local or a constant).
+    fn copy_of(&self, e: &hir::Expr) -> hir::Expr {
+        match e.kind {
+            K::Local(id) => self.local_expr(id),
+            K::Int(v) => mk(K::Int(v), e.ty),
+            _ => unreachable!("compound targets are spilled to locals"),
+        }
+    }
+
+    // ── indexing ────────────────────────────────────────────────
+
+    /// The type of `obj[…]` when read (`get`) or written (`set`'s value).
+    fn element_type(&self, obj: &hir::Expr, span: Span) -> Result<Ty> {
+        if let Ty::Obj(t) = obj.ty {
+            let info = self.ck.t.ty(t);
+            if let Some(elem) = info.array_elem {
+                return Ok(elem);
+            }
+            // `this`, the index and the value
+            if let Some(&set) = info.methods.get("set")
+                && let [_, _, value] = self.ck.func(set).params.as_slice()
+            {
+                return Ok(value.ty);
+            }
+        }
+        Err(Diagnostic::new(format!("cannot assign to an element of a {}", self.name(obj.ty)), span)
+            .hint("indexing assignment needs a `set(index, value)` method"))
+    }
+
+    /// `obj[index]`
+    fn get_element(&mut self, obj: hir::Expr, index: hir::Expr, span: Span) -> Result<hir::Expr> {
+        if let Ty::Obj(t) = obj.ty {
+            let info = self.ck.t.ty(t);
+            if let Some(elem) = info.array_elem {
+                let index = self.coerce(index, Ty::Int, span)?;
+                return Ok(mk(K::Elem { array: Box::new(obj), index: Box::new(index) }, elem));
+            }
+            if let Some(&get) = info.methods.get("get") {
+                return self.call_values(get, Some(obj), vec![(index, span)], span);
+            }
+        }
+        Err(Diagnostic::new(format!("a {} cannot be indexed", self.name(obj.ty)), span)
+            .hint("indexing needs a `get(index)` method"))
+    }
+
+    /// `obj[index] = value`
+    fn set_element(&mut self, obj: hir::Expr, index: hir::Expr, value: hir::Expr, span: Span) -> Result<hir::Stmt> {
+        if let Ty::Obj(t) = obj.ty {
+            let info = self.ck.t.ty(t);
+            if let Some(elem) = info.array_elem {
+                let index = self.coerce(index, Ty::Int, span)?;
+                let value = self.coerce(value, elem, span)?;
+                return Ok(hir::Stmt::SetElem { array: obj, index, value });
+            }
+            if let Some(&set) = info.methods.get("set") {
+                let call = self.call_values(set, Some(obj), vec![(index, span), (value, span)], span)?;
+                return Ok(hir::Stmt::Expr(call));
+            }
+        }
+        Err(Diagnostic::new(format!("cannot assign to an element of a {}", self.name(obj.ty)), span)
+            .hint("indexing assignment needs a `set(index, value)` method"))
+    }
+
+    /// Call `id` with arguments that are already checked: positional, no defaults.
+    fn call_values(
+        &mut self,
+        id: FnId,
+        recv: Option<hir::Expr>,
+        values: Vec<(hir::Expr, Span)>,
+        span: Span,
+    ) -> Result<hir::Expr> {
+        let ck = self.ck;
+        let info = ck.func(id);
+        let ret = ck.ret_of(id, span)?;
+        let params = &info.params[usize::from(recv.is_some())..];
+        if params.len() != values.len() {
+            return Err(Diagnostic::new(
+                format!("`{}` takes {} argument(s) but {} were given", info.name, params.len(), values.len()),
+                span,
+            ));
+        }
+        let mut args: Vec<hir::Expr> = recv.into_iter().collect();
+        for (p, (v, at)) in params.iter().zip(values) {
+            args.push(self.coerce(v, p.ty, at)?);
+        }
+        Ok(mk(K::Call { func: id, args }, ret))
+    }
+
+    // ── arrays ──────────────────────────────────────────────────
+
+    /// `Array(size, fill)` / `Array<T>(size, fill)`
+    fn array_new(
+        &mut self,
+        type_args: &[ast::TypeRef],
+        args: &[ast::Arg],
+        span: Span,
+        expected: Option<Ty>,
+    ) -> Result<hir::Expr> {
+        let hint = match (type_args, expected) {
+            ([t], _) => Some(self.ck.resolve_value_type(self.module, t, &self.subst)?),
+            ([], Some(Ty::Obj(t))) => self.ck.t.ty(t).array_elem,
+            ([], _) => None,
+            (_, _) => return Err(Diagnostic::new("`Array` takes 1 type argument, e.g. `Array<Int>`", span)),
+        };
+        let (len, fill) = match args {
+            [len] => (len, None),
+            [len, fill] => (len, Some(fill)),
+            _ => {
+                return Err(Diagnostic::new(
+                    "`Array` is created with a size and optionally a fill value: `Array(10, 0)`",
+                    span,
+                ));
+            }
+        };
+        if let Some(n) = args.iter().find_map(|a| a.name.as_ref()) {
+            return Err(Diagnostic::new("`Array` doesn't take named arguments", n.span));
+        }
+        let len_v = self.value_expected(&len.value, Some(Ty::Int))?;
+        let len_v = self.coerce(len_v, Ty::Int, len.value.span)?;
+        let (elem, fill_v) = match fill {
+            Some(fill) => {
+                let v = self.value_expected(&fill.value, hint)?;
+                let elem = hint.unwrap_or(v.ty);
+                (elem, self.coerce(v, elem, fill.value.span)?)
+            }
+            // Without a fill value: the element type's zero (0, 0.0, false, "" or null).
+            None => {
+                let Some(elem) = hint else {
+                    return Err(Diagnostic::new("cannot infer the element type of this Array", span)
+                        .hint("write `Array<Int>(size)`, or give a fill value: `Array(size, 0)`"));
+                };
+                (elem, default_expr(elem))
+            }
+        };
+        Ok(mk(
+            K::ArrayNew { elem, len: Box::new(len_v), fill: Box::new(fill_v) },
+            self.ck.t.array_of(elem),
+        ))
+    }
+
+    /// `hashOf(value)`
+    fn hash_of(&mut self, args: &[ast::Arg], span: Span) -> Result<hir::Expr> {
+        let [arg] = args else {
+            return Err(Diagnostic::new("`hashOf` takes 1 argument", span));
+        };
+        let v = self.value(&arg.value)?;
+        if matches!(v.ty, Ty::Fn(_)) {
+            return Err(Diagnostic::new("a function has no hash", arg.value.span));
+        }
+        Ok(mk(K::Hash(Box::new(v)), Ty::Int))
+    }
+
+    // ── collection literals ─────────────────────────────────────
+
+    /// The built-in-ish generic `List` / `Map` from the prelude, instantiated.
+    fn collection(&mut self, name: &str, args: Vec<Ty>, span: Span) -> Result<TypeId> {
+        match self.ck.t.scopes[0].items.get(name) {
+            Some(&Sym::GenericType(g)) => self.ck.instantiate_type(g, args, span),
+            _ => Err(Diagnostic::new(format!("the prelude has no `{name}`"), span)),
+        }
+    }
+
+    /// The type arguments of the expected type, if it is an instance of the generic type `name`.
+    fn expected_args(&self, expected: Option<Ty>, name: &str) -> Option<Vec<Ty>> {
+        let Some(Ty::Obj(t)) = expected else { return None };
+        let (g, args) = self.ck.instance_of.borrow().get(&t)?.clone();
+        (self.ck.generic_types.borrow()[g].decl.name.name == name).then_some(args)
+    }
+
+    /// `[a, b, c]`  ⇒  `{ $l := List<T>(); $l.add(a); $l.add(b); $l.add(c); $l }`
+    fn list_literal(&mut self, items: &[ast::Expr], expected: Option<Ty>, span: Span) -> Result<hir::Expr> {
+        let hint = self.expected_args(expected, "List").map(|a| a[0]);
+        let mut values = Vec::new();
+        let mut elem = hint;
+        for item in items {
+            let v = self.value_expected(item, elem)?;
+            let want = *elem.get_or_insert(v.ty);
+            values.push((self.coerce(v, want, item.span)?, item.span));
+        }
+        let Some(elem) = elem else {
+            return Err(Diagnostic::new("cannot infer the element type of an empty list", span)
+                .hint("write `List<Int>()`, or give the variable a type: `xs: List<Int> = []`"));
+        };
+        let ty = self.collection("List", vec![elem], span)?;
+        self.fill_collection(ty, "add", values.into_iter().map(|v| vec![v]).collect(), span)
+    }
+
+    /// `{ k: v, … }`  ⇒  `{ $m := Map<K, V>(); $m.set(k, v); …; $m }`
+    fn map_literal(&mut self, entries: &[(ast::Expr, ast::Expr)], expected: Option<Ty>, span: Span) -> Result<hir::Expr> {
+        let hint = self.expected_args(expected, "Map");
+        let (mut key_ty, mut val_ty) = (hint.as_ref().map(|a| a[0]), hint.as_ref().map(|a| a[1]));
+        let mut rows = Vec::new();
+        for (k, v) in entries {
+            let kv = self.value_expected(k, key_ty)?;
+            let kt = *key_ty.get_or_insert(kv.ty);
+            let vv = self.value_expected(v, val_ty)?;
+            let vt = *val_ty.get_or_insert(vv.ty);
+            rows.push(vec![(self.coerce(kv, kt, k.span)?, k.span), (self.coerce(vv, vt, v.span)?, v.span)]);
+        }
+        let (Some(k), Some(v)) = (key_ty, val_ty) else {
+            return Err(Diagnostic::new("cannot infer the types of an empty map", span)
+                .hint("write `Map<String, Int>()`"));
+        };
+        let ty = self.collection("Map", vec![k, v], span)?;
+        self.fill_collection(ty, "set", rows, span)
+    }
+
+    /// A new `ty` with `method(args…)` called once per row.
+    fn fill_collection(&mut self, ty: TypeId, method: &str, rows: Vec<Vec<(hir::Expr, Span)>>, span: Span) -> Result<hir::Expr> {
+        let info = self.ck.t.ty(ty);
+        let add = *info
+            .methods
+            .get(method)
+            .ok_or_else(|| Diagnostic::new(format!("`{}` has no `{method}` method", info.name), span))?;
+        let obj_ty = Ty::Obj(ty);
+        let tmp = self.new_local("$lit", obj_ty);
+        let make = self.call_values(info.ctor, None, Vec::new(), span)?;
+        let mut stmts = vec![hir::Stmt::Let(tmp, Some(make))];
+        for row in rows {
+            let call = self.call_values(add, Some(self.local_expr(tmp)), row, span)?;
+            stmts.push(hir::Stmt::Expr(call));
+        }
+        Ok(mk(K::Block(stmts, Box::new(self.local_expr(tmp))), obj_ty))
+    }
+
+    /// `array.size()`, `array.get(i)`, `array.set(i, v)`
+    fn array_method(
+        &mut self,
+        recv: hir::Expr,
+        member: &ast::Ident,
+        args: &[ast::Arg],
+        span: Span,
+    ) -> Result<hir::Expr> {
+        let elem = match recv.ty {
+            Ty::Obj(t) => self.ck.t.ty(t).array_elem.expect("checked by the caller"),
+            _ => unreachable!(),
+        };
+        if let Some(n) = args.iter().find_map(|a| a.name.as_ref()) {
+            return Err(Diagnostic::new("array methods don't take named arguments", n.span));
+        }
+        let arity = |want: usize| -> Result<()> {
+            if args.len() == want {
+                return Ok(());
+            }
+            Err(Diagnostic::new(
+                format!("`{}` takes {want} argument(s) but {} were given", member.name, args.len()),
+                span,
+            ))
+        };
+        match member.name.as_str() {
+            "size" => {
+                arity(0)?;
+                Ok(mk(K::ArrayLen(Box::new(recv)), Ty::Int))
+            }
+            "get" => {
+                arity(1)?;
+                let index = self.value(&args[0].value)?;
+                self.get_element(recv, index, args[0].value.span)
+            }
+            "set" => {
+                arity(2)?;
+                let index = self.value(&args[0].value)?;
+                let value = self.value_expected(&args[1].value, Some(elem))?;
+                let stmt = self.set_element(recv, index, value, span)?;
+                Ok(mk(K::Block(vec![stmt], Box::new(unit())), Ty::Void))
+            }
+            // Reset a slot to the zero value of the element type, so it stops keeping an object alive.
+            "clear" => {
+                arity(1)?;
+                let index = self.value(&args[0].value)?;
+                let stmt = self.set_element(recv, index, default_expr(elem), span)?;
+                Ok(mk(K::Block(vec![stmt], Box::new(unit())), Ty::Void))
+            }
+            other => Err(Diagnostic::new(format!("an Array has no method `{other}`"), member.span)
+                .hint("an Array has `size()`, `get(i)`, `set(i, value)` and `clear(i)`; use a List to grow")),
         }
     }
 
@@ -902,6 +1273,8 @@ impl<'c, 'a> Cx<'c, 'a> {
         match &e.kind {
             A::Lambda { params, explicit, body } => self.lambda(params, *explicit, body, expected, e.span),
             A::Call { callee, type_args, args } => self.call(callee, type_args, args, e.span, expected),
+            A::List(items) => self.list_literal(items, expected, e.span),
+            A::Map(entries) => self.map_literal(entries, expected, e.span),
             _ => self.expr(e),
         }
     }
@@ -923,6 +1296,10 @@ impl<'c, 'a> Cx<'c, 'a> {
         match e.ty {
             Ty::Str => Ok(e),
             Ty::Int | Ty::Float | Ty::Bool => Ok(mk(K::ToStr(Box::new(e)), Ty::Str)),
+            Ty::Obj(ty) if self.ck.t.ty(ty).array_elem.is_some() => {
+                Err(Diagnostic::new(format!("a {} has no text form", self.name(e.ty)), span)
+                    .hint("an Array is a building block; a List can be printed"))
+            }
             Ty::Obj(ty) => {
                 let f = self.ck.tostring_fn(ty)?;
                 let tmp = self.new_local("$obj", e.ty);
@@ -1053,9 +1430,14 @@ impl<'c, 'a> Cx<'c, 'a> {
 
             A::Block(stmts) => self.block_value(stmts)?,
 
-            A::Index { .. } | A::List(_) | A::Map(_) => {
-                return Err(Diagnostic::new("collections are not available yet", e.span));
+            A::Index { obj, index } => {
+                let o = self.value(obj)?;
+                let i = self.value(index)?;
+                self.get_element(o, i, e.span)?
             }
+
+            A::List(items) => self.list_literal(items, None, e.span)?,
+            A::Map(entries) => self.map_literal(entries, None, e.span)?,
 
             A::Range { .. } => {
                 return Err(Diagnostic::new("a range can only be used in a `for` loop or after `in`", e.span));
@@ -1264,6 +1646,8 @@ impl<'c, 'a> Cx<'c, 'a> {
                         let ty = self.global_use(g, callee.span)?;
                         self.call_value(mk(K::Global(g), ty), args, span, n)
                     }
+                    None if n == "Array" => self.array_new(type_args, args, span, expected),
+                    None if n == "hashOf" => self.hash_of(args, span),
                     None if n == "print" || n == "println" => self.print(n == "println", args, span),
                     None => Err(Diagnostic::new(format!("undefined function `{n}`"), callee.span)),
                 }
@@ -1321,6 +1705,12 @@ impl<'c, 'a> Cx<'c, 'a> {
                     ));
                 };
                 let info = self.ck.t.ty(ty);
+                if info.array_elem.is_some() {
+                    if !type_args.is_empty() {
+                        return Err(not_generic(&member.name));
+                    }
+                    return self.array_method(recv, member, args, span);
+                }
                 if let Some(&id) = info.methods.get(&member.name) {
                     if !type_args.is_empty() {
                         return Err(not_generic(&member.name));

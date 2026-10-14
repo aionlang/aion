@@ -1,0 +1,2 @@
+// error: a function has no hash
+println(hashOf({ x: Int -> x }))

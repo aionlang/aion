@@ -170,7 +170,8 @@ println("nested: ${"inner ${name}"}")
 ```
 
 `$name` interpolates a variable and `${...}` any expression, including strings
-of its own.  Escapes: `\n \t \r \0 \\ \" \$`.  A `$` not followed by a name or `{`
+of its own (`"hi".length()`, `.contains(s)`, `.upper()` and friends are
+[methods](#methods-on-built-in-types)).  Escapes: `\n \t \r \0 \\ \" \$`.  A `$` not followed by a name or `{`
 is just a dollar sign.  `Int`, `Float`, `Bool` and objects convert to text in
 `${}`; build text with interpolation, not `+`.
 
@@ -283,6 +284,121 @@ the value from their own iteration.  Function values can be stored in variables,
 fields and module variables and called like functions: `onClick(3)`,
 `button.onClick(3)`, `make()(3)`.
 
+## Generics
+
+Functions and types can take **type parameters**.  They are inferred from the
+arguments, from the type that is expected, or written out.
+
+```aion
+fn identity<T>(x: T) = x
+fn biggest<T>(a: T, b: T) = if a > b { a } else { b }
+fn apply<T, R>(x: T, f: (T) -> R) = f(x)
+
+println(identity(5), identity("s"), biggest(3, 9), biggest("apple", "pear"))
+println(apply(21, { it * 2 }), apply("hi", { it + "!" }))   // the lambda is checked last
+println(identity<Float>(2))                                  // explicit: 2 is widened to a Float
+
+type Box<T>(value: T) {
+    fn get() = value
+    fn map<R>(f: (T) -> R) = Box(f(value))                   // a method with its own parameter
+}
+b := Box(41)
+println(b.get(), b.map { it + 1 }.get(), b.map { "v$it" }.get())
+x: Box<String> = Box("typed")                                // spelled out in a type
+println(x.get())
+```
+
+Generics are **monomorphized**: `Box<Int>` and `Box<String>` are separate types
+and every instantiation of a function is compiled on its own, exactly as if you
+had written it by hand.  So the body of a generic function can do anything the
+concrete types allow — `a > b` works for `biggest(1, 2)` and `biggest("a", "b")`,
+and is an error (naming the instance) for a type that has no `>`.  Members of a
+generic type are only checked when something uses them, so a `List` of functions
+works as long as nobody asks it to `join`.
+
+There are no constraints or interfaces yet; the compiler simply tries the code.
+`fn Box<T>.twice()` adds a method to a generic type from outside it.
+
+## Methods on built-in types
+
+Any module can add methods to `Int`, `Float`, `Bool` and `String`; the receiver
+is `this`.
+
+```aion
+fn String.shout() = "$this!"
+fn Int.isEven() = this % 2 == 0
+fn Int.times(action: (Int) -> Unit) {
+    for i in 0..this { action(i) }
+}
+
+println("hi".shout(), 4.isEven(), "héllo".length(), "banana".contains("nan"))
+3.times { print(it, "") }
+println()
+```
+
+`String` already has `length()` (bytes), `contains(s)`, `startsWith(s)`,
+`indexOf(s)` (-1 if absent), `substring(start, end)`, `trim()`, `replace(old, new)`,
+`split(separator)` (a `List<String>`), `toIntOr(fallback)`, `upper()` and
+`lower()`; offsets are in bytes.  Methods are visible everywhere once the module that
+declares them is part of the program (extension methods are global, so name
+them with care).
+
+## Collections
+
+`Array<T>` is the built-in building block: a fixed-size block of slots, bounds
+checked.  `List<T>`, `Map<K, V>` and `Set<T>` are ordinary Aion code in the
+[prelude](stdlib.md#collections) built on top of it.
+
+```aion
+a := Array(3, 0)                 // size, fill value (or Array<Int>(3) for zeros)
+a[1] = 5                         // a.set(1, 5)
+println(a[1], a.size())          // a.get(1)
+
+xs := [3, 1, 2]                  // a List<Int>
+xs.add(10)
+xs[0] += 1
+println(xs, xs.size(), xs[3], 2 in xs)
+println(xs.map { it * 2 }.filter { it > 4 })
+println(xs.fold(0) { acc, x -> acc + x })
+for x in xs { print(x, "") }
+println()
+
+ages := {"ann": 31, "bob": 25}   // a Map<String, Int>, keeps insertion order
+ages["cy"] = 40
+println(ages, ages["bob"], "ann" in ages, ages.getOr("zed", -1))
+for e in ages { println(e.key, "is", e.value) }
+ages.forEach { name, age -> println(name, age + 1) }
+
+words: List<String> = []         // an empty literal needs a type to know what it holds
+words.add("x")
+println(words, Map<String, Int>().size(), setOf([1, 1, 2]))
+```
+
+The syntax is plain method calls under the hood, so your own types can take part:
+
+| Written          | Means                                                           |
+|------------------|-----------------------------------------------------------------|
+| `x[i]`           | `x.get(i)`                                                      |
+| `x[i] = v`       | `x.set(i, v)` (and `x[i] += v` reads with `get`, writes with `set`) |
+| `a in x`         | `x.contains(a)` (`a in lo..hi` stays a range test)              |
+| `for v in x`     | loops `i` over `0 until x.size()` calling `x.get(i)`; if `x` has an `iter()` method, loops over what that returns instead (a Map iterates its entries) |
+| `[a, b, c]`      | a `List` built with `add`                                       |
+| `{k: v, …}`      | a `Map` built with `set`                                        |
+
+```aion
+type Squares(count: Int) {
+    fn size() = count
+    fn get(i: Int) = i * i
+}
+for sq in Squares(4) { print(sq, "") }
+println(Squares(10)[7])
+```
+
+Equality (`==`, `contains`, map keys) is the language's `==`: values for Int,
+Float, Bool and String, identity for objects.  Map keys are hashed with the
+built-in `hashOf(value)`.  Indexing past the end stops the program with
+`index 5 is out of bounds for size 3`; a missing map key with `no such key: …`.
+
 ## Line breaks
 
 A line break ends a statement, with these exceptions:
@@ -353,5 +469,7 @@ zero, using a null object or function, out of memory, and `panic(...)`.
 
 ## Not (yet) in the language
 
-Arrays and maps, generics, a `null` literal, `defer`, interfaces, inheritance,
-`char`, reading input.
+Nullability (`T?`, `?.`, `?:` and a `null` literal), interfaces and constraints
+on type parameters, `defer`, a way to recover from errors, concurrency,
+inheritance, `char`, reading input, slices, and user-defined hashing for map
+keys.

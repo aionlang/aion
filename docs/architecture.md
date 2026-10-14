@@ -92,6 +92,49 @@ Notable rules: `Int` widens to `Float`; conditions must be `Bool`; a function
 with a return type must return on every path; lambdas take their parameter types
 from the type they are expected to have.
 
+### Generics (`src/sema/generics.rs`, `body/generic_calls.rs`)
+
+Generics are **monomorphized**.  A generic type or function stays a template (its
+syntax tree) until it is used with concrete type arguments; each distinct argument
+list produces a separate `TypeId` / `FnId` that is declared and checked like any
+non-generic item, with the type parameters bound in a `Subst`.  Instances are
+cached per argument list, a self-referential type finds itself because it is
+registered before its fields are resolved, and nesting is capped (`f<T>` calling
+`f<List<T>>` stops with an error instead of looping).  Nothing after `sema` knows
+generics exist, which keeps the garbage collector's pointer maps exact.
+
+Type arguments are inferred by `unify`-ing each written parameter type against the
+checked argument's concrete type, then from the expected type, and last from
+lambdas (checked with the partially known parameter types, so `xs.map { it + 1 }`
+learns `R` from the lambda's result).  An error inside an instance is annotated
+with its bindings (`while checking the instance with T = String`).
+
+Members of generic instances are **lazy**: they are declared (signatures only) when
+the instance is created but only type-checked when something calls them, so
+`List<Fn>` is fine until you ask for `join`.  Unused ones become
+`FuncKind::Unused` placeholders to keep ids stable.  Signatures are still eager,
+so a method whose signature mentions an ever-larger instance of its own type is
+cut off by the nesting cap (this is why `setOf` is a function, not a `List`
+method).
+
+Methods on built-in types (`fn String.shout()`) live in `Checker::ext_methods`,
+keyed by type and name; `extern` ones take the receiver as their first C argument.
+
+### Arrays and collections
+
+`Array<T>` is the one collection the compiler knows: a `TypeInfo` with
+`array_elem = Some(T)`, created by `Tables::array_of`.  `Array(n, fill)`,
+`a[i]`, `a[i] = v` and `a.size()` are HIR nodes (`ArrayNew`, `Elem`, `SetElem`,
+`ArrayLen`) that codegen turns into an allocation, an inline bounds check
+(`aion_panic_index`) and loads/stores of 8-byte slots.  A pointer array carries
+the `PTRS` header flag so the collector traces every slot.
+
+Everything else is library code.  Indexing, `in`, `for` and the literals are
+sugar over methods (`get`/`set`/`contains`/`size`/`iter`/`add`) that the checker
+resolves by name, so user types can opt in; `List`, `Map` and `Set` are generic
+types written in Aion in the prelude.  `x in coll` is rewritten by the parser to
+`coll.contains(x)` unless the right side is a range.
+
 ### Code generation (`src/codegen.rs`)
 
 Each HIR function becomes an LLVM function.  Values:
@@ -156,6 +199,8 @@ A precise, non-moving **mark-sweep** collector.
   rooted at that point, no safepoints are needed.
 * **Marking** uses an explicit stack, so long linked lists cannot overflow the C
   stack.
+* **Arrays** are objects whose payload is the elements; the `PTRS` flag says
+  every slot is a pointer (an `Array<Int>` has no `SCAN` flag and is never traced).
 
 `AION_GC_STRESS=1` makes every allocation collect and poisons freed memory; the
 test-suite runs every program this way too, which makes a missed root show up

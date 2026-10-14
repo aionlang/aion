@@ -1,0 +1,3 @@
+// error: expected String, found Int
+m := Map<String, Int>()
+m[1] = 2

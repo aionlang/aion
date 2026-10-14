@@ -1,0 +1,6 @@
+// error: cannot assign to an element of a Counter
+type Counter(n: Int) {
+    fn get(i: Int) = n + i
+}
+c := Counter(1)
+c[0] = 5

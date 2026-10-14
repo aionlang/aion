@@ -1,0 +1,3 @@
+// error: expected Int, found String
+xs := [1, 2, 3]
+println(xs["a"])

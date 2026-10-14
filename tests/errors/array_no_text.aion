@@ -1,0 +1,3 @@
+// error: has no text form
+a := Array(3, 0)
+println(a)

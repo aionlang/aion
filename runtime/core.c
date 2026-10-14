@@ -41,6 +41,12 @@ void aion_panic(const char *msg) {
 void aion_panic_null(void) { aion_panic("null reference"); }
 void aion_panic_div_zero(void) { aion_panic("division by zero"); }
 
+void aion_panic_index(int64_t index, int64_t len) {
+    char msg[96];
+    snprintf(msg, sizeof msg, "index %" PRId64 " is out of bounds for size %" PRId64, index, len);
+    aion_panic(msg);
+}
+
 /* ── Mark & sweep ─────────────────────────────────────────────── */
 
 /* AION_GC_STRESS=1 collects on every allocation and poisons freed memory: any
@@ -74,6 +80,10 @@ static void drain(void) {
     while (mark_len) {
         AionHeader *h = mark_stack[--mark_len];
         void **slots = (void **)(h + 1);
+        if (h->flags & AION_F_PTRS) {
+            for (uint32_t i = 0, n = h->size / 8; i < n; i++) mark(slots[i]);
+            continue;
+        }
         for (uint64_t m = h->ptr_mask, i = 0; m; m >>= 1, i++)
             if (m & 1) mark(slots[i]);
     }
@@ -134,6 +144,31 @@ int64_t aion_gc_object_count(void) {
 
 void *aion_new_object(int64_t nslots, int64_t ptr_mask) {
     return gc_alloc((size_t)nslots * 8, AION_F_SCAN, (uint64_t)ptr_mask);
+}
+
+/* An Array<T>: `len` 8-byte slots, all set to `fill` (the slot's bit pattern).
+ * `is_ptr` arrays are scanned by the collector. */
+void *aion_array_new(int64_t len, int64_t is_ptr, int64_t fill) {
+    if (len < 0) aion_panic("negative array size");
+    if ((uint64_t)len > UINT32_MAX / 8) aion_panic("array too large");
+    int64_t *a = gc_alloc((size_t)len * 8, is_ptr ? AION_F_SCAN | AION_F_PTRS : 0, 0);
+    if (fill)
+        for (int64_t i = 0; i < len; i++) a[i] = fill;
+    return a;
+}
+
+/* Hashes for Map keys: non-negative, well mixed in the low bits. */
+int64_t aion_hash_int(int64_t x) {
+    uint64_t z = (uint64_t)x + 0x9e3779b97f4a7c15ull;
+    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ull;
+    z = (z ^ (z >> 27)) * 0x94d049bb133111ebull;
+    return (int64_t)((z ^ (z >> 31)) >> 1);
+}
+
+int64_t aion_hash_str(const char *s) {
+    uint64_t h = 0xcbf29ce484222325ull;
+    for (; *s; s++) h = (h ^ (unsigned char)*s) * 0x100000001b3ull;
+    return (int64_t)(h >> 1);
 }
 
 const char *aion_string_n(const char *s, size_t n) {

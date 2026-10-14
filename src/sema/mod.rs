@@ -34,6 +34,8 @@ pub struct TypeInfo {
     /// Methods with their own type parameters, by name → index into the checker's templates.
     pub generic_methods: HashMap<String, usize>,
     pub ctor: FnId,
+    /// `Some(T)` for the built-in `Array<T>`, whose operations are intrinsics.
+    pub array_elem: Option<Ty>,
 }
 
 /// A generic function (or a generic method of a generic type's instance):
@@ -126,6 +128,8 @@ pub struct Tables {
     pub scopes: Vec<Scope>,
     /// Interned function types, so equal signatures have equal `Ty`s.
     fn_types: RefCell<Vec<FnSig>>,
+    /// The `Array<T>` type for each element type.
+    arrays: RefCell<HashMap<Ty, TypeId>>,
 }
 
 /// What a declared function needs when its body is checked.
@@ -152,6 +156,10 @@ struct FnSlot<'a> {
     work: Option<Work<'a>>,
     state: State,
     func: Option<hir::Func>,
+    /// Members of generic instances are only checked when something uses them
+    /// (a `List<Fn>` is fine as long as nobody calls `join` on it).
+    lazy: bool,
+    used: bool,
 }
 
 pub struct Checker<'a> {
@@ -195,6 +203,23 @@ impl Tables {
             types.len() - 1
         });
         Ty::Fn(id)
+    }
+
+    /// The built-in type `Array<elem>`.
+    pub fn array_of(&self, elem: Ty) -> Ty {
+        if let Some(&id) = self.arrays.borrow().get(&elem) {
+            return Ty::Obj(id);
+        }
+        let id = self.add_type(TypeInfo {
+            name: format!("Array<{}>", self.ty_name(elem)),
+            fields: Vec::new(),
+            methods: HashMap::new(),
+            generic_methods: HashMap::new(),
+            ctor: usize::MAX,
+            array_elem: Some(elem),
+        });
+        self.arrays.borrow_mut().insert(elem, id);
+        Ty::Obj(id)
     }
 
     pub fn fn_sig(&self, id: hir::FnTyId) -> FnSig {
@@ -246,11 +271,25 @@ pub fn analyze(loaded: &Loaded) -> Result<hir::Program> {
     for &id in &ck.inits {
         ck.ensure(id)?;
     }
-    // Checking can create more functions (lambdas, instances), so the list grows.
-    let mut id = 0;
-    while id < ck.fns.borrow().len() {
-        ck.ensure(id)?;
-        id += 1;
+    // Checking can create more functions (lambdas, instances) and mark lazy ones as used,
+    // so keep sweeping until nothing new needs checking.
+    loop {
+        let mut checked = false;
+        let mut id = 0;
+        while id < ck.fns.borrow().len() {
+            let wanted = {
+                let fns = ck.fns.borrow();
+                fns[id].state == State::New && (!fns[id].lazy || fns[id].used)
+            };
+            if wanted {
+                ck.ensure(id)?;
+                checked = true;
+            }
+            id += 1;
+        }
+        if !checked {
+            break;
+        }
     }
     ck.finish(loaded.modules.len() - 1)
 }
@@ -293,6 +332,7 @@ impl<'a> Checker<'a> {
                         methods: HashMap::new(),
                         generic_methods: HashMap::new(),
                         ctor: usize::MAX,
+                        array_elem: None,
                     });
                     self.t.define(mi, &td.name, Sym::Type(id))?;
                     own_types.push((id, td));
@@ -631,14 +671,18 @@ impl<'a> Checker<'a> {
     /// Register a function that has a declaration and a body to check.
     fn declare_fn(&self, info: FnInfo, work: Work<'a>) -> FnId {
         let mut fns = self.fns.borrow_mut();
-        fns.push(FnSlot { info: Some(Rc::new(info)), work: Some(work), state: State::New, func: None });
+        let lazy = match &work {
+            Work::Fn { subst, .. } | Work::Method { subst, .. } | Work::Ctor { subst, .. } => !subst.is_empty(),
+            Work::Init { .. } => false,
+        };
+        fns.push(FnSlot { info: Some(Rc::new(info)), work: Some(work), state: State::New, func: None, lazy, used: false });
         fns.len() - 1
     }
 
     /// Allocate an id for a function created while checking another (a lambda or adapter).
     fn reserve_fn(&self) -> FnId {
         let mut fns = self.fns.borrow_mut();
-        fns.push(FnSlot { info: None, work: None, state: State::Done, func: None });
+        fns.push(FnSlot { info: None, work: None, state: State::Done, func: None, lazy: false, used: false });
         fns.len() - 1
     }
 
@@ -697,6 +741,7 @@ impl<'a> Checker<'a> {
 
     /// The return type of `id`, inferring it from the body if necessary.
     fn ret_of(&self, id: FnId, span: Span) -> Result<Ty> {
+        self.fns.borrow_mut()[id].used = true;
         let info = self.func(id);
         if let Some(ty) = info.ret.get() {
             return Ok(ty);
@@ -764,9 +809,22 @@ impl<'a> Checker<'a> {
             .fns
             .into_inner()
             .into_iter()
-            .map(|slot| slot.func.expect("every function was checked"))
+            .map(|slot| slot.func.unwrap_or_else(unused_func))
             .collect();
         Ok(hir::Program { types, globals, funcs, inits: self.inits, main })
+    }
+}
+
+/// Stands in for a function that was never checked (see [`FnSlot::lazy`]), so ids stay valid.
+fn unused_func() -> hir::Func {
+    hir::Func {
+        symbol: String::new(),
+        kind: FuncKind::Unused,
+        ret: Ty::Void,
+        n_params: 0,
+        locals: Vec::new(),
+        body: None,
+        captures: Vec::new(),
     }
 }
 

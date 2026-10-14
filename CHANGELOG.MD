@@ -29,6 +29,19 @@ migration notes at the end of this section.
   module members usable as values.
 - **Imports.** `import math`, `from sockets import TcpListener`, `import x as y`.
   `std.` / `aion.` prefixes still work. A local file shadows a stdlib module.
+- **Generics.** `fn identity<T>(x: T)`, `type Box<T>(value: T)`, generic methods
+  (`fn map<R>(f: (T) -> R)`), type arguments inferred from arguments, expected
+  types and lambdas, or written out (`Box<Int>(1)`, `f<Int>(x)`). Monomorphized;
+  members of an instance are only checked when used.
+- **Collections.** Built-in `Array<T>` (bounds-checked) and prelude `List<T>`,
+  `Map<K, V>`, `Set<T>`, `Entry<K, V>` written in Aion, with `map filter fold
+  reduce forEach any all count sortedWith join …`. List literals `[1, 2]`, map
+  literals `{"a": 1}`, `xs[i]` / `xs[i] = v`, `x in xs`, `for x in xs`, all as sugar
+  over `get` / `set` / `contains` / `size` / `iter`, so user types can join in.
+  `hashOf(value)` for map keys.
+- **Methods on built-in types.** `fn String.shout() = "$this!"`, `fn Int.double()`;
+  `String` gains `length() contains() startsWith() indexOf() substring() trim()
+  replace() split() toIntOr() upper() lower()` as methods.
 - **Projects.** `aion.project` (name, entry, lib, `[dependencies]` with `path` or
   `git` + `tag`/`branch`/`rev`), `aion.lock` pinning git commits, and the
   commands `aion new`, `aion fetch`, `aion clean`. `aion` with no file runs the

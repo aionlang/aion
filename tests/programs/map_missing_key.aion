@@ -1,0 +1,5 @@
+// exit: 1
+// stderr: no such key: pear
+fruit := {"apple": 1}
+println(fruit["apple"])
+println(fruit["pear"])

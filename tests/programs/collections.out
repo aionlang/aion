@@ -1,0 +1,41 @@
+5 9 30
+14
+3.5
+xyx
+false true
+2 true
+[3, 1, 2] 3 3 true 2
+[8, 10, 2] 8 2
+8 10 2 
+[16, 20, 4]
+[n8, n10]
+20 10
+true false 2
+[2, 8, 10] [2, 10, 8] [8, 10] [2]
+8 2 [10]
+10 | 7 | 8 | 9 4
+true []
+[1, 2, 3, 4] 4 true false
+[1, 2.5]
+true []
+[al, bo, cy]
+[[1, 2], [3]] 2 [2, 1]
+{a: 11, b: 2} 2 11 true false
+a 11
+b 2
+[a, b] [11, 2] -1
+true false {b: 2}
+25 {ann: 31, bob: 25}
+ann is 31
+bob is 25
+100 9801 2500
+10 [90, 91, 92, 93, 94, 95, 96, 97, 98, 99]
+89385
+{3, 1, 2} 3 true false false true
+3 1 2 9 
+2 2
+x y true false
+[P(name=one), P(name=two)] [one, two] true -1
+bob 2 true
+true true false true true
+11 20 2

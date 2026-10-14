@@ -1,0 +1,6 @@
+// exit: 1
+// stderr: index 3 is out of bounds for size 3
+xs := [1, 2, 3]
+println(xs[2])
+println(xs[3])
+println("not reached")

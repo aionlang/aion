@@ -1,0 +1,2 @@
+// error: cannot infer the element type of this Array
+a := Array(3)

@@ -524,15 +524,15 @@ impl<'a> Parser<'a> {
                 }
                 self.bump();
                 let lo = self.binary(5)?;
-                let range = if matches!(self.peek(), Some(Token::DotDot | Token::DotDotEq)) {
+                if matches!(self.peek(), Some(Token::DotDot | Token::DotDotEq)) {
                     let inclusive = self.bump().kind == Token::DotDotEq;
                     let hi = self.binary(5)?;
                     let span = lo.span.to(hi.span);
-                    Expr { kind: ExprKind::Range { start: Box::new(lo), end: Box::new(hi), inclusive }, span }
+                    let range = Expr { kind: ExprKind::Range { start: Box::new(lo), end: Box::new(hi), inclusive }, span };
+                    lhs = Self::in_range(lhs, range);
                 } else {
-                    return Err(Diagnostic::new("`in` needs a range such as `1..10`", lo.span));
-                };
-                lhs = Self::in_range(lhs, range);
+                    lhs = Self::contains_call(lo, lhs);
+                }
                 continue;
             }
             let Some((prec, op)) = binop(tok) else { break };
@@ -545,6 +545,15 @@ impl<'a> Parser<'a> {
             lhs = Expr { kind: ExprKind::Binary(op, Box::new(lhs), Box::new(rhs)), span };
         }
         Ok(lhs)
+    }
+
+    /// `x in collection`  ⇒  `collection.contains(x)`
+    fn contains_call(collection: Expr, item: Expr) -> Expr {
+        let span = item.span.to(collection.span);
+        let member = Ident { name: "contains".into(), span: collection.span };
+        let callee = Expr { kind: ExprKind::Field(Box::new(collection), member), span };
+        let args = vec![Arg { name: None, value: item }];
+        Expr { kind: ExprKind::Call { callee: Box::new(callee), type_args: Vec::new(), args }, span }
     }
 
     /// `x in a..b`  ⇒  `{ $t := x;  $t >= a && $t < b }`
@@ -875,10 +884,12 @@ impl<'a> Parser<'a> {
                             return Err(Diagnostic::new("`in` arms need a `when <value>`", at));
                         };
                         let range = p.expr()?;
-                        if !matches!(range.kind, ExprKind::Range { .. }) {
-                            return Err(Diagnostic::new("`in` needs a range such as `1..10`", range.span));
+                        if matches!(range.kind, ExprKind::Range { .. }) {
+                            Self::range_test(&tmp, subject_span, range)
+                        } else {
+                            let subj = Expr { kind: ExprKind::Name(tmp.clone()), span: subject_span };
+                            Self::contains_call(range, subj)
                         }
-                        Self::range_test(&tmp, subject_span, range)
                     } else {
                         let e = p.expr()?;
                         match subject_span {
@@ -1217,7 +1228,16 @@ mod tests {
         assert!(err("1 +").contains("expected an expression"));
         assert!(err("#").contains("unexpected character"));
         assert!(err("99999999999999999999").contains("too large"));
-        assert!(err("x in 5").contains("needs a range"));
+    }
+
+    #[test]
+    fn in_collection_becomes_a_contains_call() {
+        let e = parse_expr("x in items");
+        let ExprKind::Call { callee, args, .. } = &e.kind else { panic!("expected a call, got {e:?}") };
+        assert!(matches!(&callee.kind, ExprKind::Field(obj, m) if m.name == "contains" && matches!(&obj.kind, ExprKind::Name(n) if n == "items")));
+        assert!(matches!(&args[0].value.kind, ExprKind::Name(n) if n == "x"));
+        // …while a range keeps its comparison form.
+        assert!(matches!(parse_expr("x in 1..5").kind, ExprKind::Block(_)));
     }
 
     fn lambda_of(e: &Expr) -> (usize, bool, usize) {

@@ -4,7 +4,8 @@ The standard library is a folder of modules:
 
 ```
 stdlib/
-├── prelude.aion   always in scope (panic)
+├── prelude.aion   always in scope (panic, String methods, List, Map, Set, Entry, setOf)
+├── prelude.c      …the C half of the prelude (String methods)
 ├── math.aion      import math       pi, sqrt, pow, sin, max, …
 ├── io.aion        import io         hello, banner, separator
 ├── strings.aion   import strings    length, contains, upper, …
@@ -19,7 +20,8 @@ registration:** drop `stdlib/<name>.aion` in (and optionally `stdlib/<name>.c`)
 and `import <name>` works after the next `cargo build`.  (`import std.<name>` is the same module, spelled explicitly; a local file of the same name takes precedence over the bare form.)  The C file is
 compiled and linked only into programs that import the module.
 
-`print`, `println` and `panic` are the only things in scope without an import.
+`print`, `println`, `panic`, `hashOf`, `Array`, and everything in `prelude.aion`
+(the collections below and the `String` methods) are in scope without an import.
 
 ## `extern fn`
 
@@ -60,7 +62,9 @@ extern fn length(s: String) -> Int = "aion_strings_length"
 
 ### Example: a complete C-backed module
 
-`stdlib/strings.aion`
+`stdlib/strings.aion` (the prelude declares the same functions as `String`
+methods with `extern fn String.length() -> Int = "aion_strings_length"`; the
+receiver is the first C argument)
 
 ```text
 extern fn length(s: String) -> Int = "aion_strings_length"
@@ -68,7 +72,7 @@ extern fn contains(s: String, needle: String) -> Bool = "aion_strings_contains"
 extern fn upper(s: String) -> String = "aion_strings_upper"
 ```
 
-`stdlib/strings.c`
+`stdlib/prelude.c`
 
 ```c
 #include "aion.h"
@@ -113,6 +117,38 @@ ordinary Aion classes built on it.
 
 ## Module reference
 
+### The prelude
+
+Always in scope.
+
+* `panic(message)`.
+* **String methods** — `length()` (bytes), `contains(s)`, `startsWith(s)`,
+  `indexOf(s)` (-1 if absent), `substring(start, end)` (stops the program if the
+  range is invalid), `trim()`, `replace(old, new)`, `split(sep)` (a
+  `List<String>`), `toIntOr(fallback)` (the whole text must be a number),
+  `upper()`, `lower()` (ASCII).  Offsets are bytes.
+* `hashOf(value) -> Int` — a non-negative hash of an Int, Float, Bool, String
+  (by content) or object (by identity); what `Map` and `Set` use.
+
+#### Collections
+
+`Array<T>` is built into the compiler (see the [language guide](language.md#collections));
+the rest is Aion source in `stdlib/prelude.aion`, so it doubles as a worked
+example of generic types.
+
+| Type | Creation | Members |
+|------|----------|---------|
+| `Array<T>` | `Array(n, fill)`, `Array<T>(n)` | `size()`, `get(i)`, `set(i, v)`, `clear(i)` (reset a slot to the zero value); `a[i]` |
+| `List<T>` | `List<T>()`, `[a, b]` | `size() isEmpty() get set add addAll removeAt pop clear first last contains indexOf copy reversed take drop`; `forEach map filter fold reduce any all count sortedWith join toString` |
+| `Map<K, V>` | `Map<K, V>()`, `{k: v}` | `size() isEmpty() get set containsKey contains getOr remove clear keys values entries forEach toString`; `m[k]`, `m[k] = v`; loops over its `Entry`s |
+| `Entry<K, V>` | | `key`, `value` |
+| `Set<T>` | `Set<T>()`, `setOf(list)` | `size() isEmpty() contains add remove clear toList toString` |
+
+A `Map` and a `Set` remember insertion order.  `List.sortedWith(compare)` takes a
+function returning a negative, zero or positive `Int` and is a stable insertion
+sort (fine for script-sized data).  A list prints as `[1, 2]`, a map as
+`{a: 1}`, a set as `{1, 2}`.
+
 ### `std.math`
 
 `pi`; `sqrt pow sin cos floor ceil abs fmax fmin` (Float → Float, from libm) and
@@ -120,8 +156,9 @@ ordinary Aion classes built on it.
 
 ### `std.strings`
 
-`length(s) -> Int` (bytes), `contains(s, needle)`, `starts_with(s, prefix)`
-(Bool), `upper(s)`, `lower(s)` (ASCII).
+Function forms of the `String` methods: `length(s) -> Int` (bytes),
+`contains(s, needle)`, `starts_with(s, prefix)` (Bool), `upper(s)`, `lower(s)`
+(ASCII).  Prefer the methods: `s.length()`.
 
 ### `std.sockets`
 

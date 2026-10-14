@@ -1,0 +1,3 @@
+// error: a Int cannot be indexed
+x := 5
+println(x[0])

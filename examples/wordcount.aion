@@ -1,0 +1,35 @@
+#!/usr/bin/env aion
+// Collections, lambdas and generics in one small script.
+
+text := "the quick brown fox jumps over the lazy dog the end"
+words := text.split(" ")
+
+counts := Map<String, Int>()
+for w in words {
+    counts[w] = counts.getOr(w, 0) + 1
+}
+
+println(words.size(), "words,", counts.size(), "distinct")
+busiest := counts.entries().sortedWith { a, b -> b.value - a.value }
+for e in busiest.take(3) {
+    println(e.key, e.value)
+}
+
+lengths := words.map { it.length() }
+println("longest:", lengths.reduce { a, b -> if a > b { a } else { b } })
+println(words.filter { it.startsWith("t") }.join("+"))
+
+// Your own generic helpers work on any element type.
+fn groupBy<T, K>(items: List<T>, key: (T) -> K) -> Map<K, List<T>> {
+    groups := Map<K, List<T>>()
+    for item in items {
+        k := key(item)
+        if !(k in groups) { groups[k] = List<T>() }
+        groups[k].add(item)
+    }
+    return groups
+}
+
+for e in groupBy(words, { it.length() }) {
+    println(e.key, "->", e.value)
+}
