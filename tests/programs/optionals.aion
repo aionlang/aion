@@ -37,3 +37,29 @@ println(g)
 words := Array<String?>(2)
 words[1] = "x"
 println(words[0], words[1])
+
+// ── comparing with null and with values ──
+p: Int? = 5
+q: Int? = null
+println(p == null, p != null, q == null, null == q, null == null, null != null)
+println(p == 5, p == 6, q == 5, 5 == p, p != 5, q != 5)
+k: Int? = 5
+println(p == k, p == q, q == q, q != p)
+fl: Float? = 2
+println(fl == 2, fl == 2.5)
+s2: String? = "x"
+t2: String? = null
+println(s2 == "x", s2 == "y", t2 == "x", s2 == t2, t2 == t2, t2 == null)
+type N(v: Int)
+n2: N? = N(1)
+m2: N? = null
+println(n2 == null, m2 == null, n2 == n2, n2 == m2)
+plain := N(2)
+println(plain == null, plain != null)
+ys: List<String?> = ["p", null]
+println(ys.contains(null), ys.contains("p"), ys.contains("z"), ys.indexOf(null))
+r := when (q) {
+    null -> "none"
+    else -> "some"
+}
+println(r)

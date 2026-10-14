@@ -8,3 +8,12 @@ got a got null
 {a: 1, b: null}
 set
 null x
+false true true true true false
+true false false true false true
+true false true true
+true false
+true false false false true true
+false true true false
+false true
+true true false 1
+none

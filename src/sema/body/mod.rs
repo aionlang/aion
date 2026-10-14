@@ -1476,8 +1476,13 @@ impl<'c, 'a> Cx<'c, 'a> {
             }
 
             A::Binary(op, l, r) => {
-                let l = self.value(l)?;
-                let r = self.value(r)?;
+                // `null` can only be compared (`x == null`), not computed with.
+                let equality = matches!(op, ast::BinOp::Eq | ast::BinOp::Ne);
+                let operand = |cx: &mut Self, x: &ast::Expr| {
+                    if equality && matches!(x.kind, A::Null) { Ok(mk(K::Null, Ty::Null)) } else { cx.value(x) }
+                };
+                let l = operand(self, l)?;
+                let r = operand(self, r)?;
                 self.binary(*op, l, r, e.span)?
             }
 
@@ -1587,6 +1592,12 @@ impl<'c, 'a> Cx<'c, 'a> {
             return Ok(mk(K::Logical { and: op == B::And, lhs: Box::new(l), rhs: Box::new(r) }, Ty::Bool));
         }
 
+        if matches!(op, B::Eq | B::Ne)
+            && (matches!(l.ty, Ty::Opt(_) | Ty::Null) || matches!(r.ty, Ty::Opt(_) | Ty::Null))
+        {
+            return self.optional_equality(op == B::Eq, l, r, span);
+        }
+
         // Mixed Int/Float arithmetic and comparison happens in Float.
         let (l, r) = match (l.ty, r.ty) {
             (Ty::Int, Ty::Float) => (mk(K::IntToFloat(Box::new(l)), Ty::Float), r),
@@ -1638,6 +1649,55 @@ impl<'c, 'a> Cx<'c, 'a> {
             }
         };
         Ok(mk(K::Binary(hop, Box::new(l), Box::new(r)), result))
+    }
+
+    /// `==` / `!=` where a side is optional or `null`.
+    fn optional_equality(&mut self, equal: bool, l: hir::Expr, r: hir::Expr, span: Span) -> Result<hir::Expr> {
+        let not = |e: hir::Expr| if equal { e } else { mk(K::Not(Box::new(e)), Ty::Bool) };
+        let is_null = |e: hir::Expr| mk(K::IsNull(Box::new(e)), Ty::Bool);
+        // `x == null`: pointers can be checked directly; scalars can never be null.
+        match (l.ty, r.ty) {
+            (Ty::Null, Ty::Null) => return Ok(not(mk(K::Bool(true), Ty::Bool))),
+            (other, Ty::Null) | (Ty::Null, other) => {
+                let (value, _) = if r.ty == Ty::Null { (l, r) } else { (r, l) };
+                if !matches!(other, Ty::Opt(_) | Ty::Obj(_) | Ty::Fn(_)) {
+                    return Err(Diagnostic::new(
+                        format!("a {} is never null, so it can't be compared with null", self.name(other)),
+                        span,
+                    ));
+                }
+                return Ok(not(is_null(value)));
+            }
+            _ => {}
+        }
+
+        // Two values, at least one optional: equal if both are null, or neither is and the values match.
+        let (a, b) = (self.new_local("$a", l.ty), self.new_local("$b", r.ty));
+        let (la, lb) = (self.local_expr(a), self.local_expr(b));
+        let unwrap = |cx: &Self, e: hir::Expr| match e.ty {
+            Ty::Opt(id) => mk(K::Unwrap(Box::new(e)), cx.ck.t.opt_inner(id)),
+            _ => e,
+        };
+        let values = {
+            let (ua, ub) = (unwrap(self, self.local_expr(a)), unwrap(self, self.local_expr(b)));
+            self.binary(ast::BinOp::Eq, ua, ub, span)?
+        };
+        let present = |e: hir::Expr| mk(K::Not(Box::new(is_null(e))), Ty::Bool);
+        let and = |x: hir::Expr, y: hir::Expr| mk(K::Logical { and: true, lhs: Box::new(x), rhs: Box::new(y) }, Ty::Bool);
+        let test = match (l.ty, r.ty) {
+            (Ty::Opt(_), Ty::Opt(_)) => mk(
+                K::Cond {
+                    cond: Box::new(is_null(la)),
+                    then: Box::new(is_null(lb)),
+                    otherwise: Box::new(and(present(self.local_expr(b)), values)),
+                },
+                Ty::Bool,
+            ),
+            (Ty::Opt(_), _) => and(present(la), values),
+            _ => and(present(lb), values),
+        };
+        let bind = vec![hir::Stmt::Let(a, Some(l)), hir::Stmt::Let(b, Some(r))];
+        Ok(not(mk(K::Block(bind, Box::new(test)), Ty::Bool)))
     }
 
     // ── calls ───────────────────────────────────────────────────

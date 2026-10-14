@@ -1,0 +1,2 @@
+// error: a Int is never null, so it can't be compared with null
+println(5 == null)
