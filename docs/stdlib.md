@@ -125,8 +125,8 @@ Always in scope.
 * **String methods** — `length()` (bytes), `contains(s)`, `startsWith(s)`,
   `indexOf(s)` (-1 if absent), `substring(start, end)` (stops the program if the
   range is invalid), `trim()`, `replace(old, new)`, `split(sep)` (a
-  `List<String>`), `toIntOr(fallback)` (the whole text must be a number),
-  `upper()`, `lower()` (ASCII).  Offsets are bytes.
+  `List<String>`), `isInt()`, `toIntOr(fallback)` and `toIntOrNull()` (the
+  whole text must be a number), `upper()`, `lower()` (ASCII).  Offsets are bytes.
 * `hashOf(value) -> Int` — a non-negative hash of an Int, Float, Bool, String
   (by content) or object (by identity); what `Map` and `Set` use.
 
@@ -139,8 +139,8 @@ example of generic types.
 | Type | Creation | Members |
 |------|----------|---------|
 | `Array<T>` | `Array(n, fill)`, `Array<T>(n)` | `size()`, `get(i)`, `set(i, v)`, `clear(i)` (reset a slot to the zero value); `a[i]` |
-| `List<T>` | `List<T>()`, `[a, b]` | `size() isEmpty() get set add addAll removeAt pop clear first last contains indexOf copy reversed take drop`; `forEach map filter fold reduce any all count sortedWith join toString` |
-| `Map<K, V>` | `Map<K, V>()`, `{k: v}` | `size() isEmpty() get set containsKey contains getOr remove clear keys values entries forEach toString`; `m[k]`, `m[k] = v`; loops over its `Entry`s |
+| `List<T>` | `List<T>()`, `[a, b]` | `size() isEmpty() get set add addAll removeAt pop clear first last contains indexOf copy reversed take drop`; `getOrNull firstOrNull lastOrNull find` (return `T?`); `forEach map filter fold reduce any all count sortedWith join toString` |
+| `Map<K, V>` | `Map<K, V>()`, `{k: v}` | `size() isEmpty() get set containsKey contains getOr getOrNull remove clear keys values entries forEach toString`; `m[k]`, `m[k] = v`; loops over its `Entry`s |
 | `Entry<K, V>` | | `key`, `value` |
 | `Set<T>` | `Set<T>()`, `setOf(list)` | `size() isEmpty() contains add remove clear toList toString` |
 

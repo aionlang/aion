@@ -71,9 +71,11 @@ From loosest to tightest binding:
 | `&&`               | Bool                                                  |
 | `==` `!=`          | numbers, Bool, String (by value), objects (by identity)|
 | `<` `<=` `>` `>=` `in` | numbers; `x in a..b` tests a range                |
+| `?:`               | optional `?:` fallback (see [Nullability](#nullability)) |
 | `+` `-`            | numbers; `+` also joins two Strings                   |
 | `*` `/` `%`        | numbers                                               |
 | unary `-` `!`      | number / Bool                                         |
+| postfix `!!` `?.` `.` `()` `[]` | optional unwrap, safe access, member access, call, index |
 
 `&&` and `||` short-circuit.  Mixing `Int` and `Float` computes in `Float`.
 Integer division by zero stops the program with a panic.
@@ -232,8 +234,9 @@ println(c.show())                            // hits=1
   it has one, otherwise `Name(field=value, …)`.  Object fields that were never
   set print as `null`.
 * A field holding an object starts out null; using it before assigning it stops
-  the program with a `null reference` panic.  `Type?` is accepted but nullability
-  is not tracked yet.
+  the program with a `null reference` panic.  Declare such a field `Type?` to say
+  it may be null (see [Nullability](#nullability)); a plain `Type` is still not
+  checked against being unset.
 * Inheritance is not supported.
 
 ## Function values and lambdas
@@ -399,13 +402,95 @@ Float, Bool and String, identity for objects.  Map keys are hashed with the
 built-in `hashOf(value)`.  Indexing past the end stops the program with
 `index 5 is out of bounds for size 3`; a missing map key with `no such key: …`.
 
+## Nullability
+
+`T?` is a `T` or `null`.  `null` converts to any `T?`, and a `T` converts to
+`T?`; the other way round you have to say what happens when it is null.
+
+```aion
+a: Int? = 5
+b: Int? = null
+c: String? = "hi"
+println(a, b, c)                       // 5 null hi
+println(a == null, b == null, a == 5)  // false true true
+
+println(a ?: 0, b ?: 0)                // 5 0     `?:` supplies a default
+println(a!!)                           // 5       `!!` unwraps, or stops the program if null
+
+type Node(v: Int) {
+    next: Node?
+    fn double() = v * 2
+}
+n := Node(1)
+n.next = Node(2)
+println(n.next?.v, n.next?.next?.v)            // 2 null   `?.` gives null instead of failing
+println(n.next?.double() ?: -1, n.next?.next?.double() ?: -1)   // 4 -1
+
+fn describe(s: String?) -> String {
+    if s == null { return "nothing" }          // after this, `s` is a plain String
+    return "got " + s.upper()
+}
+println(describe("x"), describe(null))
+```
+
+| Written              | Meaning                                                              |
+|----------------------|----------------------------------------------------------------------|
+| `x == null`, `x != null` | test for null; `x == 5` also works (equal if both are null, or both present and equal) |
+| `x!!`                | the value; `unexpected null value` panic if it is null                |
+| `x ?: y`             | `x` unless it is null, then `y`; a `y` that doesn't return, such as `panic(...)`, is fine |
+| `x?.f`, `x?.f(…)`    | `null` if `x` is null, otherwise the (optional) result; a chain stops at the first null |
+
+**Smart casts.**  Inside `if x != null { … }`, in the `else` of `if x == null`, in
+`a != null && a.ok`, and after an `if x == null { return … }` guard, an optional
+variable is a plain value:
+
+```aion
+fn longest(words: List<String?>) -> Int {
+    best := 0
+    for w in words {
+        if w == null { continue }              // skip them
+        if w.length() > best { best = w.length() }
+    }
+    return best
+}
+println(longest(["a", null, "abc"]))
+
+type Node(v: Int) { next: Node? }
+
+fn sum(first: Node?) -> Int {
+    total := 0
+    node := first
+    while node != null {                       // `node` is reassigned below, and that's fine:
+        total += node.v                        // it is known non-null until the assignment
+        node = node.next
+    }
+    return total
+}
+n := Node(1)
+n.next = Node(2)
+println(sum(n))
+```
+
+The compiler is deliberately cautious about when it believes a check still
+holds.  A variable is **not** narrowed if a lambda assigns it, if it is a module
+variable that some function assigns, or after a statement that assigns it; and
+**fields** are never narrowed (copy the field into a variable first, or use
+`?.` / `!!`).  When in doubt, you get an ordinary "`Int?` is not `Int`" error
+that says how to fix it.
+
+`Int?`, `Float?` and `Bool?` are stored as a small heap box, so they cost an
+allocation; an optional `String`, object or function is the plain pointer.
+Collections of optionals work (`List<Int?>`, `Map<String, Int?>`), and
+the standard library uses them: `list.firstOrNull()`, `list.find { … }`,
+`map.getOrNull(key)`, `"42".toIntOrNull()`.
+
 ## Line breaks
 
 A line break ends a statement, with these exceptions:
 
 * inside parentheses, newlines are ignored;
 * a line may continue after an operator (`total = a +` ⏎ `b`);
-* a line may **start** with `.`, `&&` or `||` and continue the previous one;
+* a line may **start** with `.`, `?.`, `?:`, `&&` or `||` and continue the previous one;
 * `else` may start a line after a closing brace.
 
 ```aion
@@ -469,7 +554,7 @@ zero, using a null object or function, out of memory, and `panic(...)`.
 
 ## Not (yet) in the language
 
-Nullability (`T?`, `?.`, `?:` and a `null` literal), interfaces and constraints
-on type parameters, `defer`, a way to recover from errors, concurrency,
-inheritance, `char`, reading input, slices, and user-defined hashing for map
-keys.
+Interfaces and constraints on type parameters, `defer`, a way to recover from
+errors, concurrency, inheritance, `char`, reading input, slices, and
+user-defined hashing for map keys.  (Plain object types are not checked against
+being unset; use `T?` where a value may be missing.)

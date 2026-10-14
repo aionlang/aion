@@ -39,6 +39,11 @@ migration notes at the end of this section.
   literals `{"a": 1}`, `xs[i]` / `xs[i] = v`, `x in xs`, `for x in xs`, all as sugar
   over `get` / `set` / `contains` / `size` / `iter`, so user types can join in.
   `hashOf(value)` for map keys.
+- **Nullability.** `T?` types, the `null` literal, `x == null`, `x!!`, `x ?: y`,
+  `x?.f` / `x?.f()` and smart casts after null checks (`if x != null`, `if x == null
+  { return }`, `&&`/`||`, loops that walk `node = node.next`). `Int?`/`Float?`/`Bool?`
+  are boxed; optional strings, objects and functions are plain pointers. Library:
+  `getOrNull`, `firstOrNull`, `lastOrNull`, `find`, `Map.getOrNull`, `toIntOrNull`.
 - **Methods on built-in types.** `fn String.shout() = "$this!"`, `fn Int.double()`;
   `String` gains `length() contains() startsWith() indexOf() substring() trim()
   replace() split() toIntOr() upper() lower()` as methods.

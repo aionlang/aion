@@ -120,6 +120,30 @@ method).
 Methods on built-in types (`fn String.shout()`) live in `Checker::ext_methods`,
 keyed by type and name; `extern` ones take the receiver as their first C argument.
 
+### Optional types (`narrow.rs`)
+
+`T?` is `Ty::Opt(i)`, an interned wrapper (an optional of an optional is the same
+optional).  Representation is chosen by the inner type: a `String`, object or
+function optional **is the pointer** (null = absent, so `Wrap` is free), while
+`Int?`, `Float?` and `Bool?` point to a one-slot GC box.  The checker has three
+small HIR nodes for it — `Wrap` (T → T?), `Unwrap` (null-checked T? → T) and
+`IsNull` — and everything else is desugared onto them: `a ?: b`, `a?.f()`,
+`a == b` between optionals, and printing an optional are `Block`/`Cond` trees over
+a temporary.  `null` has its own type `Ty::Null`, which converts to any optional
+and is rejected anywhere it would have to be stored (`x := null`).  `if` branches
+and `?:` join a value and `null` into an optional.
+
+Smart casts are purely syntactic.  `facts(cond, outcome)` reads `x != null`,
+`x == null`, `&&`, `||` and `!` and yields the variables known non-null; they are
+pushed while checking the branch (or the right operand of `&&` / `||`), and an
+`if c { return }` guard pushes the negation for the rest of the block.  A
+narrowing is keyed by the *variable*, not the local slot, so a lambda that
+captures it still sees it narrowed.  It is dropped before the first statement that
+syntactically assigns the variable (a plain `x = e` still sees it while `e`
+runs), and never granted to a variable assigned inside a lambda or to a module
+variable assigned by any function.  The narrowed reference becomes an `Unwrap`,
+so even a wrong guess would be a clean panic rather than memory corruption.
+
 ### Arrays and collections
 
 `Array<T>` is the one collection the compiler knows: a `TypeInfo` with
