@@ -1,29 +1,33 @@
 # The Aion language
 
-A tour of what the compiler accepts today.  Every snippet here compiles.
+Aion reads like a scripting language and compiles to a native binary.  Every
+`aion` example on this page is compiled by the test-suite.
 
-## Basics
+## Scripts
+
+A file is a list of statements, run top to bottom.  There is no `main` to write.
 
 ```aion
-// a comment
-fn main() {
-    println("Hello from Aion!")
-}
+println("Hello from Aion!")
+name := "world"
+println("Hello, $name!")
 ```
 
-Programs start at `fn main()`.  It may return nothing, or an `Int` that becomes
-the process exit code.  Statements are separated by newlines (a `;` is also
-allowed).  Functions can be defined in any order.
+`fn main()` still works and, if present, runs after the top-level statements.
+A first line starting with `#!` is ignored, so a file can be an executable
+script (`#!/usr/bin/env aion`).  Statements need no terminator; a line break ends
+a statement (see [Line breaks](#line-breaks)).
 
 ## Types
 
-| Type     | Meaning                                   | Default |
-|----------|-------------------------------------------|---------|
-| `Int`    | 64-bit signed integer (wraps on overflow) | `0`     |
-| `Float`  | 64-bit floating point                     | `0.0`   |
-| `Bool`   | `true` / `false`                          | `false` |
-| `String` | immutable UTF-8 text                      | `""`    |
-| `Foo`    | an instance of a user-defined `type Foo`  | null    |
+| Type          | Meaning                                       | Default |
+|---------------|-----------------------------------------------|---------|
+| `Int`         | 64-bit signed integer (wraps on overflow)     | `0`     |
+| `Float`       | 64-bit floating point                         | `0.0`   |
+| `Bool`        | `true` / `false`                              | `false` |
+| `String`      | immutable UTF-8 text                          | `""`    |
+| `Point`       | an instance of a user-defined `type Point`    | null    |
+| `(Int) -> Int`| a function value; `Unit` means "no value"    | null    |
 
 An `Int` is accepted wherever a `Float` is expected and widens automatically.
 There are no other implicit conversions.
@@ -32,51 +36,100 @@ There are no other implicit conversions.
 
 ```aion
 a := 12            // type inferred
-b: Int := 12       // explicit type
+b: Int = 12        // explicit type
 c: Float           // declared, starts at 0.0
-d ::= "text"       // same as :=
-
 a = 5              // assignment
 a += 1             // also -=  *=  /=
+println(a, b, c)
 ```
 
-Blocks (`{ ... }`) open a new scope.  An inner `x := ...` shadows an outer `x`;
-declaring the same name twice in one scope is an error.
+`x: T := v` is accepted too.  A variable declared at the **top level** of a file
+is a module variable: every function in the file can read and assign it.
+
+```aion
+count := 0
+fn bump() { count += 1 }
+bump()
+bump()
+println(count)     // 2
+```
+
+Top-level code runs in order, so a top-level statement can only use variables
+defined above it.  Functions may be defined anywhere.
+
+Blocks open a new scope; an inner declaration shadows an outer one, and declaring
+the same name twice in one scope is an error.
 
 ## Operators
 
 From loosest to tightest binding:
 
-| Operators            | Operands                                  |
-|----------------------|-------------------------------------------|
-| `\|\|`               | Bool                                      |
-| `&&`                 | Bool                                      |
-| `==` `!=`            | numbers, Bool, String (by value), objects (by identity) |
-| `<` `<=` `>` `>=`    | numbers                                   |
-| `+` `-`              | numbers; `+` also joins two Strings       |
-| `*` `/` `%`          | numbers                                   |
-| unary `-` `!`        | number / Bool                             |
+| Operators          | Operands                                              |
+|--------------------|-------------------------------------------------------|
+| `a..b`  `a..=b`    | Int ranges, only in `for` and after `in`              |
+| `\|\|`             | Bool                                                  |
+| `&&`               | Bool                                                  |
+| `==` `!=`          | numbers, Bool, String (by value), objects (by identity)|
+| `<` `<=` `>` `>=` `in` | numbers; `x in a..b` tests a range                |
+| `+` `-`            | numbers; `+` also joins two Strings                   |
+| `*` `/` `%`        | numbers                                               |
+| unary `-` `!`      | number / Bool                                         |
 
 `&&` and `||` short-circuit.  Mixing `Int` and `Float` computes in `Float`.
 Integer division by zero stops the program with a panic.
 
+```aion
+println(3 in 1..5, 5 in 1..5, 5 in 1..=5)   // true false true
+println(7 / 2, 7 % 2, 7 / 2.0)              // 3 1 3.5
+```
+
 ## Control flow
 
+`if` and `when` are expressions: the value of a branch is its last expression.
+
 ```aion
-if (n < 0) {
+n := 7
+if n < 0 {
     println("negative")
-} else if (n == 0) {
+} else if n == 0 {
     println("zero")
 } else {
     println("positive")
 }
 
-while (i < 10) {
-    i += 1
+kind := if n % 2 == 0 { "even" } else { "odd" }
+
+size := when n {
+    0 -> "zero"
+    1, 2, 3 -> "small"
+    in 4..10 -> "medium"
+    else -> "large"
 }
+println(kind, size)     // odd medium
 ```
 
-Conditions must be `Bool`; the parentheses are optional.
+`when` without a subject takes conditions: `when { n < 0 -> "neg"  else -> "pos" }`.
+Used as a value, `if` and `when` need an `else`.  Parentheses around conditions
+are optional.
+
+```aion
+i := 0
+while i < 3 {
+    i += 1
+}
+
+total := 0
+for k in 1..=4 { total += k }          // 1, 2, 3, 4
+for k in 0..10 {
+    if k % 2 == 0 { continue }         // skip evens
+    if k > 7 { break }
+    print(k, "")                       // 1 3 5 7
+}
+println(i, total)
+```
+
+`a..b` excludes `b`; `a..=b` includes it.  The loop variable is fresh on every
+iteration.
 
 ## Functions
 
@@ -85,26 +138,73 @@ fn add(a: Int, b: Int) -> Int {
     return a + b
 }
 
-fn double(x: Int) -> Int => x * 2      // arrow form: the expression is returned
-fn log(msg: String) => println(msg)    // no `->`: returns nothing
+fn double(x: Int) = x * 2                       // one-liner; return type inferred
+fn greet(name: String, greeting: String = "Hello") = "$greeting, $name!"
+
+println(add(1, 2), double(21))
+println(greet("Ann"))                           // Hello, Ann!
+println(greet("Bob", greeting: "Hi"))           // Hi, Bob!
+println(greet(greeting: "Yo", name: "Cy"))      // named arguments, any order
 ```
 
-Every parameter needs a type.  A function with `-> T` must return on every
-path; the compiler rejects one that can fall off the end.
+* Parameters need types; defaults must be literals.
+* After a named argument, all following arguments must be named.  Arguments are
+  evaluated in the order they are written.
+* `= expr` infers the return type; write `-> Type` to state it.  With a block
+  body, no `->` means "returns nothing", and a function that declares `-> T`
+  must return on every path.
+* A function that calls itself (or two that call each other) needs `-> Type` on
+  at least one of them.
+
+`Unit` names "no value" and is only valid as a return type, mainly in function
+types: `(Int) -> Unit`.
 
 ## Strings
 
 ```aion
 name := "Aion"
-println("Hello, ${name}! 1 + 2 = ${1 + 2}")
-println("tab:\t quote:\" backslash:\\ dollar:\$")
+n := 3
+println("Hello, $name! ${n} + 1 = ${n + 1}")
+println("tab:[\t] quote:[\"] backslash:[\\] dollar:[\$]")
+println("nested: ${"inner ${name}"}")
 ```
 
-`${...}` may contain any expression, including strings of its own.  Escapes:
-`\n \t \r \0 \\ \" \$`.  `Int`, `Float` and `Bool` convert to text inside
-`${}`; to build text out of other things use interpolation, not `+`.
+`$name` interpolates a variable and `${...}` any expression, including strings
+of its own.  Escapes: `\n \t \r \0 \\ \" \$`.  A `$` not followed by a name or `{`
+is just a dollar sign.  `Int`, `Float`, `Bool` and objects convert to text in
+`${}`; build text with interpolation, not `+`.
 
-## Types (user-defined)
+## Types
+
+```aion
+type User(name: String, age: Int = 0) {      // parameters are also fields
+    active: Bool = true                      // more fields, with initialisers
+    log: String = ""
+
+    init { log = "created $name" }           // runs after the fields are set
+
+    fn birthday() {
+        age += 1                             // fields are in scope by name
+        log += "; birthday"
+    }
+    fn isAdult() = age >= 18
+}
+
+fn User.label() = "$name($age)"              // methods can also be written outside
+
+u := User("ann", 17)
+u.birthday()
+println(u.isAdult(), u.label())              // true ann(18)
+println(User("bob").age)                     // 0
+println(u)                                   // User(name=ann, age=18, active=true, log=created ann; birthday)
+```
+
+* **Fields** come from the parenthesised list and from `name: Type [= value]`
+  lines in the body.  Fields not initialised keep their default.
+* Inside a method, `this` is the instance and its fields and methods are in
+  scope by bare name (`age`, not `this.age`; use `this.age` if a parameter has
+  the same name).
+* Without a primary list you can write your own constructor:
 
 ```aion
 type Counter {
@@ -112,68 +212,129 @@ type Counter {
     label: String
 
     constructor(label: String) {
-        it.label = label
+        this.label = label
     }
-
-    fn inc() {
-        it.count += 1
-    }
-
-    fn show() -> String => "${it.label}=${it.count}"
+    fn inc() { count += 1 }
+    fn show() = "$label=$count"
 }
 
-fn Counter::reset() {          // methods can also be written outside the type
-    it.count = 0
-}
-
-fn main() {
-    c := Counter("hits")
-    c.inc()
-    println(c.show())          // hits=1
-}
+c := Counter("hits")
+c.inc()
+println(c.show())                            // hits=1
 ```
 
-* Inside a method or constructor, `it` is the instance.
-* **Constructors**:
-  * an explicit `constructor(...) { ... }`;
-  * the shorthand `type Point(it.x, it.y) { x: Int  y: Int }`;
-  * with neither, every field in declaration order: `type Pair { a: Int  b: Int }`
-    is built with `Pair(1, 2)`.
-  Fields not assigned by the constructor keep their default value.  A bare
-  `return` inside a constructor finishes construction early.
+  A type with a primary list cannot also declare `constructor`.  A bare `return`
+  inside a constructor ends construction early.
 * Instances are **references**: `b := a` makes both names refer to the same
-  object, and passing an object to a function lets it modify the original.
-* Fields can hold other objects (`a: Point`) and be chained: `line.b.x = 3`.
-* A field holding an object starts out null; using it before assigning it
-  stops the program with a `null reference` panic.
-* `name: Type?` is accepted but nullability is not tracked yet.
+  object, and a function receiving an object can modify it.
+* **Printing**: `println(u)` and `"$u"` use the type's own `toString()` method if
+  it has one, otherwise `Name(field=value, …)`.  Object fields that were never
+  set print as `null`.
+* A field holding an object starts out null; using it before assigning it stops
+  the program with a `null reference` panic.  `Type?` is accepted but nullability
+  is not tracked yet.
 * Inheritance is not supported.
+
+## Function values and lambdas
+
+A function type is written `(Int, String) -> Bool`.  A lambda is `{ params -> body }`;
+its value is the last expression.
+
+```aion
+fn apply(f: (Int) -> Int, x: Int) = f(x)
+
+println(apply({ x -> x * x }, 7))        // 49
+println(apply({ it + 1 }, 41))           // 42: `it` names the only parameter
+println(apply({ x: Int -> x - 1 }, 10))  // 9: parameters can be annotated
+
+fn repeat(n: Int, action: (Int) -> Unit) {
+    for i in 0..n { action(i) }
+}
+repeat(3) { println("step", it) }        // a lambda after the parentheses
+
+fn double(n: Int) = n * 2
+println(apply(double, 21))               // declared functions are values too
+```
+
+A lambda gets its parameter types from the function type it is passed to or
+assigned to; `{ it + 1 }` only works where one is expected.  Write the types
+yourself otherwise (`{ x: Int -> x + 1 }`).  Use `{ -> … }` for a lambda with no
+parameters.  `return` inside a lambda returns from the lambda.
+
+Lambdas are **closures**: they remember the variables they use, and share them.
+
+```aion
+fn counter() -> () -> Int {
+    n := 0
+    return { n += 1; n }          // this `n` belongs to this particular counter
+}
+a := counter()
+b := counter()
+println(a(), a(), a(), b())       // 1 2 3 1
+
+fn adder(k: Int) = { x: Int -> x + k }
+println(adder(5)(1))              // 6
+```
+
+A variable that a closure captures and anything reassigns is shared between the
+closure and the code that created it; one that is never reassigned is copied.
+Each loop iteration has its own loop variable, so closures created in a loop see
+the value from their own iteration.  Function values can be stored in variables,
+fields and module variables and called like functions: `onClick(3)`,
+`button.onClick(3)`, `make()(3)`.
+
+## Line breaks
+
+A line break ends a statement, with these exceptions:
+
+* inside parentheses, newlines are ignored;
+* a line may continue after an operator (`total = a +` ⏎ `b`);
+* a line may **start** with `.`, `&&` or `||` and continue the previous one;
+* `else` may start a line after a closing brace.
+
+```aion
+x := 10
+-3                          // a separate statement, not `10 - 3`
+ok := x > 5
+    && x < 20               // continues the line above
+text := "abc"
+println(x, ok, text)
+```
+
+A `(` or `{` at the start of a line begins a new statement; it is never a call
+or a trailing lambda.
 
 ## Modules
 
-```aion
-import std.math;                  // standard library:  math.sqrt(2.0)
-import std.sockets.TcpListener;   // …and use TcpListener unqualified
-import utils;                     // utils.aion next to this file, or in lib/
+```text
+import utils               // utils.aion beside this file, or in lib/
+import utils as u          // …under another name
+import sockets.TcpListener // the module, plus TcpListener on its own
+from sockets import TcpListener, TcpStream   // only those names
+import math                // the standard library
+import std.math            // …explicitly (aion.math works too)
 ```
 
-* `std.` and `aion.` both name the bundled standard library.
-* A user module is searched for as `<name>.aion` beside the importing file, then
-  in its `lib/` folder (and the same two places beside the entry file).
-* `import m;` makes `m.name(...)` available; `import m.Name;` additionally makes
-  `Name` usable on its own.  Dotted paths such as `import tools.text;` look for
-  `tools/text.aion`.
+* `import m` makes `m.name(...)` and `m.variable` available.
+* An import is looked up as a file beside the importing file (or in its `lib/`
+  folder, or the project root), then among the project's
+  [dependencies](projects.md), then in the standard library.  A local file
+  therefore shadows a standard-library module of the same name.
+* A module's top-level statements run once, before the importing program, in
+  dependency order.  Its variables are visible to importers as `m.name`, and can
+  be assigned (`m.label = "x"`).
 * Everything a module defines is public.  Circular imports are an error.
 
 ## Built-in functions
 
-| Call                        | Effect                                                |
-|-----------------------------|-------------------------------------------------------|
-| `print(x)`                  | write `x` (Int, Float, Bool or String), no newline    |
-| `println(x)` / `println()`  | …with a trailing newline / just a newline             |
-| `panic(message)`            | print `[aion] panic: message` to stderr and exit 1    |
+| Call                       | Effect                                                  |
+|----------------------------|---------------------------------------------------------|
+| `print(a, b, …)`           | write the values separated by spaces, no newline        |
+| `println(a, b, …)`         | …with a trailing newline; `println()` is just a newline |
+| `panic(message)`           | print `[aion] panic: message` to stderr and exit 1      |
 
-Floats print with C's `%g` (`3.0` prints as `3`).
+Arguments may be Int, Float, Bool, String or objects.  Floats print with C's
+`%g` (`3.0` prints as `3`).
 
 ## Calling C
 
@@ -182,14 +343,15 @@ Floats print with C's `%g` (`3.0` prints as `3`).
 
 ```aion
 extern fn llabs(n: Int) -> Int      // bind a libc function straight from your program
+println(llabs(-5))
 ```
 
 ## Runtime errors
 
 The program stops with exit code 1 and a message on stderr for: division by
-zero, using a null object reference, out of memory, and `panic(...)`.
+zero, using a null object or function, out of memory, and `panic(...)`.
 
 ## Not (yet) in the language
 
-`break`/`continue`, `for`, arrays/maps, a `null` literal, generics, closures,
-inheritance, `char`, user-visible access control, reading input.
+Arrays and maps, generics, a `null` literal, `defer`, interfaces, inheritance,
+`char`, reading input.

@@ -319,3 +319,64 @@ fn a_script_with_a_shebang_line_runs() {
     write(&root.join("s.aion"), "#!/usr/bin/env aion\nx := 20\nprintln(\"answer\", x + 22)\n");
     assert_eq!(stdout(&aion_in(&root, &["s.aion"])), "answer 42\n");
 }
+
+// ── documentation ───────────────────────────────────────────────────
+
+/// `(first line, info string, body)` of every fenced code block in `text`.
+fn code_blocks(text: &str) -> Vec<(usize, String, String)> {
+    let mut blocks = Vec::new();
+    let mut open: Option<(usize, String, String)> = None;
+    for (i, line) in text.lines().enumerate() {
+        let trimmed = line.trim_start();
+        match (&mut open, trimmed.strip_prefix("```")) {
+            (None, Some(info)) => open = Some((i + 2, info.trim().to_string(), String::new())),
+            (Some(_), Some(_)) => blocks.push(open.take().unwrap()),
+            (Some((_, _, body)), None) => {
+                body.push_str(line);
+                body.push('\n');
+            }
+            (None, None) => {}
+        }
+    }
+    blocks
+}
+
+#[test]
+fn code_in_the_documentation_works() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = vec![root.join("README.md")];
+    let mut docs: Vec<PathBuf> = std::fs::read_dir(root.join("docs"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|e| e == "md"))
+        .collect();
+    docs.sort();
+    files.extend(docs);
+
+    let dir = scratch("docs");
+    let (mut failures, mut checked) = (Vec::new(), 0);
+    for file in files {
+        let text = std::fs::read_to_string(&file).unwrap();
+        for (line, info, body) in code_blocks(&text) {
+            // ```aion runs; ```aion no_run only compiles; anything else is not Aion.
+            let mode = match info.as_str() {
+                "aion" => "run",
+                "aion no_run" => "emit-ir",
+                _ => continue,
+            };
+            checked += 1;
+            let src = dir.join(format!("block_{checked}.aion"));
+            write(&src, &body);
+            let out = aion_in(&dir, &[mode, src.to_str().unwrap()]);
+            if !out.status.success() {
+                failures.push(format!(
+                    "{}:{line}\n{body}\n{}",
+                    file.strip_prefix(root).unwrap().display(),
+                    stderr(&out)
+                ));
+            }
+        }
+    }
+    assert!(checked > 10, "expected to find documentation examples, found {checked}");
+    assert!(failures.is_empty(), "\n{}", failures.join("\n---\n"));
+}

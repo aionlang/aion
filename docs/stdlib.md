@@ -5,18 +5,18 @@ The standard library is a folder of modules:
 ```
 stdlib/
 ├── prelude.aion   always in scope (panic)
-├── math.aion      import std.math;      sqrt, pow, sin, max, …
-├── io.aion        import std.io;        hello, banner, separator
-├── strings.aion   import std.strings;   length, contains, upper, …
-├── sockets.aion   import std.sockets;   TcpListener, TcpStream, TcpClient, UdpSocket
+├── math.aion      import math       pi, sqrt, pow, sin, max, …
+├── io.aion        import io         hello, banner, separator
+├── strings.aion   import strings    length, contains, upper, …
+├── sockets.aion   import sockets    TcpListener, TcpStream, TcpClient, UdpSocket
 ├── sockets.c      …the C half of sockets
-├── gc.aion        import std.gc;        collect, heap_size, object_count
+├── gc.aion        import gc         collect, heap_size, object_count
 └── name.aion
 ```
 
 `build.rs` embeds the folder in the compiler.  **Adding a module needs no
 registration:** drop `stdlib/<name>.aion` in (and optionally `stdlib/<name>.c`)
-and `import std.<name>;` works after the next `cargo build`.  The C file is
+and `import <name>` works after the next `cargo build`.  (`import std.<name>` is the same module, spelled explicitly; a local file of the same name takes precedence over the bare form.)  The C file is
 compiled and linked only into programs that import the module.
 
 `print`, `println` and `panic` are the only things in scope without an import.
@@ -27,7 +27,7 @@ An `extern fn` declares a function that is implemented in C.  The declaration
 *is* the binding — there is no second place to register it — and it is also the
 documentation that editors and readers see.
 
-```aion
+```text
 extern fn sqrt(x: Float) -> Float                  // C symbol: sqrt
 extern fn abs(x: Float) -> Float = "fabs"          // Aion name differs from the C symbol
 extern fn length(s: String) -> Int = "aion_strings_length"
@@ -62,7 +62,7 @@ extern fn length(s: String) -> Int = "aion_strings_length"
 
 `stdlib/strings.aion`
 
-```aion
+```text
 extern fn length(s: String) -> Int = "aion_strings_length"
 extern fn contains(s: String, needle: String) -> Bool = "aion_strings_contains"
 extern fn upper(s: String) -> String = "aion_strings_upper"
@@ -106,7 +106,7 @@ call.)
 
 ## Writing a pure-Aion module
 
-Just write functions and types; everything is public.  Prefix helpers with `_`
+Just write functions, types and (if you like) module variables such as `math.pi`; everything is public.  Prefix helpers with `_`
 or `raw_` by convention if they are not meant for users.  `sockets.aion` is a
 good example of a module that has a thin `extern fn` layer at the top and
 ordinary Aion classes built on it.
@@ -115,7 +115,7 @@ ordinary Aion classes built on it.
 
 ### `std.math`
 
-`sqrt pow sin cos floor ceil abs fmax fmin` (Float → Float, from libm) and
+`pi`; `sqrt pow sin cos floor ceil abs fmax fmin` (Float → Float, from libm) and
 `max min` (Int, Int → Int).
 
 ### `std.strings`

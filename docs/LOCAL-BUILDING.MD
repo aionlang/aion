@@ -54,6 +54,7 @@ Try it:
 ```bash
 aion examples/hello.aion         # compile and run
 aion build examples/hello.aion   # leaves ./hello
+aion new demo && cd demo && aion # a project
 ```
 
 ## Environment variables
@@ -61,6 +62,8 @@ aion build examples/hello.aion   # leaves ./hello
 | Variable          | Effect                                                         |
 |-------------------|----------------------------------------------------------------|
 | `AION_CLANG`      | the C compiler to use instead of `clang` / `clang-N`           |
+| `AION_CACHE`      | where built programs and git dependencies are cached           |
+| `AION_NO_CACHE`   | rebuild every run instead of reusing a cached binary           |
 | `AION_GC_STRESS`  | when *running a compiled program*: collect on every allocation |
 
 ## Troubleshooting

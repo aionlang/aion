@@ -12,25 +12,28 @@
 
 ## Aion language
 
-A small, statically typed, garbage-collected language that compiles to native
-binaries through LLVM.
+A statically typed, garbage-collected language that reads like a script and
+compiles to a native binary through LLVM.
 
 ```aion
-import std.math;
+import math
 
-type Animal(it.name, it.age) {
-    name: String
-    age: Int
-
-    fn describe() -> String => "${it.name} is ${it.age}"
+type Shape(name: String, sides: Int = 0) {
+    fn describe() = if sides == 0 { "$name (round)" } else { "$name with $sides sides" }
 }
 
-fn main() {
-    pet := Animal("Fido", 5)
-    println(pet.describe())
-    println("sqrt(2) = ${math.sqrt(2)}")
+println(Shape("square", sides: 4).describe())
+
+for r in 1..=3 {
+    println("radius", r, "area", math.pi * r * r)
 }
+
+fn twice(f: (Int) -> Int) = { x: Int -> f(f(x)) }
+println(twice { it * 3 }(2))        // 18
 ```
+
+No `main`, no semicolons, no type noise: types are only written on parameters and
+fields.
 
 ## Quick start
 
@@ -39,9 +42,10 @@ You need **Rust** and **clang 15+** (no LLVM development libraries).
 ```bash
 cargo install --path .       # puts `aion` on your PATH
 
-aion examples/hello.aion          # compile and run
-aion build examples/hello.aion    # …or just produce ./hello
-aion emit-ir examples/hello.aion  # print the generated LLVM IR
+aion examples/script.aion          # compile and run (re-runs are instant)
+aion new myapp && cd myapp && aion # a project with an aion.project file
+aion build examples/hello.aion     # produce ./hello
+aion emit-ir examples/hello.aion   # print the generated LLVM IR
 ```
 
 More programs live in [`examples/`](examples). Run the test-suite with
@@ -54,7 +58,7 @@ More programs live in [`examples/`](examples). Run the test-suite with
      │  lexer + parser        src/syntax/
      ▼
    syntax tree
-     │  loader (imports)      src/loader.rs
+     │  loader (imports, deps) src/loader.rs, src/project.rs
      ▼
    modules
      │  semantic analysis     src/sema/       names, types, implicit conversions
@@ -79,7 +83,8 @@ See **[docs/architecture.md](docs/architecture.md)** for the details.
 
 | | |
 |---|---|
-| [docs/language.md](docs/language.md) | the language: syntax, types, modules |
+| [docs/language.md](docs/language.md) | the language: syntax, types, lambdas, modules |
+| [docs/projects.md](docs/projects.md) | `aion.project`, dependencies, the build cache |
 | [docs/stdlib.md](docs/stdlib.md) | the standard library, and how to add C-backed functions with `extern fn` |
 | [docs/architecture.md](docs/architecture.md) | compiler internals, memory model, garbage collector |
 | [docs/LOCAL-BUILDING.MD](docs/LOCAL-BUILDING.MD) | setting up a development machine |
@@ -94,12 +99,14 @@ aion/
 │   ├── diag.rs        spans, source map, error rendering
 │   ├── syntax/        lexer, AST, parser
 │   ├── loader.rs      finds and parses imported modules
+│   ├── project.rs     aion.project, dependencies, aion.lock
+│   ├── cache.rs       build cache
 │   ├── sema/          name resolution + type checking → typed IR
 │   ├── codegen.rs     typed IR → LLVM IR text
 │   └── toolchain.rs   runs clang
 ├── runtime/           always-linked C runtime (GC, strings, printing)
 ├── stdlib/            standard library: <module>.aion [+ <module>.c]
-├── examples/          sample programs
+├── examples/          sample programs (a script, a project, modules, …)
 ├── benchmarks/        count-to-100M in Aion, C, Node and Python
 └── tests/             end-to-end tests (programs/, errors/)
 ```

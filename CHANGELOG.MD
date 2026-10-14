@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.3.0 — scripting syntax, closures, projects
+
+A new surface syntax (Kotlin / Go / Python flavoured), first-class functions, and
+project files with dependencies.  **Source-incompatible with 0.2**: see the
+migration notes at the end of this section.
+
+### Language
+- **Scripts.** Top-level statements run in order; top-level `x := …` defines a
+  module variable that functions can read and assign. `fn main()` is optional (and
+  runs after the top-level code). A `#!` first line is ignored. Imported modules'
+  top-level code runs once, before the importer.
+- **Newline-aware parsing.** No terminators; a line break ends a statement except
+  inside parentheses, after an operator, or before `.` `&&` `||`.
+- **Functions.** `fn f(x: Int) = x * 2` with return-type inference; default
+  parameters (`age: Int = 0`) and named arguments (`f(a, flag: true)`), evaluated
+  in the order written.
+- **Types.** Primary constructors `type User(name: String, age: Int = 0)`, field
+  initialisers, `init { }` blocks, implicit `this` (fields and methods in scope by
+  bare name), `fn User.label()` for methods outside the type, and a generated
+  `toString` so objects can be printed and interpolated.
+- **Expressions.** `if` and `when` are expressions; `x in 1..10`; `for i in a..b`
+  and `a..=b` with `break` / `continue`; `$name` interpolation; `print`/`println`
+  take several arguments.
+- **Function values.** Function types `(Int) -> Int` (`Unit` = no value), lambdas
+  `{ x -> … }` with implicit `it`, trailing lambdas `repeat(3) { … }`, closures
+  that share mutable captured variables, and declared functions / constructors /
+  module members usable as values.
+- **Imports.** `import math`, `from sockets import TcpListener`, `import x as y`.
+  `std.` / `aion.` prefixes still work. A local file shadows a stdlib module.
+- **Projects.** `aion.project` (name, entry, lib, `[dependencies]` with `path` or
+  `git` + `tag`/`branch`/`rev`), `aion.lock` pinning git commits, and the
+  commands `aion new`, `aion fetch`, `aion clean`. `aion` with no file runs the
+  project. See docs/projects.md.
+- **Faster re-runs.** `aion file.aion` caches the built binary by a hash of the
+  generated program: ≈4 ms for an unchanged script instead of ≈180 ms.
+
+### Compiler
+- Return types of `= expr` functions and types of top-level variables are inferred
+  on demand, with cycle detection.
+- Closures are GC objects (`{ code, captured… }`); captured variables that are also
+  reassigned live in shared heap cells. Module variables are GC roots.
+- Every ```` ```aion ```` block in the documentation is compiled and run by the tests.
+
+### Migrating from 0.2
+| 0.2                               | 0.3                                   |
+|-----------------------------------|---------------------------------------|
+| `it` (receiver), `it.field`       | `this` / bare field name              |
+| `fn T::method()`                  | `fn T.method()`                       |
+| `fn f() => expr`                  | `fn f() = expr`                       |
+| `type P(it.x, it.y) { x: Int … }` | `type P(x: Int, y: Int)`              |
+| type with no constructor `T(a, b)`| declare the fields in `type T(a: …, b: …)`; a plain body-only type now has a zero-argument constructor |
+| `import std.math;`                | `import math` (old form still works)  |
+| `x: Int := 1`                     | `x: Int = 1` (old form still works)   |
+
 ## 0.2.0 — rewrite
 
 The compiler was rewritten around a typed intermediate representation, and the
