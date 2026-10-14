@@ -1,0 +1,33 @@
+// String literals, escapes, interpolation, concatenation, equality, unicode.
+
+fn shout(s: String) -> String => "${s}!"
+
+fn main() {
+    name := "Aion"
+    println("Hello, ${name}!")
+    println("${1 + 2} and ${2.5 * 2} and ${true} and ${"nested ${name}"}")
+    println("tab:[\t] quote:[\"] backslash:[\\] dollar:[\$]")
+    println("two\nlines")
+    println("ünïcode ✓ 日本")
+
+    a := "foo" + "bar"
+    println(a)
+    println(a == "foobar")
+    println(a != "foobar")
+    println("abc" == "abd")
+    println(shout(shout("hey")))
+
+    s := ""
+    i := 0
+    while (i < 5) {
+        s += "x"
+        i += 1
+    }
+    println(s)
+
+    parts := "${1}${2}${3}"
+    println(parts)
+    println("${shout("call")} inside")
+    println("")
+    println("end")
+}

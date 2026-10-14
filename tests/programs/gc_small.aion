@@ -1,0 +1,50 @@
+// Same shape as gc.aion with small numbers, so it can also run in
+// AION_GC_STRESS mode (a collection on every allocation).
+
+type Node {
+    value: Int
+    text: String
+    next: Node
+
+    constructor(value: Int) {
+        it.value = value
+        it.text = "node ${value}"
+    }
+
+    fn push(value: Int) -> Node {
+        n := Node(value)
+        n.next = it
+        return n
+    }
+}
+
+fn churn(rounds: Int) {
+    j := 0
+    while (j < rounds) {
+        garbage := "garbage ${j} " + "padding"
+        junk := Node(j)
+        j += 1
+    }
+}
+
+fn main() {
+    head := Node(0)
+    i := 1
+    while (i <= 100) {
+        head = head.push(i)
+        churn(5)
+        i += 1
+    }
+
+    sum := 0
+    n := head
+    k := 0
+    while (k < 100) {
+        sum += n.value
+        n = n.next
+        k += 1
+    }
+    println(sum)
+    println(head.text)
+    println(head.next.next.text)
+}

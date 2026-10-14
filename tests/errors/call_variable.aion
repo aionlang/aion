@@ -1,0 +1,5 @@
+// error: `x` is a variable, not a function
+fn main() {
+    x := 1
+    x()
+}

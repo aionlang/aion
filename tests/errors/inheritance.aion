@@ -1,0 +1,4 @@
+// error: type inheritance is not supported
+type A {}
+type B: A {}
+fn main() {}

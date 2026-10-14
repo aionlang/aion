@@ -1,0 +1,4 @@
+// error: this function does not return a value
+fn main() {
+    return 5
+}

@@ -1,0 +1,72 @@
+// stress: skip
+// Very long and very wide structures: marking must not overflow the C stack,
+// and everything reachable must survive repeated collections.
+
+import std.gc;
+
+type Cell {
+    value: Int
+    next: Cell
+    constructor(value: Int) {
+        it.value = value
+    }
+}
+
+type Tree {
+    left: Tree
+    right: Tree
+    value: Int
+    label: String
+    constructor(depth: Int, value: Int) {
+        it.value = value
+        it.label = "t${value}"
+        if (depth > 0) {
+            it.left = Tree(depth - 1, value * 2)
+            it.right = Tree(depth - 1, value * 2 + 1)
+        }
+    }
+
+    // Sum of values in a tree of the given depth.
+    fn sum(depth: Int) -> Int {
+        total := it.value
+        if (depth > 0) {
+            total += it.left.sum(depth - 1)
+            total += it.right.sum(depth - 1)
+        }
+        return total
+    }
+}
+
+fn main() {
+    // A 300,000-element singly linked list: 300k-deep reference chain.
+    head := Cell(0)
+    i := 1
+    while (i < 300000) {
+        c := Cell(i)
+        c.next = head
+        head = c
+        i += 1
+    }
+    gc.collect()
+    gc.collect()
+
+    n := head
+    count := 0
+    total := 0
+    while (count < 300000) {
+        total += n.value
+        count += 1
+        if (count < 300000) {
+            n = n.next
+        }
+    }
+    println(total)
+
+    // A complete binary tree with 2^17 - 1 nodes.
+    tree := Tree(16, 1)
+    gc.collect()
+    println(tree.sum(16))
+    println(tree.left.right.label)
+    println(tree.right.right.right.label)
+    println(gc.object_count() > 300000)
+}

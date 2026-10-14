@@ -1,0 +1,5 @@
+// error: module `math` has no function or type `nope`
+import std.math;
+fn main() {
+    println(math.nope(4.0))
+}

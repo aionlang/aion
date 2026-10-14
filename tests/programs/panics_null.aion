@@ -1,0 +1,16 @@
+// exit: 1
+// stderr: null reference
+type Box {
+    inner: Box
+    value: Int
+    constructor(value: Int) {
+        it.value = value
+    }
+}
+
+fn main() {
+    b := Box(1)
+    println(b.value)
+    println(b.inner.value)
+    println("not reached")
+}

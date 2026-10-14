@@ -1,0 +1,4 @@
+// error: undefined variable `ghost`
+fn main() {
+    ghost = 1
+}

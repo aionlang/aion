@@ -1,0 +1,63 @@
+// Arithmetic, precedence, Int/Float mixing, compound assignment.
+
+fn add(a: Int, b: Int) -> Int => a + b
+
+fn fact(n: Int) -> Int {
+    if (n <= 1) {
+        return 1
+    }
+    return n * fact(n - 1)
+}
+
+fn half(x: Float) -> Float => x / 2
+
+fn main() {
+    println(1 + 2 * 3)
+    println((1 + 2) * 3)
+    println(10 - 4 - 3)
+    println(17 / 5)
+    println(17 % 5)
+    println(-3 + 5)
+    println(7.5 / 2.5)
+    println(1 + 2.5)
+    println(half(5))
+    println(add(40, 2))
+    println(fact(10))
+
+    println(true)
+    println(1 < 2)
+    println(2 <= 1)
+    println(3 == 3)
+    println(3 != 3)
+    println(2.5 > 2)
+    println(!true)
+
+    x := 10
+    x += 5
+    x -= 3
+    x *= 2
+    x /= 4
+    println(x)
+
+    f := 1.5
+    f *= 2
+    println(f)
+
+    print("a")
+    print("b")
+    println()
+    print(1)
+    print(" ")
+    print(2.5)
+    print(" ")
+    println(false)
+
+    big := 9223372036854775807
+    println(big)
+    println(big + 1)
+    n: Int
+    r: Float
+    b: Bool
+    s: String
+    println("${n} ${r} ${b} [${s}]")
+}

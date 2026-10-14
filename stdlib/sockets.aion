@@ -1,133 +1,114 @@
-// ═══════════════════════════════════════════════════════════════════
-// Aion Standard Library — sockets module (high-level API)
-// ═══════════════════════════════════════════════════════════════════
+// import std.sockets;
 //
-// Object-oriented socket API built on top of low-level C primitives.
+//   server := sockets.TcpListener(8080)     // or: import std.sockets.TcpListener;
+//   server.listen(5)
+//   client := server.accept()
+//   client.send("Hello!")
+//   data := client.receive(1024)
+//   client.close()
+//   server.close()
 //
-// Usage:
-//   import aion.sockets;              // full module import
-//   import aion.sockets.TcpListener;  // selective: use TcpListener directly
-//
-//   fn main() {
-//       server := sockets.TcpListener(8080)   // qualified
-//       // OR with selective import:
-//       server := TcpListener(8080)            // unqualified
-//       server.listen()
-//       client := server.accept()
-//       client.send("Hello, world!")
-//       data := client.receive(1024)
-//       client.close()
-//       server.close()
-//   }
-//
+// Layout: the `extern fn`s below are the whole C interface (sockets.c);
+// everything after them is ordinary Aion built on top.  Methods report
+// failure the C way: a negative Int.
+
+// ── C primitives ──────────────────────────────────────────────────
+
+extern fn raw_create(domain: Int, kind: Int, protocol: Int) -> Int = "aion_socket_create"
+extern fn raw_bind(fd: Int, port: Int) -> Int = "aion_socket_bind"
+extern fn raw_connect(fd: Int, host: String, port: Int) -> Int = "aion_socket_connect"
+extern fn raw_listen(fd: Int, backlog: Int) -> Int = "aion_socket_listen"
+extern fn raw_accept(fd: Int) -> Int = "aion_socket_accept"
+extern fn raw_send(fd: Int, data: String) -> Int = "aion_socket_send"
+extern fn raw_recv(fd: Int, max_bytes: Int) -> String = "aion_socket_recv"
+extern fn raw_close(fd: Int) -> Int = "aion_socket_close"
+extern fn raw_shutdown(fd: Int, how: Int) -> Int = "aion_socket_shutdown"
+extern fn raw_setopt(fd: Int, option: Int, value: Int) -> Int = "aion_socket_setopt"
+extern fn raw_error() -> Int = "aion_socket_error"
+extern fn raw_cleanup() = "aion_socket_cleanup"
 
 // ── Constants ─────────────────────────────────────────────────────
 
-// Socket domains
-fn AF_INET() -> Int { return 2 }
+fn AF_INET() -> Int => 2
+fn SOCK_STREAM() -> Int => 1
+fn SOCK_DGRAM() -> Int => 2
+fn OPT_REUSEADDR() -> Int => 1
+fn OPT_NONBLOCK() -> Int => 2
+fn SHUT_RD() -> Int => 0
+fn SHUT_WR() -> Int => 1
+fn SHUT_RDWR() -> Int => 2
 
-// Socket types
-fn SOCK_STREAM() -> Int { return 1 }
-fn SOCK_DGRAM() -> Int { return 2 }
-
-// Socket options
-fn OPT_REUSEADDR() -> Int { return 1 }
-fn OPT_NONBLOCK() -> Int { return 2 }
-
-// Shutdown modes
-fn SHUT_RD() -> Int { return 0 }
-fn SHUT_WR() -> Int { return 1 }
-fn SHUT_RDWR() -> Int { return 2 }
-
-// ── TcpStream: A connected TCP socket ────────────────────────────
+// ── TcpStream: a connected socket ─────────────────────────────────
 
 type TcpStream {
     fd: Int
-    connected: Int
+    connected: Bool
 
     constructor(fd: Int) {
         it.fd = fd
-        it.connected = 1
+        it.connected = true
     }
 
+    // Bytes sent, or -1.
     fn send(data: String) -> Int {
-        if (it.connected == 0) {
+        if (!it.connected) {
             return -1
         }
-        len := sockets._strlen(data)
-        return sockets._raw_send(it.fd, data, len)
+        return raw_send(it.fd, data)
     }
 
-    fn send_all(data: String) -> Int {
-        total := sockets._strlen(data)
-        sent := 0
-        while (sent < total) {
-            n := it.send(data)
-            if (n <= 0) {
-                return -1
-            }
-            sent = sent + n
-        }
-        return 0
-    }
-
+    // The data read, or "" when the peer closed the connection.
     fn receive(max_bytes: Int) -> String {
-        if (it.connected == 0) {
+        if (!it.connected) {
             return ""
         }
-        result := sockets._raw_recv(it.fd, max_bytes)
-        if (result == 0) {
-            it.connected = 0
-        }
-        return result
+        return raw_recv(it.fd, max_bytes)
     }
 
     fn shutdown(how: Int) -> Int {
-        return sockets._raw_shutdown(it.fd, how)
+        return raw_shutdown(it.fd, how)
     }
 
     fn close() -> Int {
-        result := sockets._raw_close(it.fd)
-        it.connected = 0
-        return result
+        it.connected = false
+        return raw_close(it.fd)
     }
 
     fn set_nonblocking(enabled: Int) -> Int {
-        return sockets._raw_setopt(it.fd, OPT_NONBLOCK(), enabled)
+        return raw_setopt(it.fd, OPT_NONBLOCK(), enabled)
     }
 
+    // 1 if this is a usable socket, 0 otherwise.
     fn isValid() -> Int {
-        return sockets._raw_is_valid(it.fd)
+        if (it.fd >= 0) {
+            return 1
+        }
+        return 0
     }
 }
 
-// ── TcpListener: A TCP server socket ──────────────────────────────
+// ── TcpListener: a server socket ──────────────────────────────────
 
 type TcpListener {
     fd: Int
     port: Int
-    listening: Int
+    listening: Bool
 
     constructor(port: Int) {
         it.port = port
-        it.listening = 0
-        
-        // Create socket
-        fd := sockets._raw_create(AF_INET(), SOCK_STREAM(), 0)
+        it.listening = false
+
+        fd := raw_create(AF_INET(), SOCK_STREAM(), 0)
         it.fd = fd
-        
         if (fd < 0) {
             println("Failed to create socket")
             return
         }
-        
-        // Enable address reuse
-        sockets._raw_setopt(fd, OPT_REUSEADDR(), 1)
-        
-        // Bind to port
-        if (sockets._raw_bind(fd, port) < 0) {
+
+        raw_setopt(fd, OPT_REUSEADDR(), 1)
+        if (raw_bind(fd, port) < 0) {
             println("Failed to bind to port")
-            sockets._raw_close(fd)
+            raw_close(fd)
             it.fd = -1
         }
     }
@@ -136,56 +117,49 @@ type TcpListener {
         if (it.fd < 0) {
             return -1
         }
-        
-        result := sockets._raw_listen(it.fd, backlog)
+        result := raw_listen(it.fd, backlog)
         if (result == 0) {
-            it.listening = 1
+            it.listening = true
         }
         return result
     }
 
+    // Blocks until a client connects.  Check `isValid()` on the result.
     fn accept() -> TcpStream {
-        if (it.listening == 0) {
+        if (!it.listening) {
             return TcpStream(-1)
         }
-        
-        client_fd := sockets._raw_accept(it.fd)
-        return TcpStream(client_fd)
+        return TcpStream(raw_accept(it.fd))
     }
 
     fn close() -> Int {
-        it.listening = 0
-        return sockets._raw_close(it.fd)
+        it.listening = false
+        return raw_close(it.fd)
     }
 
     fn set_nonblocking(enabled: Int) -> Int {
-        return sockets._raw_setopt(it.fd, OPT_NONBLOCK(), enabled)
+        return raw_setopt(it.fd, OPT_NONBLOCK(), enabled)
     }
 }
 
-// ── TcpClient: Connect to a remote server ────────────────────────
+// ── TcpClient: connect to a remote server ─────────────────────────
 
 type TcpClient {
     stream: TcpStream
 
     constructor(host: String, port: Int) {
-        // Create socket
-        fd := sockets._raw_create(AF_INET(), SOCK_STREAM(), 0)
-        
+        fd := raw_create(AF_INET(), SOCK_STREAM(), 0)
         if (fd < 0) {
             println("Failed to create socket")
             it.stream = TcpStream(-1)
             return
         }
-        
-        // Connect
-        if (sockets._raw_connect(fd, host, port) < 0) {
+        if (raw_connect(fd, host, port) < 0) {
             println("Failed to connect")
-            sockets._raw_close(fd)
+            raw_close(fd)
             it.stream = TcpStream(-1)
             return
         }
-        
         it.stream = TcpStream(fd)
     }
 
@@ -202,59 +176,55 @@ type TcpClient {
     }
 }
 
-// ── UdpSocket: UDP datagram socket ────────────────────────────────
+// ── UdpSocket ─────────────────────────────────────────────────────
 
 type UdpSocket {
     fd: Int
-    bound: Int
+    bound: Bool
 
+    // Pass port 0 to skip binding.
     constructor(port: Int) {
-        // Create UDP socket
-        fd := sockets._raw_create(AF_INET(), SOCK_DGRAM(), 0)
+        fd := raw_create(AF_INET(), SOCK_DGRAM(), 0)
         it.fd = fd
-        it.bound = 0
-        
+        it.bound = false
         if (fd < 0) {
             println("Failed to create UDP socket")
             return
         }
-        
-        // Bind if port specified
         if (port > 0) {
-            if (sockets._raw_bind(fd, port) == 0) {
-                it.bound = 1
+            if (raw_bind(fd, port) == 0) {
+                it.bound = true
             }
         }
     }
 
     fn bind(port: Int) -> Int {
-        if (it.bound == 1) {
+        if (it.bound) {
             return -1
         }
-        
-        result := sockets._raw_bind(it.fd, port)
+        result := raw_bind(it.fd, port)
         if (result == 0) {
-            it.bound = 1
+            it.bound = true
         }
         return result
     }
 
     fn receive(max_bytes: Int) -> String {
-        return sockets._raw_recv(it.fd, max_bytes)
+        return raw_recv(it.fd, max_bytes)
     }
 
     fn close() -> Int {
-        it.bound = 0
-        return sockets._raw_close(it.fd)
+        it.bound = false
+        return raw_close(it.fd)
     }
 }
 
-// ── Utility functions ─────────────────────────────────────────────
+// ── Utilities ─────────────────────────────────────────────────────
 
 fn cleanup() {
-    sockets._raw_cleanup()
+    raw_cleanup()
 }
 
 fn get_last_error() -> Int {
-    return sockets._raw_error()
+    return raw_error()
 }

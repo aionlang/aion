@@ -1,0 +1,5 @@
+// error: expected Int, found Float
+fn takes(n: Int) {}
+fn main() {
+    takes(2.5)
+}

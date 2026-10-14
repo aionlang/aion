@@ -1,0 +1,25 @@
+// Calls with several arguments of every type, in both directions.
+
+fn mix(a: Int, b: Float, c: Bool, d: String, e: Int) -> String {
+    return "${a} ${b} ${c} ${d} ${e}"
+}
+
+fn flip(b: Bool) -> Bool => !b
+
+fn to_float(i: Int) -> Float => i
+
+type Pair(it.a, it.b) {
+    a: Float
+    b: Bool
+    fn describe() -> String => "${it.a}/${it.b}"
+}
+
+fn main() {
+    println(mix(1, 2.5, true, "four", 5))
+    println(mix(1, 2, flip(true), "x", 3))
+    println(to_float(3) / 2)
+    println(Pair(1, true).describe())
+    p: Pair
+    p = Pair(2.5, false)
+    println(p.describe())
+}

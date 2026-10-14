@@ -1,25 +1,6 @@
-# Aion syntax 
+# Aion documentation
 
-## Overview
-
-## Variable definition
-
-- Define a mutable variable with type 
-
-```aion
-a := 12 
-```
-
-- Define a mutable variable without type
-
-```
-a: Int := 12
-```
-
-```aion
-
-if (a == 1) {
-    println("a equals to 1")
-}
-
-```
+- [language.md](language.md) — syntax, types, modules
+- [stdlib.md](stdlib.md) — standard library and `extern fn` C bindings
+- [architecture.md](architecture.md) — compiler internals, memory model, GC
+- [LOCAL-BUILDING.MD](LOCAL-BUILDING.MD) — development setup

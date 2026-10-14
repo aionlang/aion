@@ -1,0 +1,142 @@
+# Standard library & C bindings
+
+The standard library is a folder of modules:
+
+```
+stdlib/
+├── prelude.aion   always in scope (panic)
+├── math.aion      import std.math;      sqrt, pow, sin, max, …
+├── io.aion        import std.io;        hello, banner, separator
+├── strings.aion   import std.strings;   length, contains, upper, …
+├── sockets.aion   import std.sockets;   TcpListener, TcpStream, TcpClient, UdpSocket
+├── sockets.c      …the C half of sockets
+├── gc.aion        import std.gc;        collect, heap_size, object_count
+└── name.aion
+```
+
+`build.rs` embeds the folder in the compiler.  **Adding a module needs no
+registration:** drop `stdlib/<name>.aion` in (and optionally `stdlib/<name>.c`)
+and `import std.<name>;` works after the next `cargo build`.  The C file is
+compiled and linked only into programs that import the module.
+
+`print`, `println` and `panic` are the only things in scope without an import.
+
+## `extern fn`
+
+An `extern fn` declares a function that is implemented in C.  The declaration
+*is* the binding — there is no second place to register it — and it is also the
+documentation that editors and readers see.
+
+```aion
+extern fn sqrt(x: Float) -> Float                  // C symbol: sqrt
+extern fn abs(x: Float) -> Float = "fabs"          // Aion name differs from the C symbol
+extern fn length(s: String) -> Int = "aion_strings_length"
+```
+
+* Without `= "symbol"` the C symbol is the function's own name.
+* Parameter and return types are limited to `Int`, `Float`, `Bool` and `String`.
+* The function is called like any other: `math.sqrt(2.0)`.  An `Int` argument is
+  widened to `Float` where a `Float` is expected.
+* `extern fn` works in any `.aion` file, so a program can bind libc/libm
+  directly.  To bring your own C code, put it in a stdlib module.
+
+### Type mapping
+
+| Aion     | C                | Notes                                                    |
+|----------|------------------|----------------------------------------------------------|
+| `Int`    | `int64_t`        | exactly 64 bits — **not** `int` or `long`                |
+| `Float`  | `double`         |                                                          |
+| `Bool`   | `bool`           | `<stdbool.h>`                                            |
+| `String` | `const char *`   | NUL-terminated; see the ownership rules below            |
+| *(none)* | `void`           | omit `-> T`                                              |
+
+### Strings across the boundary
+
+* A `String` **passed to C** is an ordinary C string.  Read it, but don't free
+  it and don't keep the pointer after returning.
+* A `String` **returned from C** must be created with `aion_string(s)` or
+  `aion_string_n(s, len)` (both copy), so the garbage collector owns it.  Never
+  return a `malloc`ed or static buffer.
+
+### Example: a complete C-backed module
+
+`stdlib/strings.aion`
+
+```aion
+extern fn length(s: String) -> Int = "aion_strings_length"
+extern fn contains(s: String, needle: String) -> Bool = "aion_strings_contains"
+extern fn upper(s: String) -> String = "aion_strings_upper"
+```
+
+`stdlib/strings.c`
+
+```c
+#include "aion.h"
+#include <ctype.h>
+#include <string.h>
+
+int64_t aion_strings_length(const char *s) { return (int64_t)strlen(s); }
+
+bool aion_strings_contains(const char *s, const char *needle) {
+    return strstr(s, needle) != NULL;
+}
+
+const char *aion_strings_upper(const char *s) {
+    size_t n = strlen(s);
+    char *copy = (char *)aion_string_n(s, n);      // GC-owned copy
+    for (size_t i = 0; i < n; i++) copy[i] = (char)toupper((unsigned char)copy[i]);
+    return copy;
+}
+```
+
+That is the whole job: no registry entries, no codegen changes.
+
+### The C API (`runtime/aion.h`)
+
+```c
+const char *aion_string(const char *s);              // copy into a new Aion String
+const char *aion_string_n(const char *s, size_t n);  // …first n bytes
+void aion_panic(const char *msg);                    // "[aion] panic: msg", exit 1
+```
+
+Don't call `aion_string*` while holding another Aion `String` obtained *from the
+GC heap* in a C local — a collection may run inside the call.  (Arguments passed
+to your function are safe: the caller keeps them alive for the duration of the
+call.)
+
+## Writing a pure-Aion module
+
+Just write functions and types; everything is public.  Prefix helpers with `_`
+or `raw_` by convention if they are not meant for users.  `sockets.aion` is a
+good example of a module that has a thin `extern fn` layer at the top and
+ordinary Aion classes built on it.
+
+## Module reference
+
+### `std.math`
+
+`sqrt pow sin cos floor ceil abs fmax fmin` (Float → Float, from libm) and
+`max min` (Int, Int → Int).
+
+### `std.strings`
+
+`length(s) -> Int` (bytes), `contains(s, needle)`, `starts_with(s, prefix)`
+(Bool), `upper(s)`, `lower(s)` (ASCII).
+
+### `std.sockets`
+
+`TcpListener(port)` → `.listen(backlog)`, `.accept() -> TcpStream`, `.close()`;
+`TcpStream` → `.send(text) -> Int`, `.receive(max_bytes) -> String`, `.close()`,
+`.isValid() -> Int`; `TcpClient(host, port)`; `UdpSocket(port)`.  Methods report
+errors as negative `Int`s.  `send` writes the whole string.
+
+### `std.gc`
+
+`collect()`, `heap_size() -> Int`, `object_count() -> Int`.  Set the environment
+variable `AION_GC_STRESS=1` when running a program to collect on every
+allocation (slow; useful for chasing memory bugs).
+
+### `std.io`, `std.name`
+
+Tiny helpers (`io.hello()`, `io.banner()`, `io.separator()`, `io.newline()`;
+`name.name()`).

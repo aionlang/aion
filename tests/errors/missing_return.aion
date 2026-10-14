@@ -1,0 +1,9 @@
+// error: `f` may reach its end without returning a Int
+fn f(x: Int) -> Int {
+    if (x > 0) {
+        return 1
+    }
+}
+fn main() {
+    println(f(1))
+}

@@ -1,0 +1,95 @@
+// if / else if / else, while, short-circuit logic, scoping, return paths.
+
+fn noisy(label: String, value: Bool) -> Bool {
+    println("eval ${label}")
+    return value
+}
+
+fn classify(n: Int) -> String {
+    if (n < 0) {
+        return "negative"
+    } else if (n == 0) {
+        return "zero"
+    } else if (n < 10) {
+        return "small"
+    } else {
+        return "large"
+    }
+}
+
+fn is_even(n: Int) -> Bool {
+    if (n == 0) {
+        return true
+    }
+    return is_odd(n - 1)
+}
+
+fn is_odd(n: Int) -> Bool {
+    if (n == 0) {
+        return false
+    }
+    return is_even(n - 1)
+}
+
+fn fib(n: Int) -> Int {
+    a := 0
+    b := 1
+    i := 0
+    while (i < n) {
+        t := a + b
+        a = b
+        b = t
+        i += 1
+    }
+    return a
+}
+
+fn main() {
+    println(classify(-5))
+    println(classify(0))
+    println(classify(7))
+    println(classify(70))
+
+    println(noisy("a", false) && noisy("b", true))
+    println(noisy("c", true) || noisy("d", true))
+    println(noisy("e", true) && noisy("f", true))
+    println(noisy("g", false) || noisy("h", false))
+
+    println(is_even(10))
+    println(is_odd(7))
+    println(is_even(7))
+    println(fib(10))
+    println(fib(50))
+
+    x := 1
+    if (true) {
+        x := 2
+        println(x)
+    }
+    println(x)
+
+    total := 0
+    i := 1
+    while (i <= 100) {
+        if (i % 3 == 0 || i % 5 == 0) {
+            total += i
+        }
+        i += 1
+    }
+    println(total)
+
+    // Nested loops.
+    count := 0
+    a := 0
+    while (a < 10) {
+        b := 0
+        while (b < 10) {
+            if (a < b) {
+                count += 1
+            }
+            b += 1
+        }
+        a += 1
+    }
+    println(count)
+}

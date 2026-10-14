@@ -1,128 +1,38 @@
-// ═══════════════════════════════════════════════════════════════════
-// Aion Standard Library — math module
-// ═══════════════════════════════════════════════════════════════════
+// import std.math;
 //
-// Stub declarations for `import aion.math;`
+//   math.sqrt(144.0)     // 12
+//   math.pow(2.0, 10.0)  // 1024
+//   math.max(3, 7)       // 7
 //
-// The real implementations are in C (runtime/aion_math.c).
-// This file is the canonical reference for IDE tooling:
-// Go-to-Definition, hover docs, and auto-complete.
-//
-// Usage:
-//   import aion.math;
-//   fn main() {
-//       math.sqrt(144.0)
-//   }
-//
-// ═══════════════════════════════════════════════════════════════════
+// These bind libm directly: `extern fn` needs no C file when a C function
+// with the right shape already exists.  Int arguments are widened to Float
+// where a Float is expected.
 
-// @builtin
-// @runtime "aion_math_sqrt"
-// @param x Float
-// @return Float
-//
-// Returns the square root of `x`.
-//
-// Example:
-//   math.sqrt(144.0)   // => 12.0
-//
-fn sqrt(x: Float) {}
+extern fn sqrt(x: Float) -> Float
+extern fn pow(base: Float, exp: Float) -> Float
+extern fn sin(x: Float) -> Float
+extern fn cos(x: Float) -> Float
+extern fn floor(x: Float) -> Float
+extern fn ceil(x: Float) -> Float
 
-// @builtin
-// @runtime "aion_math_abs"
-// @param x Float
-// @return Float
-//
-// Returns the absolute value of `x`.
-//
-// Example:
-//   math.abs(-5.0)     // => 5.0
-//
-fn abs(x: Float) {}
+// Absolute value of a Float (libm calls this `fabs`).
+extern fn abs(x: Float) -> Float = "fabs"
 
-// @builtin
-// @runtime "aion_math_pow"
-// @param base Float
-// @param exp  Float
-// @return Float
-//
-// Returns `base` raised to the power of `exp`.
-//
-// Example:
-//   math.pow(2.0, 10.0)  // => 1024.0
-//
-fn pow(base: Float, exp: Float) {}
+// The larger / smaller of two Floats.
+extern fn fmax(a: Float, b: Float) -> Float
+extern fn fmin(a: Float, b: Float) -> Float
 
-// @builtin
-// @runtime "aion_math_sin"
-// @param x Float
-// @return Float
-//
-// Returns the sine of `x` (in radians).
-//
-// Example:
-//   math.sin(0.0)      // => 0.0
-//
-fn sin(x: Float) {}
+// The larger / smaller of two Ints — plain Aion, no C involved.
+fn max(a: Int, b: Int) -> Int {
+    if (a > b) {
+        return a
+    }
+    return b
+}
 
-// @builtin
-// @runtime "aion_math_cos"
-// @param x Float
-// @return Float
-//
-// Returns the cosine of `x` (in radians).
-//
-// Example:
-//   math.cos(0.0)      // => 1.0
-//
-fn cos(x: Float) {}
-
-// @builtin
-// @runtime "aion_math_floor"
-// @param x Float
-// @return Float
-//
-// Returns the largest integer value less than or equal to `x`.
-//
-// Example:
-//   math.floor(3.7)    // => 3.0
-//
-fn floor(x: Float) {}
-
-// @builtin
-// @runtime "aion_math_ceil"
-// @param x Float
-// @return Float
-//
-// Returns the smallest integer value greater than or equal to `x`.
-//
-// Example:
-//   math.ceil(3.2)     // => 4.0
-//
-fn ceil(x: Float) {}
-
-// @builtin
-// @runtime "aion_math_max"
-// @param a Int
-// @param b Int
-// @return Int
-//
-// Returns the larger of `a` and `b`.
-//
-// Example:
-//   math.max(3, 7)     // => 7
-//
-fn max(a: Int, b: Int) {}
-
-// @builtin
-// @runtime "aion_math_min"
-// @param a Int
-// @param b Int
-// @return Int
-//
-// Returns the smaller of `a` and `b`.
-//
-// Example:
-//   math.min(3, 7)     // => 3
-//
-fn min(a: Int, b: Int) {}
+fn min(a: Int, b: Int) -> Int {
+    if (a < b) {
+        return a
+    }
+    return b
+}

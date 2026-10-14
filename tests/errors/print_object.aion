@@ -1,0 +1,7 @@
+// error: cannot print a P
+type P(it.x) {
+    x: Int
+}
+fn main() {
+    println(P(1))
+}

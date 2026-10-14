@@ -1,15 +1,17 @@
+// import std.io;
+
 fn hello() {
-    print("Hello, world!")
+    println("Hello, world!")
 }
 
 fn newline() {
-    print("")
+    println()
 }
 
 fn banner() {
-    print("========================================")
+    println("========================================")
 }
 
 fn separator() {
-    print("----------------------------------------")
+    println("----------------------------------------")
 }

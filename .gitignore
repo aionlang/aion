@@ -3,13 +3,8 @@
 
 # Compiled Aion output
 *.exe
-*.obj
 *.o
-*.a
-
-# Runtime build cache
-runtime/*.o
-runtime/*.a
+*.ll
 
 # OS files
 Thumbs.db

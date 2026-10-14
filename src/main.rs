@@ -1,128 +1,154 @@
-//! Aion compiler driver.
+//! The Aion compiler driver.
 //!
-//! Usage:
-//!   cargo run -- <file.aion>              # compiles to <file> / <file.exe>
-//!   cargo run -- <file.aion> -o out.exe   # explicit output name
-//!   cargo run -- <file.aion> --emit-ir    # print LLVM IR and exit
-//!
-//! Pipeline:  source → Lexer → Parser → AST → LLVM IR → .obj → link(+runtime) → native binary
+//! ```text
+//! source ─▶ lexer/parser ─▶ loader (imports) ─▶ sema (types) ─▶ codegen (LLVM IR) ─▶ clang
+//! ```
 
-mod ast;
-mod compiler;
-mod errors;
-mod lexer;
-mod parser;
-mod resolver;
-mod stdlib;
+mod codegen;
+mod diag;
+mod embedded;
+mod loader;
+mod sema;
+mod syntax;
+mod toolchain;
 
-use std::env;
-use std::fs;
-use std::path::PathBuf;
-use std::process::Command;
+use std::path::{Path, PathBuf};
+use std::process::{Command, ExitCode};
 
-use compiler::Compiler;
-use parser::Parser;
-use ast::UserModule;
-use errors::Phase;
+use diag::{Diagnostic, SourceMap};
 
-fn main() {
-    // ── CLI argument handling ────────────────────────────────────
-    let args: Vec<String> = env::args().collect();
+const USAGE: &str = "\
+Aion compiler
 
-    if args.len() < 2 {
-        errors::fatal_with_hint(
-            Phase::Compiler,
-            "No input file specified",
-            Some("Usage: aion <source.aion> [-o output] [--emit-ir]".into()),
-        );
+usage:
+  aion [run] <file.aion>             compile and run
+  aion build <file.aion> [-o <out>]  compile to a native executable
+  aion emit-ir <file.aion>           print the generated LLVM IR
+
+options:
+  -O0..-O3       optimisation level (default -O2)
+  --keep-temps   keep intermediate files
+  -h, --help     show this help
+  -V, --version  show the version
+
+Needs `clang` (15 or newer) on PATH; set AION_CLANG to use another compiler.";
+
+enum Mode {
+    Run,
+    Build,
+    EmitIr,
+}
+
+struct Cli {
+    mode: Mode,
+    input: PathBuf,
+    output: Option<PathBuf>,
+    opts: toolchain::Options,
+}
+
+fn parse_args(args: &[String]) -> Result<Cli, String> {
+    let mut mode = None;
+    let (mut input, mut output) = (None, None);
+    let mut opts = toolchain::Options { opt_level: "2".into(), keep_temps: false };
+
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "run" | "build" | "emit-ir" if mode.is_none() && input.is_none() => {
+                mode = Some(match arg.as_str() {
+                    "run" => Mode::Run,
+                    "build" => Mode::Build,
+                    _ => Mode::EmitIr,
+                });
+            }
+            "--emit-ir" => mode = Some(Mode::EmitIr), // pre-0.2 spelling
+            "-o" => output = Some(PathBuf::from(it.next().ok_or("`-o` needs a file name")?)),
+            "--keep-temps" => opts.keep_temps = true,
+            "-h" | "--help" => return Err(USAGE.into()),
+            "-V" | "--version" => return Err(format!("aion {}", env!("CARGO_PKG_VERSION"))),
+            o if o.starts_with("-O") && o.len() == 3 && o.as_bytes()[2].is_ascii_digit() => {
+                opts.opt_level = o[2..].to_string();
+            }
+            o if o.starts_with('-') => return Err(format!("unknown option `{o}`\n\n{USAGE}")),
+            _ if input.is_none() => input = Some(PathBuf::from(arg)),
+            _ => return Err(format!("unexpected argument `{arg}`")),
+        }
     }
+    let input = input.ok_or_else(|| format!("no input file\n\n{USAGE}"))?;
+    let mode = mode.unwrap_or(Mode::Run);
+    if output.is_some() && !matches!(mode, Mode::Build) {
+        return Err("`-o` only makes sense with `aion build`".into());
+    }
+    Ok(Cli { mode, input, output, opts })
+}
 
-    let source_path = PathBuf::from(&args[1]);
-    let emit_ir_only = args.iter().any(|a| a == "--emit-ir");
+/// Generated LLVM IR plus the C sources it must be linked with.
+type Compiled = (String, Vec<(String, &'static str)>);
 
-    let output_path = if let Some(pos) = args.iter().position(|a| a == "-o") {
-        PathBuf::from(args.get(pos + 1).expect("expected output path after -o"))
-    } else {
-        let stem = source_path.file_stem().unwrap().to_str().unwrap();
-        if cfg!(windows) {
-            PathBuf::from(format!("{stem}.exe"))
-        } else {
-            PathBuf::from(stem)
+/// Everything up to (but not including) invoking the C toolchain.
+fn compile(map: &mut SourceMap, input: &Path) -> Result<Compiled, Diagnostic> {
+    let loaded = loader::load(map, input)?;
+    let program = sema::analyze(&loaded)?;
+    Ok((codegen::emit(&program), loaded.c_sources))
+}
+
+fn default_output(input: &Path) -> PathBuf {
+    let stem = input.file_stem().map_or("a".into(), |s| s.to_os_string());
+    let mut out = PathBuf::from(stem);
+    if cfg!(windows) {
+        out.set_extension("exe");
+    }
+    out
+}
+
+fn run() -> Result<ExitCode, (Diagnostic, Option<SourceMap>)> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let cli = match parse_args(&args) {
+        Ok(c) => c,
+        Err(msg) => {
+            let is_error = !(msg.starts_with("Aion compiler") || msg.starts_with("aion "));
+            eprintln!("{msg}");
+            return Ok(if is_error { ExitCode::from(2) } else { ExitCode::SUCCESS });
         }
     };
 
-    // ── Read source ─────────────────────────────────────────────
-    let source = fs::read_to_string(&source_path).unwrap_or_else(|e| {
-        errors::fatal(Phase::Compiler, format!("Could not read {}: {e}", source_path.display()));
-    });
-
-    errors::info(format!("compiling {}", source_path.display()));
-
-    // ── Parse ───────────────────────────────────────────────────
-    let mut parser = Parser::new(&source);
-    let mut program = parser.parse_program();
-
-    // ── Auto-load prelude ────────────────────────────────────────
-    //
-    // The prelude provides always-available functions like `println()`.
-    // It is injected as a user module so its functions are compiled and
-    // callable without any import statement.
-    {
-        let prelude_src = stdlib::prelude();
-        let mut prelude_parser = Parser::new(prelude_src);
-        let prelude_prog = prelude_parser.parse_program();
-        program.user_modules.push(UserModule {
-            name: "prelude".to_string(),
-            functions: prelude_prog.functions,
-        });
-    }
-
-    // ── Resolve module imports ───────────────────────────────────
-    let source_dir = source_path.parent().unwrap_or_else(|| std::path::Path::new("."));
-    resolver::resolve_imports(&mut program, source_dir);
-
-    // Collect stdlib module names (e.g. "math") for runtime build.
-    let imported_modules: Vec<String> = program
-        .imports
-        .iter()
-        .filter(|i| i.is_stdlib())
-        .map(|i| i.module_name().to_string())
-        .collect();
-
-    // ── LLVM codegen ────────────────────────────────────────────
-    let context = inkwell::context::Context::create();
-    let compiler = Compiler::new(&context, "aion");
-    compiler.compile(&program);
-
-    if emit_ir_only {
-        print!("{}", compiler.ir_string());
-        return;
-    }
-
-    // ── Emit object file ────────────────────────────────────────
-    let obj_path = output_path.with_extension(if cfg!(windows) { "obj" } else { "o" });
-    compiler.write_object_file(&obj_path);
-    errors::info(format!("wrote object → {}", obj_path.display()));
-
-    // ── Build runtime & link ────────────────────────────────────
-    let rt_lib = compiler::runtime::build(&imported_modules);
-    errors::info(format!("built runtime → {}", rt_lib.display()));
-
-    compiler::linker::link(&obj_path, &rt_lib, &output_path, &imported_modules);
-    errors::success(format!("done → {}", output_path.display()));
-
-    // ── Run the compiled binary ─────────────────────────────────
-    eprintln!();
-    let run_path = if output_path.is_relative() {
-        std::env::current_dir().unwrap().join(&output_path)
-    } else {
-        output_path.clone()
+    let mut map = SourceMap::default();
+    let (ir, c_sources) = match compile(&mut map, &cli.input) {
+        Ok(v) => v,
+        Err(d) => return Err((d, Some(map))),
     };
-    let status = Command::new(&run_path)
-        .status()
-        .unwrap_or_else(|e| {
-            errors::fatal(Phase::Linker, format!("Failed to run {}: {e}", run_path.display()));
-        });
 
-    std::process::exit(status.code().unwrap_or(1));
+    if let Mode::EmitIr = cli.mode {
+        print!("{ir}");
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    let output = match (&cli.mode, &cli.output) {
+        (_, Some(o)) => o.clone(),
+        (Mode::Build, None) => default_output(&cli.input),
+        _ => std::env::temp_dir().join(format!("aion-run-{}{}", std::process::id(), std::env::consts::EXE_SUFFIX)),
+    };
+    toolchain::build(&ir, &c_sources, &output, &cli.opts).map_err(|d| (d, None))?;
+
+    if let Mode::Build = cli.mode {
+        eprintln!("built {}", output.display());
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    let status = Command::new(&output).status();
+    let _ = std::fs::remove_file(&output);
+    match status {
+        Ok(s) => Ok(ExitCode::from(s.code().unwrap_or(1) as u8)),
+        Err(e) => Err((Diagnostic::general(format!("could not run the compiled program: {e}")), None)),
+    }
+}
+
+fn main() -> ExitCode {
+    match run() {
+        Ok(code) => code,
+        Err((diag, map)) => {
+            eprint!("{}", diag.render(&map.unwrap_or_default()));
+            ExitCode::FAILURE
+        }
+    }
 }

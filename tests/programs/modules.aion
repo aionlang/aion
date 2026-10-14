@@ -1,0 +1,28 @@
+// Imports: user modules (same dir and lib/), selective imports, stdlib.
+
+import helpers;
+import shapes.Square;
+import std.math;
+import std.io;
+
+fn main() {
+    helpers.greet("modules")
+    println(helpers.twice(21))
+
+    sq := Square(5)
+    println(sq.area())
+    other := shapes.Square(2)
+    println(other.area())
+    println(shapes.double_area(sq))
+
+    println(math.max(3, 9))
+    println(math.min(3, 9))
+    println(math.sqrt(16))
+    println(math.pow(2, 10))
+    println(math.abs(-2.5))
+    println(math.floor(3.7))
+    println(math.ceil(3.2))
+    println(math.fmax(1.5, 2.5))
+
+    io.separator()
+}

@@ -1,0 +1,8 @@
+// exit: 1
+// stderr: division by zero
+fn main() {
+    println("before")
+    zero := 0
+    println(10 / zero)
+    println("not reached")
+}

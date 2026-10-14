@@ -1,0 +1,11 @@
+import helpers;
+
+type Square(it.side) {
+    side: Int
+
+    fn area() -> Int => it.side * it.side
+}
+
+fn double_area(s: Square) -> Int {
+    return helpers.twice(s.area())
+}

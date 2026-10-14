@@ -1,0 +1,8 @@
+// error: `P` has no field `z`
+type P(it.x) {
+    x: Int
+}
+fn main() {
+    p := P(1)
+    println(p.z)
+}

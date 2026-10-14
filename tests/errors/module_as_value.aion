@@ -1,0 +1,5 @@
+// error: `math` is a module
+import std.math;
+fn main() {
+    x := math
+}

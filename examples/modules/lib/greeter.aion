@@ -1,0 +1,3 @@
+fn shout() {
+    println("HELLO FROM LIB GREETER!")
+}

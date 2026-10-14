@@ -1,0 +1,11 @@
+// `import utils;` finds utils.aion next to this file;
+// `import greeter;` finds lib/greeter.aion.
+
+import utils;
+import greeter;
+
+fn main() {
+    utils.greet()
+    greeter.shout()
+    utils.farewell()
+}

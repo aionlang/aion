@@ -1,0 +1,3 @@
+// error: module `math` has no item `nope`
+import std.math.nope;
+fn main() {}

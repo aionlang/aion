@@ -1,0 +1,30 @@
+import std.math;
+
+type Animal {
+    name: String
+    age: Int
+
+    constructor(name: String) {
+        it.name = name
+    }
+
+    fn bark() -> String {
+        return "Woof!"
+    }
+}
+
+fn Animal::animalToString() -> String {
+    return "Animal(${it.name}, ${it.age})"
+}
+
+fn Animal::setAge(age: Int) {
+    it.age = age
+}
+
+fn main() {
+    a := Animal("Fido")
+    a.setAge(5)
+    println(a.animalToString())
+    println(a.bark())
+    println("sqrt(2) = ${math.sqrt(2)}")
+}

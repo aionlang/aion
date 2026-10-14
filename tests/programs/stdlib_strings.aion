@@ -1,0 +1,24 @@
+import std.strings;
+
+fn main() {
+    s := "Héllo World"
+    println(strings.length(s))
+    println(strings.upper(s))
+    println(strings.lower(s))
+    println(strings.contains(s, "World"))
+    println(strings.contains(s, "world"))
+    println(strings.starts_with(s, "Hé"))
+    println(strings.starts_with(s, "x"))
+    if (strings.contains(s, "llo") && !strings.starts_with(s, "x")) {
+        println("both")
+    }
+
+    // Strings made by C survive collections.
+    kept := strings.upper("kept alive")
+    i := 0
+    while (i < 200000) {
+        tmp := strings.lower("TEMPORARY ${i}")
+        i += 1
+    }
+    println(kept)
+}

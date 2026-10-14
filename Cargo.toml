@@ -1,6 +1,6 @@
 [package]
 name = "aion"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "The Aion programming language compiler"
 license = "MIT"
@@ -12,10 +12,6 @@ path = "src/main.rs"
 
 [dependencies]
 logos = "0.16.1"
-inkwell = { version = "0.8.0", features = ["llvm21-1"] }
-
-[build-dependencies]
-cc = "1.2"
 
 [profile.release]
 opt-level = 3

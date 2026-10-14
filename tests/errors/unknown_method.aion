@@ -1,0 +1,7 @@
+// error: `P` has no method `nope`
+type P(it.x) {
+    x: Int
+}
+fn main() {
+    P(1).nope()
+}

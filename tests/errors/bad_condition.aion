@@ -1,0 +1,6 @@
+// error: expected Bool, found Int
+fn main() {
+    if (1) {
+        println("x")
+    }
+}

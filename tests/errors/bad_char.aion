@@ -1,0 +1,4 @@
+// error: unexpected character `@`
+fn main() {
+    x := @
+}

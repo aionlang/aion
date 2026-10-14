@@ -1,15 +1,11 @@
-// ═══════════════════════════════════════════════════════════════════
-// Aion Prelude — always-available standard functions
-// ═══════════════════════════════════════════════════════════════════
+// The prelude: names available in every Aion program without an import.
 //
-// Functions in this file are automatically available in every Aion
-// program — no import statement is needed.
+// Also built in, but not expressible as ordinary functions because they
+// accept any printable type (Int, Float, Bool or String):
 //
-// Note: print() and println() are compiler built-ins and don't need
-// to be defined here. They support automatic type dispatch:
-//   print("hello")      — string, no newline
-//   println("hello")    — string, with newline
-//   println(42)         — int, with newline
-//   println(3.14)       — float, with newline
-//   println()           — just a newline
-//
+//   print(value)     write the value, no newline
+//   println(value)   write the value and a newline
+//   println()        write just a newline
+
+// Stop the program with `[aion] panic: <message>` on stderr and exit code 1.
+extern fn panic(message: String) = "aion_panic"

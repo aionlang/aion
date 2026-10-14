@@ -1,0 +1,4 @@
+// error: unknown escape sequence `\q`
+fn main() {
+    println("a\qb")
+}

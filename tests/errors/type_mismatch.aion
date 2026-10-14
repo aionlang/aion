@@ -1,0 +1,4 @@
+// error: expected Int, found String
+fn main() {
+    x: Int := "hello"
+}

@@ -1,0 +1,4 @@
+// error: undefined name `math`
+fn main() {
+    println(math.sqrt(4.0))
+}

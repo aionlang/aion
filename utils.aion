@@ -1,7 +1,0 @@
-fn greet() {
-    print("Hello from utils module!")
-}
-
-fn farewell() {
-    print("Goodbye from utils module!")
-}

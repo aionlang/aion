@@ -1,0 +1,4 @@
+// error: unterminated string literal
+fn main() {
+    println("oops)
+}

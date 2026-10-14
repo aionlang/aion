@@ -1,0 +1,3 @@
+// error: unknown type `Wat`
+fn f(x: Wat) {}
+fn main() {}

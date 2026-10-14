@@ -1,0 +1,90 @@
+// A type may have up to 64 fields (the GC describes them with a 64-bit mask).
+// Strings in the first and last field must both be traced.
+type Wide {
+    f00: String
+    f01: Int
+    f02: Int
+    f03: Int
+    f04: Int
+    f05: Int
+    f06: Int
+    f07: Int
+    f08: Int
+    f09: Int
+    f10: Int
+    f11: Int
+    f12: Int
+    f13: Int
+    f14: Int
+    f15: Int
+    f16: Int
+    f17: Int
+    f18: Int
+    f19: Int
+    f20: Int
+    f21: Int
+    f22: Int
+    f23: Int
+    f24: Int
+    f25: Int
+    f26: Int
+    f27: Int
+    f28: Int
+    f29: Int
+    f30: Int
+    f31: Int
+    f32: Int
+    f33: Int
+    f34: Int
+    f35: Int
+    f36: Int
+    f37: Int
+    f38: Int
+    f39: Int
+    f40: Int
+    f41: Int
+    f42: Int
+    f43: Int
+    f44: Int
+    f45: Int
+    f46: Int
+    f47: Int
+    f48: Int
+    f49: Int
+    f50: Int
+    f51: Int
+    f52: Int
+    f53: Int
+    f54: Int
+    f55: Int
+    f56: Int
+    f57: Int
+    f58: Int
+    f59: Int
+    f60: Int
+    f61: Int
+    f62: Int
+    f63: String
+
+    constructor(n: Int) {
+        it.f00 = "first ${n}"
+        it.f63 = "last ${n}"
+        it.f31 = n
+    }
+}
+
+fn churn() {
+    i := 0
+    while (i < 20000) {
+        s := "junk ${i} " + "more junk to allocate"
+        i += 1
+    }
+}
+
+fn main() {
+    w := Wide(7)
+    churn()
+    println(w.f00)
+    println(w.f63)
+    println(w.f31)
+}

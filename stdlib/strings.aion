@@ -1,0 +1,18 @@
+// import std.strings;
+//
+//   strings.length("héllo")           // 6 (bytes)
+//   strings.contains("banana", "nan") // true
+//   strings.upper("shout")            // SHOUT
+//
+// A small example of an `extern fn` module: one line per function here,
+// the implementations live in strings.c.
+
+// Length in bytes.
+extern fn length(s: String) -> Int = "aion_strings_length"
+
+extern fn contains(s: String, needle: String) -> Bool = "aion_strings_contains"
+extern fn starts_with(s: String, prefix: String) -> Bool = "aion_strings_starts_with"
+
+// ASCII upper / lower casing.
+extern fn upper(s: String) -> String = "aion_strings_upper"
+extern fn lower(s: String) -> String = "aion_strings_lower"

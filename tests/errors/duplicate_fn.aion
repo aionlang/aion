@@ -1,0 +1,4 @@
+// error: `f` is already defined in this module
+fn f() {}
+fn f() {}
+fn main() {}

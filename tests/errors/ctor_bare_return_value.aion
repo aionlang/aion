@@ -1,0 +1,8 @@
+// error: a constructor cannot return a value
+type P {
+    x: Int
+    constructor() {
+        return 5
+    }
+}
+fn main() {}

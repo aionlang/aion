@@ -1,0 +1,97 @@
+//! Turns generated LLVM IR + C sources into a native executable using `clang`.
+//!
+//! One `clang` invocation compiles the `.ll`, the C runtime and any C halves
+//! of imported stdlib modules, and links them together.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::diag::{Diagnostic, Result};
+use crate::embedded;
+
+pub struct Options {
+    /// Passed through as `-O<level>`.
+    pub opt_level: String,
+    pub keep_temps: bool,
+}
+
+/// Compiler executables to try, newest first.  `AION_CLANG` overrides.
+fn candidates() -> Vec<String> {
+    if let Ok(c) = std::env::var("AION_CLANG") {
+        return vec![c];
+    }
+    let mut v = vec!["clang".to_string()];
+    v.extend((15..=22).rev().map(|n| format!("clang-{n}")));
+    v
+}
+
+pub fn build(ir: &str, c_sources: &[(String, &'static str)], output: &Path, opts: &Options) -> Result<()> {
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
+    let dir: PathBuf = std::env::temp_dir().join(format!("aion-{}-{nanos}", std::process::id()));
+    std::fs::create_dir_all(&dir).map_err(io_err("create a temporary directory"))?;
+
+    let result = compile(&dir, ir, c_sources, output, opts);
+    if opts.keep_temps {
+        eprintln!("kept intermediate files in {}", dir.display());
+    } else {
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    result
+}
+
+fn compile(dir: &Path, ir: &str, c_sources: &[(String, &'static str)], output: &Path, opts: &Options) -> Result<()> {
+    let write = |name: &str, text: &str| -> Result<PathBuf> {
+        let path = dir.join(name);
+        std::fs::write(&path, text).map_err(io_err("write a temporary file"))?;
+        Ok(path)
+    };
+
+    let mut inputs = vec![write("program.ll", ir)?];
+    for (name, text) in embedded::RUNTIME {
+        let path = write(name, text)?;
+        if name.ends_with(".c") {
+            inputs.push(path);
+        }
+    }
+    for (name, text) in c_sources {
+        inputs.push(write(&format!("std_{name}"), text)?);
+    }
+
+    let mut last_error = None;
+    for cc in candidates() {
+        let mut cmd = Command::new(&cc);
+        cmd.arg(format!("-O{}", opts.opt_level))
+            .arg("-w")
+            .arg("-I")
+            .arg(dir)
+            .args(&inputs)
+            .arg("-o")
+            .arg(output)
+            .arg("-lm");
+        if cfg!(windows) {
+            cmd.arg("-lws2_32");
+        }
+        match cmd.output() {
+            Ok(out) if out.status.success() => return Ok(()),
+            Ok(out) => {
+                return Err(Diagnostic::general(format!(
+                    "`{cc}` failed:\n{}",
+                    String::from_utf8_lossy(&out.stderr).trim_end()
+                ))
+                .hint("this is probably a compiler bug; `aion emit-ir <file>` shows the generated IR"));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => last_error = Some(cc),
+            Err(e) => return Err(Diagnostic::general(format!("cannot run `{cc}`: {e}"))),
+        }
+    }
+    Err(Diagnostic::general(format!(
+        "no C compiler found (tried `{}` and others)",
+        last_error.unwrap_or_else(|| "clang".into())
+    ))
+    .hint("install clang 15 or newer, or point AION_CLANG at it"))
+}
+
+fn io_err(what: &'static str) -> impl Fn(std::io::Error) -> Diagnostic {
+    move |e| Diagnostic::general(format!("could not {what}: {e}"))
+}

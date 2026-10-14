@@ -1,0 +1,6 @@
+// exit: 1
+// stderr: [aion] panic: something went wrong: 42
+fn main() {
+    println("start")
+    panic("something went wrong: ${6 * 7}")
+}

@@ -1,0 +1,5 @@
+// error: this expression does not produce a value
+fn nothing() {}
+fn main() {
+    x := nothing()
+}

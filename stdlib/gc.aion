@@ -1,0 +1,13 @@
+// import std.gc;
+//
+// Inspect and drive the garbage collector.  These are implemented in
+// runtime/core.c.
+
+// Run a full collection now.
+extern fn collect() = "aion_gc_collect"
+
+// Bytes currently allocated on the GC heap.
+extern fn heap_size() -> Int = "aion_gc_heap_size"
+
+// Number of live objects (strings and instances) on the GC heap.
+extern fn object_count() -> Int = "aion_gc_object_count"

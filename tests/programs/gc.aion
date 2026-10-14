@@ -1,0 +1,79 @@
+// stress: skip
+// The collector must keep everything reachable and reclaim the rest.
+
+import std.gc;
+
+type Node {
+    value: Int
+    text: String
+    next: Node
+
+    constructor(value: Int) {
+        it.value = value
+        it.text = "node ${value}"
+    }
+
+    // A new node in front of this one.
+    fn push(value: Int) -> Node {
+        n := Node(value)
+        n.next = it
+        return n
+    }
+}
+
+fn build(count: Int) -> Node {
+    head := Node(0)
+    i := 1
+    while (i <= count) {
+        head = head.push(i)
+        i += 1
+    }
+    return head
+}
+
+fn churn(rounds: Int) {
+    j := 0
+    while (j < rounds) {
+        garbage := "garbage ${j} " + "padding padding padding"
+        junk := Node(j)
+        j += 1
+    }
+}
+
+fn main() {
+    head := build(1000)
+
+    // Plenty of collections happen while `head` is the only handle on the list.
+    churn(300000)
+
+    sum := 0
+    n := head
+    k := 0
+    while (k < 1000) {
+        sum += n.value
+        n = n.next
+        k += 1
+    }
+    println(sum)
+    println(head.text)
+    println(head.next.next.text)
+
+    gc.collect()
+    before := gc.object_count()
+    churn(100000)
+    gc.collect()
+    println(gc.object_count() == before)
+    println(gc.heap_size() < 1000000)
+
+    // Strings reachable only through object fields survive too.
+    names := Node(-1)
+    i := 0
+    while (i < 50) {
+        names = names.push(i)
+        i += 1
+    }
+    churn(200000)
+    println(names.text)
+    println(names.next.text)
+    println(names.next.next.next.text)
+}

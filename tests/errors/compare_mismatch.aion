@@ -1,0 +1,4 @@
+// error: cannot apply `==` to String and Int
+fn main() {
+    println("a" == 1)
+}
