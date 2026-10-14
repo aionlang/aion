@@ -141,6 +141,11 @@ fn run_program(ir: &str, c_sources: &[(String, &'static str)], opts: &toolchain:
     let cached = std::env::var_os("AION_NO_CACHE").is_none();
     let exe = if cached {
         let mut parts: Vec<&[u8]> = vec![env!("CARGO_PKG_VERSION").as_bytes(), opts.opt_level.as_bytes(), ir.as_bytes()];
+        // The runtime is linked into every program, so a new compiler's runtime must not reuse an old build.
+        for (name, text) in embedded::RUNTIME {
+            parts.push(name.as_bytes());
+            parts.push(text.as_bytes());
+        }
         for (name, text) in c_sources {
             parts.push(name.as_bytes());
             parts.push(text.as_bytes());
