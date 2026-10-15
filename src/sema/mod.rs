@@ -122,6 +122,8 @@ pub enum Const {
     Float(f64),
     Bool(bool),
     Str(String),
+    /// `null`, the default of an optional parameter.
+    Null,
 }
 
 #[derive(Clone)]
@@ -1414,8 +1416,21 @@ fn symbol_for(module: &str, owner: Option<&str>, decl: &ast::FnDecl) -> String {
     }
 }
 
-/// Default arguments must be literals (possibly negated), matching the parameter type.
+/// Default arguments must be literals (possibly negated), matching the parameter type;
+/// an optional parameter may also default to `null`.
 fn const_default(e: &ast::Expr, ty: Ty, t: &Tables) -> Result<Const> {
+    let (ty, optional) = match ty {
+        Ty::Opt(o) => (t.opt_inner(o), true),
+        other => (other, false),
+    };
+    if matches!(e.kind, ExprKind::Null) {
+        return if optional {
+            Ok(Const::Null)
+        } else {
+            Err(Diagnostic::new(format!("a {} can't default to null", t.ty_name(ty)), e.span)
+                .hint(format!("declare the parameter as `{}?`", t.ty_name(ty))))
+        };
+    }
     let lit = match &e.kind {
         ExprKind::Int(v) => Some((Const::Int(*v), Ty::Int)),
         ExprKind::Float(v) => Some((Const::Float(*v), Ty::Float)),

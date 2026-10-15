@@ -1,0 +1,14 @@
+// Optional parameters may default to null (or to a literal of their type)
+fn greet(name: String, title: String? = null, times: Int? = 1) -> String {
+    base := if title == null { name } else { "$title $name" }
+    return base + "!".repeat(times ?: 0)
+}
+println(greet("Ann"), greet("Bob", "Dr"), greet("Cy", times: 3), greet("Di", null, null))
+
+type Config(host: String, port: Int? = null, label: String? = null) {
+    fn describe() = "$host:${port ?: 80}${if label == null { "" } else { " ($label)" }}"
+}
+println(Config("a").describe(), Config("b", 8080).describe(), Config("c", label: "x").describe())
+
+fn scale(x: Float? = 2) = (x ?: 0.0) * 2
+println(scale(), scale(1.5))

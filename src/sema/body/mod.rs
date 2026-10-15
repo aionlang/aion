@@ -2917,7 +2917,7 @@ impl<'c, 'a> Cx<'c, 'a> {
         for (p, v) in params.iter().zip(values) {
             call_args.push(match (v, &p.default) {
                 (Some(v), _) => v,
-                (None, Some(c)) => const_expr(c),
+                (None, Some(c)) => self.coerce(const_expr(c), p.ty, span)?,
                 (None, None) => {
                     return Err(Diagnostic::new(
                         format!("`{}` is missing the argument `{}`", info.name, p.name),
@@ -2970,5 +2970,6 @@ fn const_expr(c: &Const) -> hir::Expr {
         Const::Float(v) => mk(K::Float(*v), Ty::Float),
         Const::Bool(v) => mk(K::Bool(*v), Ty::Bool),
         Const::Str(s) => mk(K::Str(s.clone()), Ty::Str),
+        Const::Null => mk(K::Null, Ty::Null),
     }
 }
