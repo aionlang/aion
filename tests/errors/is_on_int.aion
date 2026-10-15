@@ -1,0 +1,4 @@
+// error: a Int is never a Dog
+open type Animal(n: String)
+type Dog(n: String) : Animal(n)
+println(5 is Dog)

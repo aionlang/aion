@@ -1,0 +1,16 @@
+// is / !is test the real type of an object (null is nothing)
+open type Animal(name: String)
+open type Dog(name: String) : Animal(name)
+type Puppy(name: String) : Dog(name)
+type Cat(name: String) : Animal(name)
+
+animals: List<Animal> = [Dog("a"), Cat("b"), Puppy("c"), Animal("d")]
+for x in animals {
+    println(x.name, x is Dog, x is Cat, x is Puppy, x is Animal, x !is Cat)
+}
+n: Animal? = null
+println(n is Dog, n !is Dog)
+maybe: Animal? = Cat("z")
+println(maybe is Cat, maybe is Dog)
+d: Dog = Puppy("p")
+println(d is Puppy, d is Dog)

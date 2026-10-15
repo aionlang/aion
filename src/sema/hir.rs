@@ -50,6 +50,8 @@ pub struct Program {
     pub types: Vec<TypeDef>,
     /// Dispatch tables for calls through interface-typed values.
     pub dispatch: Vec<Dispatch>,
+    /// For each type tested with `is` / `as`: the types whose objects pass.
+    pub instance_checks: Vec<InstanceCheck>,
     pub globals: Vec<Global>,
     pub funcs: Vec<Func>,
     /// Module initialisers (top-level statements), in dependency order.
@@ -65,6 +67,12 @@ pub struct Dispatch {
     /// Index into the interface's methods; one past the end means `toString`.
     pub method: usize,
     pub entries: Vec<(TypeId, FnId)>,
+}
+
+/// The objects that count as `target` for `is` and `as`: its own and its subtypes'.
+pub struct InstanceCheck {
+    pub target: TypeId,
+    pub members: Vec<TypeId>,
 }
 
 /// A module-level variable.
@@ -188,6 +196,8 @@ pub enum ExprKind {
     Closure { func: FnId },
     /// Allocate a zeroed instance (string fields start as `""`).
     New(TypeId),
+    /// Is the object (not null) an instance of `target` or of a type that extends it?
+    IsInstance { value: Box<Expr>, target: TypeId },
     /// A value of a type that implements an interface, used as that interface
     /// (the same pointer; the object header says which type it really is).
     Upcast(Box<Expr>),

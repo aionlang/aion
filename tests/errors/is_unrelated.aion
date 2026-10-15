@@ -1,0 +1,6 @@
+// error: a Cat can never be a Dog
+open type Animal(n: String)
+type Dog(n: String) : Animal(n)
+type Cat(n: String) : Animal(n)
+c := Cat("c")
+println(c is Dog)

@@ -247,6 +247,8 @@ pub struct Checker<'a> {
     /// Names of module variables that functions, lambdas or other modules assign:
     /// these are never narrowed by null checks.
     unstable_globals: HashSet<String>,
+    /// Types named on the right of `is` / `as`.
+    is_targets: RefCell<BTreeSet<TypeId>>,
     /// `override fn`s with the method each replaces, to check that the signatures agree.
     overrides: RefCell<Vec<(FnId, FnId, Span)>>,
     /// (concrete type, interface) pairs where a value of the first is used as the second.
@@ -422,6 +424,7 @@ impl<'a> Checker<'a> {
             ext_methods: RefCell::new(HashMap::new()),
             unstable_globals: unstable_globals(loaded),
             overrides: RefCell::new(Vec::new()),
+            is_targets: RefCell::new(BTreeSet::new()),
             upcasts: RefCell::new(BTreeSet::new()),
             stringified: RefCell::new(BTreeSet::new()),
         };
@@ -1278,6 +1281,16 @@ impl<'a> Checker<'a> {
         }
 
         let dispatch = self.dispatch_tables();
+        let count = self.types_len();
+        let instance_checks = self
+            .is_targets
+            .borrow()
+            .iter()
+            .map(|&target| hir::InstanceCheck {
+                target,
+                members: (0..count).filter(|&s| s == target || self.is_subtype(s, target)).collect(),
+            })
+            .collect();
         let globals = self
             .t
             .globals
@@ -1301,7 +1314,7 @@ impl<'a> Checker<'a> {
             .into_iter()
             .map(|slot| slot.func.unwrap_or_else(unused_func))
             .collect();
-        Ok(hir::Program { types, dispatch, globals, funcs, inits: self.inits, main })
+        Ok(hir::Program { types, dispatch, instance_checks, globals, funcs, inits: self.inits, main })
     }
 }
 

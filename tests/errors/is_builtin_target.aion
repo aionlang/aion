@@ -1,0 +1,4 @@
+// error: `is` and `as` can only name a type declared with `type`, not Int
+open type Animal(n: String)
+a := Animal("x")
+println(a is Int)

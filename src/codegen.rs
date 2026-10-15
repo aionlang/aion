@@ -104,6 +104,17 @@ pub fn emit(p: &Program) -> String {
         );
     }
 
+    // `is` / `as`: for each target, which type ids pass; and the header a null reference reads.
+    out.push_str("@aion_null_object = internal constant [32 x i8] zeroinitializer\n");
+    for check in &p.instance_checks {
+        let n = p.types.len() + 1;
+        let mut slots = vec!["i8 0"; n];
+        for &t in &check.members {
+            slots[t + 1] = "i8 1";
+        }
+        let _ = writeln!(out, "@\"isa.{}\" = internal constant [{n} x i8] [{}]", check.target, slots.join(", "));
+    }
+
     // Module-level variables, and the table the collector reads them from.
     for g in &p.globals {
         let init = match g.ty {
@@ -602,6 +613,24 @@ impl<'a> FnGen<'a> {
         t
     }
 
+    /// Does the object `v` (possibly null) belong to the types that pass for `target`?
+    fn instance_test(&mut self, v: &str, target: usize) -> String {
+        // A null reference reads the type id of a dummy zeroed header, which no type has.
+        let (is_null, payload, at, flags, shifted, id, slot, byte, result) =
+            (self.tmp(), self.tmp(), self.tmp(), self.tmp(), self.tmp(), self.tmp(), self.tmp(), self.tmp(), self.tmp());
+        self.line(format!("{is_null} = icmp eq ptr {v}, null"));
+        self.line(format!("{payload} = select i1 {is_null}, ptr getelementptr inbounds ([32 x i8], ptr @aion_null_object, i64 0, i64 24), ptr {v}"));
+        self.line(format!("{at} = getelementptr inbounds i8, ptr {payload}, i64 -12"));
+        self.line(format!("{flags} = load i32, ptr {at}"));
+        self.line(format!("{shifted} = lshr i32 {flags}, 4"));
+        self.line(format!("{id} = zext i32 {shifted} to i64"));
+        let n = self.p.types.len() + 1;
+        self.line(format!("{slot} = getelementptr inbounds [{n} x i8], ptr @\"isa.{target}\", i64 0, i64 {id}"));
+        self.line(format!("{byte} = load i8, ptr {slot}"));
+        self.line(format!("{result} = icmp ne i8 {byte}, 0"));
+        result
+    }
+
     /// Number of elements of an array (null-checked).
     fn array_len(&mut self, array: &str) -> String {
         self.null_check(array);
@@ -802,6 +831,11 @@ impl<'a> FnGen<'a> {
             }
 
             ExprKind::Upcast(inner) => self.expr(inner),
+
+            ExprKind::IsInstance { value, target } => {
+                let v = self.expr(value);
+                self.instance_test(&v, *target)
+            }
 
             ExprKind::CallIface { iface, method, args } => {
                 let mut ops = Vec::new();

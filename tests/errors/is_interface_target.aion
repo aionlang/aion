@@ -1,0 +1,5 @@
+// error: `is` and `as` can only name a type declared with `type`, not Shape
+interface Shape { fn f() }
+open type Animal(n: String)
+a := Animal("x")
+println(a is Shape)

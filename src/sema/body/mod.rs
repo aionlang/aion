@@ -1747,6 +1747,49 @@ impl<'c, 'a> Cx<'c, 'a> {
         self.call_fn(id, recv, args, span)
     }
 
+    /// The class named on the right of `is` / `as`, checked against what the value can be.
+    fn class_target(&mut self, value: &hir::Expr, ty: &ast::TypeRef, span: Span) -> Result<TypeId> {
+        let target = match self.ck.resolve_type(self.module, ty, &self.subst)? {
+            Ty::Obj(t) if self.ck.t.ty(t).iface.is_none() && self.ck.t.ty(t).array_elem.is_none() => t,
+            other => {
+                return Err(Diagnostic::new(
+                    format!("`is` and `as` can only name a type declared with `type`, not {}", self.name(other)),
+                    ty.span,
+                ));
+            }
+        };
+        let from = match value.ty {
+            Ty::Obj(t) => t,
+            Ty::Opt(o) => match self.ck.t.opt_inner(o) {
+                Ty::Obj(t) => t,
+                other => return Err(Diagnostic::new(format!("a {} is never a {}", self.name(other), self.name(Ty::Obj(target))), span)),
+            },
+            other => {
+                return Err(Diagnostic::new(format!("a {} is never a {}", self.name(other), self.name(Ty::Obj(target))), span));
+            }
+        };
+        let related = from == target
+            || self.ck.is_subtype(target, from)
+            || self.ck.is_subtype(from, target)
+            || self.ck.t.ty(from).iface.is_some();
+        if !related {
+            return Err(Diagnostic::new(
+                format!("a {} can never be a {}", self.name(Ty::Obj(from)), self.name(Ty::Obj(target))),
+                span,
+            ));
+        }
+        self.ck.is_targets.borrow_mut().insert(target);
+        Ok(target)
+    }
+
+    /// `value is T` / `value !is T`
+    fn is_expr(&mut self, value: &ast::Expr, ty: &ast::TypeRef, negated: bool) -> Result<hir::Expr> {
+        let v = self.value(value)?;
+        let target = self.class_target(&v, ty, value.span.to(ty.span))?;
+        let test = mk(K::IsInstance { value: Box::new(v), target }, Ty::Bool);
+        Ok(if negated { mk(K::Not(Box::new(test)), Ty::Bool) } else { test })
+    }
+
     /// The constructor of `ty`; interfaces have none.
     fn ctor_of(&self, ty: TypeId, span: Span) -> Result<FnId> {
         let info = self.ck.t.ty(ty);
@@ -2019,9 +2062,9 @@ impl<'c, 'a> Cx<'c, 'a> {
 
             A::Char(c) => mk(K::Int(i64::from(*c)), Ty::Char),
 
-            A::Is { .. } | A::Cast { .. } => {
-                return Err(Diagnostic::new("`is` and `as` are not available yet", e.span));
-            }
+            A::Is { value, ty, negated } => self.is_expr(value, ty, *negated)?,
+
+            A::Cast { .. } => return Err(Diagnostic::new("`as` is not available yet", e.span)),
 
             A::Try { body, catch_name, handler } => self.try_expr(body, catch_name.as_ref(), handler, None, e.span)?,
 
