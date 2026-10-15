@@ -130,6 +130,7 @@ Always in scope.
   `print("name? ")` prompt shows up), `readText() -> String` (everything left),
   and `args() -> List<String>` (what follows the script: `aion script.aion a b`
   gives `["a", "b"]`).
+* `eprint(text)` and `eprintln(text)` write to standard error.
 * **Building text** — `StringBuilder()` with `append(text)`, `appendChar(c)`, `appendLine(text = "")`,
   `length()`, `truncate(n)`, `clear()` and `toString()`; `BytesBuilder()` does the same for bytes
   (`add`, `addText`, `addByte`, `find`, `take`, `toBytes`).  Use them instead of `text += piece` in a loop.
@@ -431,6 +432,89 @@ Server: `listen(port, host = "") { req -> response } -> Server?` starts serving 
 `body`, `peer`, `text()`, `json()` and `header(name)`; answer with `text`, `html`, `jsonResponse`,
 `bytes`, `redirect`, `notFound` or `respond(status, body, contentType)` (add headers with
 `.with(name, value)`).  A handler that panics answers 500.  Each connection is answered once and then closed.
+
+### `std.sqlite`
+
+```aion
+import sqlite
+
+db := sqlite.open(":memory:")!!
+db.script("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, score REAL)")
+db.exec("INSERT INTO users (name, score) VALUES (?, ?)", [sqlite.text("Ann"), sqlite.float(4.5)])
+db.exec("INSERT INTO users (name, score) VALUES (?, ?)", [sqlite.text("Bob"), sqlite.nil()])
+for row in db.query("SELECT id, name, score FROM users ORDER BY id")!! {
+    println(row.int("id"), row.text("name"), row.float("score", -1.0), row.isNull("score"))
+}
+println(db.queryOne("SELECT count(*) AS n FROM users")!!.int("n"), db.lastInsertId())
+db.close()
+```
+
+`open(path)` (or `":memory:"`) gives a `Database` with `script(sql)` (several statements, no rows), `exec(sql, params)`,
+`query(sql, params) -> List<Row>?`, `queryOne`, `changes()`, `lastInsertId()`, `transaction { … }` (rolls back and
+re-raises if the body panics) and `close()`.  Parameters (`?`) are `Value`s: `sqlite.int(5)`, `float`, `text`,
+`blob(bytes)`, `bool`, `nil()`.  A `Row` reads by column name: `int text float blob isNull value(name)` (with
+optional fallbacks); a `Value` has `kind`, `asInt() asFloat() asText() asBlob() isNull()`.  Failures return `false`/`null`
+and `sqlite.lastError()` says why.  Building a program that imports `sqlite` needs the SQLite development files
+(`libsqlite3-dev`); the module declares `// link: sqlite3` for you.
+
+### `std.zlib`
+
+```aion
+import zlib
+
+data := "hello hello hello hello hello hello".toBytes()
+packed := zlib.gzip(data)!!
+println(packed.size() < data.size(), zlib.gunzip(packed)?.toText())
+println(zlib.decompress(zlib.compress(data, 9)!!)?.size(), zlib.gunzip("junk".toBytes()))   // 35 null
+```
+
+`gzip compress deflate(data, level = -1)` (gzip file format, zlib format, raw deflate; level 0–9) and
+`gunzip decompress inflate decompressAny(data, maxSize = 1 GiB)`, all returning `Bytes?` — null for damaged or
+truncated data or a result over `maxSize` (so a small file cannot expand into all of memory); `zlib.lastError()`
+says which.  Needs `zlib1g-dev` to build.
+
+### `std.csv`
+
+```aion
+import csv
+
+rows := csv.parse("name,age\n\"Smith, Bob\",42\n")!!
+println(rows.size(), rows[1][0], rows[1][1])                       // 2 Smith, Bob 42
+for person in csv.parseRecords("name,age\nAnn,31\nBob,42")!! { println(person["name"], person["age"]) }
+print(csv.format([["a", "b,c"], ["say \"hi\"", "1"]]))
+```
+
+`parse(text, delimiter = ",") -> List<List<String>>?` (RFC 4180: quoted fields, `""`, line breaks inside quotes,
+`\r\n`; empty lines are skipped; null with `lastError()` for a bad quote), `parseRecords` (rows as maps keyed by the
+first line), `format(rows, delimiter)`, `quote(field)`, `readFile(path)`, `writeFile(path, rows)`.
+
+### `std.cli`
+
+```aion
+import cli
+
+p := cli.parser("greet", "say hello")
+p.flag("loud", "l", "shout")
+p.option("times", "n", "how often", "1")
+p.positional("name", "who to greet")
+a := p.parseOrExit(["-l", "--times=2", "Ann"])
+println(a.get("name"), a.flag("loud"), a.getInt("times"))        // Ann true 2
+```
+
+`parser(program, about)`, `flag(name, short, help)`, `option(name, short, help, default)`, `multi` (repeatable),
+`positional(name, help)`, `rest(name, help)`; `parse(list) -> Args?` (null after `--help` or a mistake: `wantsHelp`,
+`message`) and `parseOrExit(list)` (prints the usage and exits).  Accepts `--long`, `--long=v`, `--long v`, `-s`, `-sv`,
+`-abc`, `--` and negative numbers as arguments.  `Args`: `flag get getInt getFloat has all rest`.  `usage()` is the
+help text.  Pass `args()` from the program.
+
+### `std.term`
+
+`bold dim italic underline inverse`, `black red green yellow blue magenta cyan white gray`, `color(text, 0..255)`,
+`rgb(text, r, g, b)` wrap text in ANSI codes — only when output is a terminal and `NO_COLOR` is unset
+(`term.enabled` overrides); `strip(text)` removes codes.  `isTerminal(fd = 1)`, `size() -> Size(columns, rows)`,
+`clearScreen clearLine moveTo(column, row) hideCursor showCursor`.  For interactive programs, `rawMode(true)` makes
+`readKey(timeoutMs = -1)` return single key presses (`"a"`, `"enter"`, `"up"`, `"ctrl-c"`, …; `""` on timeout,
+`null` at the end of the input) while other tasks keep running.
 
 ### `std.sockets`
 
