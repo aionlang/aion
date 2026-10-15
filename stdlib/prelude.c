@@ -132,3 +132,75 @@ const char *aion_read_text(void) {
     free(buf);
     return text;
 }
+
+/* ── Characters (Unicode code points held in an int64_t) ──────── */
+
+/* The code point that starts at byte `i` of `s`; U+FFFD for malformed UTF-8. */
+int64_t aion_str_char_at(const char *s, int64_t i) {
+    int64_t n = (int64_t)strlen(s);
+    if (i < 0 || i >= n) {
+        char msg[96];
+        snprintf(msg, sizeof msg, "index %lld is out of bounds for length %lld", (long long)i, (long long)n);
+        aion_panic(msg);
+    }
+    const unsigned char *p = (const unsigned char *)s + i;
+    int len = p[0] < 0x80 ? 1 : (p[0] >> 5) == 6 ? 2 : (p[0] >> 4) == 14 ? 3 : (p[0] >> 3) == 30 ? 4 : 0;
+    if (len == 0 || i + len > n) return 0xFFFD;
+    if (len == 1) return p[0];
+    int64_t c = p[0] & (0x7F >> len);
+    for (int k = 1; k < len; k++) {
+        if ((p[k] & 0xC0) != 0x80) return 0xFFFD;
+        c = (c << 6) | (p[k] & 0x3F);
+    }
+    return c;
+}
+
+/* How many bytes the code point takes in UTF-8. */
+int64_t aion_char_utf8_len(int64_t c) {
+    if (c < 0 || c > 0x10FFFF || (c >= 0xD800 && c <= 0xDFFF)) return 3; /* U+FFFD */
+    return c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4;
+}
+
+bool aion_char_is_digit(int64_t c) { return c >= '0' && c <= '9'; }
+
+/* ASCII and Latin-1 letters, Greek and Cyrillic, and other scripts as a rule of thumb:
+ * anything above U+00BF that is not in the punctuation, symbol or emoji blocks. */
+bool aion_char_is_letter(int64_t c) {
+    if (c < 0x80) return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+    if (c < 0xC0 || c == 0xD7 || c == 0xF7) return false;
+    if (c >= 0x2000 && c <= 0x2BFF) return false;
+    if (c >= 0x3000 && c <= 0x303F) return false;
+    return c < 0x1F000;
+}
+
+bool aion_char_is_upper(int64_t c) {
+    return (c >= 'A' && c <= 'Z') || (c >= 0xC0 && c <= 0xDE && c != 0xD7) || (c >= 0x391 && c <= 0x3A9) ||
+           (c >= 0x400 && c <= 0x42F);
+}
+
+bool aion_char_is_lower(int64_t c) {
+    return (c >= 'a' && c <= 'z') || (c >= 0xDF && c <= 0xFF && c != 0xF7) || (c >= 0x3B1 && c <= 0x3C9) ||
+           (c >= 0x430 && c <= 0x45F);
+}
+
+bool aion_char_is_space(int64_t c) {
+    return c == ' ' || (c >= 9 && c <= 13) || c == 0x85 || c == 0xA0 || c == 0x2028 || c == 0x2029 || c == 0x3000;
+}
+
+int64_t aion_char_upper(int64_t c) {
+    if (c >= 'a' && c <= 'z') return c - 32;
+    if ((c >= 0xE0 && c <= 0xFE && c != 0xF7)) return c - 32;
+    if (c >= 0x3B1 && c <= 0x3C9 && c != 0x3C2) return c - 32;
+    if (c >= 0x430 && c <= 0x44F) return c - 32;
+    if (c >= 0x450 && c <= 0x45F) return c - 80;
+    return c;
+}
+
+int64_t aion_char_lower(int64_t c) {
+    if (c >= 'A' && c <= 'Z') return c + 32;
+    if (c >= 0xC0 && c <= 0xDE && c != 0xD7) return c + 32;
+    if (c >= 0x391 && c <= 0x3A9) return c + 32;
+    if (c >= 0x410 && c <= 0x42F) return c + 32;
+    if (c >= 0x400 && c <= 0x40F) return c + 80;
+    return c;
+}
