@@ -269,6 +269,7 @@ impl Tables {
             Ty::Int => "Int".into(),
             Ty::Float => "Float".into(),
             Ty::Bool => "Bool".into(),
+            Ty::Char => "Char".into(),
             Ty::Str => "String".into(),
             Ty::Obj(id) => self.ty(id).name.clone(),
             Ty::Fn(id) => {
@@ -1096,6 +1097,7 @@ fn builtin_type(name: &str) -> Option<Ty> {
         "Int" => Ty::Int,
         "Float" => Ty::Float,
         "Bool" => Ty::Bool,
+        "Char" => Ty::Char,
         "String" => Ty::Str,
         _ => return None,
     })
@@ -1107,6 +1109,7 @@ fn builtin_key(ty: Ty) -> u8 {
         Ty::Float => 1,
         Ty::Bool => 2,
         Ty::Str => 3,
+        Ty::Char => 4,
         _ => u8::MAX,
     }
 }

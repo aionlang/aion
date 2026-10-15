@@ -1,0 +1,2 @@
+// error: expected Char, found Int
+x: Char = 65

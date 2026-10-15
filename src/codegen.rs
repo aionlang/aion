@@ -38,6 +38,8 @@ declare i64 @aion_str_eq(ptr, ptr)
 declare i64 @aion_str_cmp(ptr, ptr)
 declare void @aion_print_str(ptr, i64)
 declare void @aion_print_int(i64, i64)
+declare void @aion_print_char(i64, i64)
+declare ptr @aion_char_to_str(i64)
 declare void @aion_print_float(double, i64)
 declare void @aion_print_bool(i64, i64)
 declare void @aion_panic_null() noreturn
@@ -54,7 +56,7 @@ declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
 /// Symbols declared by [`RUNTIME_DECLS`]; externs must not redeclare them.
 const RUNTIME_SYMBOLS: &[&str] = &[
     "aion_new_object", "aion_concat", "aion_int_to_str", "aion_float_to_str", "aion_bool_to_str",
-    "aion_str_eq", "aion_str_cmp", "aion_print_str", "aion_print_int", "aion_print_float", "aion_print_bool",
+    "aion_str_eq", "aion_str_cmp", "aion_print_str", "aion_print_char", "aion_char_to_str", "aion_print_int", "aion_print_float", "aion_print_bool",
     "aion_panic_null", "aion_panic_div_zero", "aion_panic_index", "aion_panic_unwrap", "aion_set_args", "aion_array_new", "aion_hash_int", "aion_hash_str", "aion_frame_top",
 ];
 
@@ -105,7 +107,7 @@ pub fn emit(p: &Program) -> String {
     // Module-level variables, and the table the collector reads them from.
     for g in &p.globals {
         let init = match g.ty {
-            Ty::Int => "0".to_string(),
+            Ty::Int | Ty::Char => "0".to_string(),
             Ty::Float => "0.0".to_string(),
             Ty::Bool => "false".to_string(),
             Ty::Str => pool.operand(""),
@@ -145,7 +147,7 @@ pub fn emit(p: &Program) -> String {
 
 fn ir(ty: Ty) -> &'static str {
     match ty {
-        Ty::Int => "i64",
+        Ty::Int | Ty::Char => "i64",
         Ty::Float => "double",
         Ty::Bool => "i1",
         Ty::Str | Ty::Obj(_) | Ty::Fn(_) | Ty::Opt(_) | Ty::Null => "ptr",
@@ -503,7 +505,7 @@ impl<'a> FnGen<'a> {
 
     fn default_value(ty: Ty) -> &'static str {
         match ty {
-            Ty::Int => "0",
+            Ty::Int | Ty::Char => "0",
             Ty::Float => "0.0",
             Ty::Bool => "false",
             _ => "null",
@@ -743,7 +745,7 @@ impl<'a> FnGen<'a> {
                 let n = self.expr(len);
                 let f = self.expr(fill);
                 let bits = match elem {
-                    Ty::Int => f,
+                    Ty::Int | Ty::Char => f,
                     Ty::Float => {
                         let t = self.tmp();
                         self.line(format!("{t} = bitcast double {f} to i64"));
@@ -784,7 +786,7 @@ impl<'a> FnGen<'a> {
                     ty => {
                         let bits = self.tmp();
                         match ty {
-                            Ty::Int => return self.call_value("i64", &format!("@aion_hash_int(i64 {v})")),
+                            Ty::Int | Ty::Char => return self.call_value("i64", &format!("@aion_hash_int(i64 {v})")),
                             Ty::Float => self.line(format!("{bits} = bitcast double {v} to i64")),
                             Ty::Bool => self.line(format!("{bits} = zext i1 {v} to i64")),
                             _ => self.line(format!("{bits} = ptrtoint ptr {v} to i64")),
@@ -953,6 +955,7 @@ impl<'a> FnGen<'a> {
                 let v = self.expr(inner);
                 let t = match inner.ty {
                     Ty::Int => self.call_value("ptr", &format!("@aion_int_to_str(i64 {v})")),
+                    Ty::Char => self.call_value("ptr", &format!("@aion_char_to_str(i64 {v})")),
                     Ty::Float => self.call_value("ptr", &format!("@aion_float_to_str(double {v})")),
                     _ => {
                         let z = self.tmp();
@@ -978,6 +981,7 @@ impl<'a> FnGen<'a> {
                     let v = self.expr(a);
                     match a.ty {
                         Ty::Int => self.line(format!("call void @aion_print_int(i64 {v}, i64 {nl})")),
+                        Ty::Char => self.line(format!("call void @aion_print_char(i64 {v}, i64 {nl})")),
                         Ty::Float => self.line(format!("call void @aion_print_float(double {v}, i64 {nl})")),
                         Ty::Bool => {
                             let z = self.tmp();
@@ -1042,7 +1046,7 @@ impl<'a> FnGen<'a> {
                 self.line(format!("{t} = icmp {} i64 {eq}, 0", if op == Eq { "ne" } else { "eq" }));
                 t
             }
-            Ty::Int => {
+            Ty::Int | Ty::Char => {
                 if matches!(op, Div | Rem) {
                     self.zero_check(b);
                 }

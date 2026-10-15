@@ -16,6 +16,8 @@ pub enum Ty {
     Int,
     Float,
     Bool,
+    /// A Unicode code point, held like an `Int`.
+    Char,
     Str,
     /// A reference to an instance of a user-defined `type`.
     Obj(TypeId),

@@ -1,0 +1,2 @@
+// error: expected Int, found Char
+x: Int = 'a'

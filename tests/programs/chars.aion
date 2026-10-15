@@ -1,0 +1,21 @@
+// Char: literals, comparison, arithmetic with Int, optionals, collections, hashing
+c := 'a'
+println(c, 'é', '\n' == '\n', 'x')
+println(c == 'a', c != 'b', c < 'b', 'z' >= 'a')
+println(c + 1, 'a' + 25, 'e' - 1, 'e' - 'a', 2 + 'a')
+println("char: $c and ${c + 2}")
+d: Char = 'q'
+o: Char? = null
+p: Char? = 'k'
+println(d, o, p, p == 'k', o == 'k', p ?: 'z', o ?: 'z')
+cs := ['x', 'y']
+println(cs, cs.contains('y'), cs.indexOf('y'))
+m := {'a': 1, 'b': 2}
+println(m['b'], m)
+arr := Array<Char>(2)
+arr[0] = '#'
+println(arr[0], arr[1] == '\0')
+println(hashOf('a') == hashOf('a'), hashOf('a') == hashOf('b'))
+x := if c == 'a' { 'Y' } else { 'N' }
+println(x)
+println('\u{1F600}', '\t' + 0)

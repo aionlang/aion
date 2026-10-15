@@ -1,0 +1,2 @@
+// error: cannot apply `*` to Char and Int
+x := 'a' * 2

@@ -1580,7 +1580,7 @@ impl<'c, 'a> Cx<'c, 'a> {
     fn stringify(&mut self, e: hir::Expr, span: Span) -> Result<hir::Expr> {
         match e.ty {
             Ty::Str => Ok(e),
-            Ty::Int | Ty::Float | Ty::Bool => Ok(mk(K::ToStr(Box::new(e)), Ty::Str)),
+            Ty::Int | Ty::Float | Ty::Bool | Ty::Char => Ok(mk(K::ToStr(Box::new(e)), Ty::Str)),
             Ty::Obj(ty) if self.ck.t.ty(ty).array_elem.is_some() => {
                 Err(Diagnostic::new(format!("a {} has no text form", self.name(e.ty)), span)
                     .hint("an Array is a building block; a List can be printed"))
@@ -1779,7 +1779,7 @@ impl<'c, 'a> Cx<'c, 'a> {
 
             A::Null => mk(K::Null, Ty::Null),
 
-            A::Char(_) => return Err(Diagnostic::new("characters are not available yet", e.span)),
+            A::Char(c) => mk(K::Int(i64::from(*c)), Ty::Char),
 
             A::Try { body, catch_name, handler } => self.try_expr(body, catch_name.as_ref(), handler, None, e.span)?,
 
@@ -1931,6 +1931,17 @@ impl<'c, 'a> Cx<'c, 'a> {
             _ => (l, r),
         };
 
+        // Characters: `c + n`, `n + c` and `c - n` are characters; `c - d` is the distance between two.
+        let char_op = match (op, l.ty, r.ty) {
+            (B::Add | B::Sub, Ty::Char, Ty::Int) | (B::Add, Ty::Int, Ty::Char) => Some(Ty::Char),
+            (B::Sub, Ty::Char, Ty::Char) => Some(Ty::Int),
+            _ => None,
+        };
+        if let Some(result) = char_op {
+            let hop = if op == B::Add { hir::BinOp::Add } else { hir::BinOp::Sub };
+            return Ok(mk(K::Binary(hop, Box::new(l), Box::new(r)), result));
+        }
+
         if l.ty != r.ty {
             let e = Diagnostic::new(
                 format!("cannot apply `{}` to {} and {}", op.symbol(), self.name(l.ty), self.name(r.ty)),
@@ -1955,7 +1966,7 @@ impl<'c, 'a> Cx<'c, 'a> {
                 },
                 l.ty,
             ),
-            B::Lt | B::Le | B::Gt | B::Ge if matches!(l.ty, Ty::Int | Ty::Float | Ty::Str) => (
+            B::Lt | B::Le | B::Gt | B::Ge if matches!(l.ty, Ty::Int | Ty::Float | Ty::Str | Ty::Char) => (
                 match op {
                     B::Lt => hir::BinOp::Lt,
                     B::Le => hir::BinOp::Le,
@@ -2506,7 +2517,7 @@ impl<'c, 'a> Cx<'c, 'a> {
 
 fn default_expr(ty: Ty) -> hir::Expr {
     match ty {
-        Ty::Int => mk(K::Int(0), Ty::Int),
+        Ty::Int | Ty::Char => mk(K::Int(0), ty),
         Ty::Float => mk(K::Float(0.0), Ty::Float),
         Ty::Bool => mk(K::Bool(false), Ty::Bool),
         Ty::Str => mk(K::Str(String::new()), Ty::Str),
