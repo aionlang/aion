@@ -10,6 +10,12 @@
 // Stop the program with `[aion] panic: <message>` on stderr and exit code 1.
 extern fn panic(message: String) = "aion_panic"
 
+// Like print and println, but to standard error (diagnostics, usage messages).
+extern fn eprint(text: String) = "aion_eprint"
+fn eprintln(text: String = "") {
+    eprint(text + "\n")
+}
+
 // Methods on the built-in types.  "héllo".length() counts bytes.
 extern fn String.length() -> Int = "aion_strings_length"
 extern fn String.contains(needle: String) -> Bool = "aion_strings_contains"

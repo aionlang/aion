@@ -8,6 +8,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Standard error; pending standard output goes first so the two stay in order. */
+void aion_eprint(const char *text) {
+    fflush(stdout);
+    fputs(text, stderr);
+    fflush(stderr);
+}
+
 int64_t aion_strings_length(const char *s) { return (int64_t)strlen(s); }
 
 bool aion_strings_contains(const char *s, const char *needle) { return strstr(s, needle) != NULL; }
