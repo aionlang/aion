@@ -1,0 +1,16 @@
+null true hello world
+hello world false
+true null
+true true true true true
+3 out err false
+piped input
+second
+a b|c'd
+SHOUT true
+-1 No such file or directory
+inherited
+300000
+before
+from child
+0 4 -1
+after

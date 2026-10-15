@@ -1,0 +1,74 @@
+// import os
+//
+//   home := os.env("HOME") ?: "/"
+//   result := os.shell("ls -l | wc -l")
+//   println(result.status, result.stdout.trim())
+//   code := os.run("make", ["-j4"])        // output goes straight to the terminal
+//
+// The environment, information about the machine and running other programs.
+// Programs run to completion before the call returns (other tasks wait).
+
+// ── Environment ──────────────────────────────────────────────────
+
+// The variable's value, or null when it is not set.
+extern fn env(name: String) -> String? = "aion_os_env"
+extern fn setEnv(name: String, value: String) -> Bool = "aion_os_set_env"
+extern fn unsetEnv(name: String) -> Bool = "aion_os_unset_env"
+extern fn __environ() -> String = "aion_os_environ"
+
+// All variables.
+fn environment() -> Map<String, String> {
+    out := Map<String, String>()
+    text := __environ()
+    if text.length() == 0 {
+        return out
+    }
+    for line in text.split("\n") {
+        at := line.indexOf("=")
+        if at > 0 {
+            out[line.substring(0, at)] = line.substring(at + 1, line.length())
+        }
+    }
+    return out
+}
+
+// ── The machine and this process ─────────────────────────────────
+
+// Stop the program now with this exit status (pending `defer`s do not run).
+extern fn exit(code: Int) = "aion_os_exit"
+extern fn pid() -> Int = "aion_os_pid"
+extern fn cpuCount() -> Int = "aion_os_cpu_count"
+extern fn hostname() -> String = "aion_os_hostname"
+// "linux", "macos", "bsd" or "unknown".
+extern fn platform() -> String = "aion_os_platform"
+// "x86_64", "aarch64", "x86", "arm" or "unknown".
+extern fn arch() -> String = "aion_os_arch"
+
+fn homeDir() -> String? = env("HOME")
+
+// ── Running programs ─────────────────────────────────────────────
+
+extern fn __exec(program: String, args: String, input: String, capture: Bool) -> Int = "aion_os_exec"
+extern fn __stdout() -> String = "aion_os_captured_stdout"
+extern fn __stderr() -> String = "aion_os_captured_stderr"
+
+fn __joinArgs(args: List<String>?) -> String = if args == null { "" } else { args.join("\u{1F}") }
+
+// What a finished program produced.  `status` is its exit code (0 means success), 128 + N if
+// signal N ended it, or -1 if it could not be started (then `stderr` says why).
+type CommandResult(status: Int, stdout: String, stderr: String) {
+    fn ok() = status == 0
+}
+
+// Run a program with arguments (no shell involved), give it `input` on its standard input and
+// collect its standard output and error.  Arguments must not contain the character 0x1F.
+fn exec(program: String, args: List<String>? = null, input: String = "") -> CommandResult {
+    status := __exec(program, __joinArgs(args), input, true)
+    return CommandResult(status, __stdout(), __stderr())
+}
+
+// Run a command line through the shell (`sh -c`), collecting its output.
+fn shell(command: String, input: String = "") -> CommandResult = exec("sh", ["-c", command], input)
+
+// Run a program that shares this program's terminal; returns its exit status (see CommandResult).
+fn run(program: String, args: List<String>? = null) -> Int = __exec(program, __joinArgs(args), "", false)

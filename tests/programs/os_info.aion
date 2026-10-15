@@ -1,0 +1,26 @@
+// os: environment, processes and running other programs
+// exit: 7
+import os
+
+println(os.env("AION_TEST_UNSET_VARIABLE"), os.setEnv("AION_TEST_VAR", "hello world"), os.env("AION_TEST_VAR"))
+println(os.environment()["AION_TEST_VAR"], os.environment().containsKey("AION_TEST_UNSET_VARIABLE"))
+println(os.unsetEnv("AION_TEST_VAR"), os.env("AION_TEST_VAR"))
+println(os.pid() > 0, os.cpuCount() >= 1, os.platform().length() > 0, os.arch().length() > 0, os.hostname().length() >= 0)
+
+r := os.shell("echo out; echo err >&2; exit 3")
+println(r.status, r.stdout.trim(), r.stderr.trim(), r.ok())
+println(os.exec("cat", null, "piped input\nsecond").stdout)
+println(os.exec("printf", ["%s|%s", "a b", "c'd"]).stdout)
+println(os.shell("tr a-z A-Z", "shout").stdout, os.shell("true").ok())
+missing := os.exec("aion-no-such-program-xyz")
+println(missing.status, missing.stderr)
+os.setEnv("AION_TEST_CHILD", "inherited")
+println(os.shell("echo \$AION_TEST_CHILD").stdout.trim())
+
+big := "x".repeat(300000)
+println(os.exec("wc", ["-c"], big).stdout.trim())
+
+println("before")
+println(os.run("echo", ["from child"]), os.run("sh", ["-c", "exit 4"]), os.run("aion-no-such-program-xyz"))
+println("after")
+os.exit(7)
