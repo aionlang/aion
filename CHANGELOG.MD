@@ -52,6 +52,8 @@ migration notes at the end of this section.
   enclosing block is left (end, `return`, `break`, `continue`, panic); `try { … }
   catch e { … }` is an expression that catches `panic(...)` and runtime errors
   (the message is a String, or `it` without a name).
+- **Slices.** `xs[a..b]`, `xs[a..]`, `xs[..b]`, `xs[a..=b]` and `xs[..]` on lists and
+  strings (and any type with `slice(from, to)`), with checked bounds.
 - **Characters.** The `Char` type: `'a'` literals with escapes and `\u{…}`,
   comparison and `c + 1` / `c - 'a'` arithmetic, ranges (`'a'..='z'`), `Char`
   methods, `text.chars()`, `text[i]` and `for c in text`.

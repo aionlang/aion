@@ -407,12 +407,26 @@ words.add("x")
 println(words, Map<String, Int>().size(), setOf([1, 1, 2]))
 ```
 
+**Slices.**  `xs[a..b]` is the part from `a` up to (not including) `b`; either end
+may be left out, and `..=` includes the end.  Lists and strings have them:
+
+```aion
+xs := [10, 20, 30, 40, 50]
+println(xs[1..3], xs[..2], xs[3..], xs[1..=3], xs[..])   // [20, 30] [10, 20] [40, 50] [20, 30, 40] [10, 20, 30, 40, 50]
+text := "hello world"
+println(text[0..5], text[6..])                           // hello world       (byte offsets)
+```
+
+A slice is a new list (a copy).  Out-of-range bounds stop the program with
+`slice bounds [2..9] are out of range for size 5`.
+
 The syntax is plain method calls under the hood, so your own types can take part:
 
 | Written          | Means                                                           |
 |------------------|-----------------------------------------------------------------|
 | `x[i]`           | `x.get(i)`                                                      |
 | `x[i] = v`       | `x.set(i, v)` (and `x[i] += v` reads with `get`, writes with `set`) |
+| `x[a..b]`        | `x.slice(a, b)`; `x[a..]` ends at `x.size()`, `x[..b]` starts at 0, `x[a..=b]` is `x.slice(a, b + 1)` |
 | `a in x`         | `x.contains(a)` (`a in lo..hi` stays a range test)              |
 | `for v in x`     | loops `i` over `0 until x.size()` calling `x.get(i)`; if `x` has an `iter()` method, loops over what that returns instead (a Map iterates its entries) |
 | `[a, b, c]`      | a `List` built with `add`                                       |
@@ -756,6 +770,6 @@ memory, and `panic(...)` — unless a [`try`](#cleanup-and-errors) catches it.
 
 ## Not (yet) in the language
 
-Concurrency, inheritance, generic interfaces, slices, and user-defined hashing for
-map keys.  (Plain object types are not checked against
+Concurrency, inheritance, generic interfaces, and user-defined hashing for map
+keys.  (Plain object types are not checked against
 being unset; use `T?` where a value may be missing.)
