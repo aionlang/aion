@@ -1099,6 +1099,30 @@ impl<'a> Checker<'a> {
         Ok((params, ret))
     }
 
+    /// Is `ancestor` a proper parent, grandparent… of `ty`?
+    pub fn is_subtype(&self, ty: TypeId, ancestor: TypeId) -> bool {
+        let mut cur = self.t.ty(ty).parent;
+        while let Some(p) = cur {
+            if p == ancestor {
+                return true;
+            }
+            cur = self.t.ty(p).parent;
+        }
+        false
+    }
+
+    /// The closest type that both `a` and `b` are (or extend), if they share one.
+    pub fn common_parent(&self, a: TypeId, b: TypeId) -> Option<TypeId> {
+        let mut cur = Some(a);
+        while let Some(t) = cur {
+            if t == b || self.is_subtype(b, t) {
+                return Some(t);
+            }
+            cur = self.t.ty(t).parent;
+        }
+        None
+    }
+
     /// Note that values of `ty` are used as `iface`, so dispatch tables include it.
     pub fn register_upcast(&self, ty: TypeId, iface: TypeId) {
         self.upcasts.borrow_mut().insert((ty, iface));

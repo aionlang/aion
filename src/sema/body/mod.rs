@@ -1665,6 +1665,16 @@ impl<'c, 'a> Cx<'c, 'a> {
             (a, b) if a == b => Ok(e),
             (Ty::Int, Ty::Float) => Ok(mk(K::IntToFloat(Box::new(e)), Ty::Float)),
             (Ty::Null, Ty::Opt(_)) => Ok(mk(K::Null, to)),
+            // a subtype used as its parent type (same pointer)
+            (Ty::Obj(a), Ty::Obj(b)) if self.ck.is_subtype(a, b) => Ok(mk(K::Upcast(Box::new(e)), to)),
+            (Ty::Opt(x), Ty::Opt(y))
+                if matches!(
+                    (self.ck.t.opt_inner(x), self.ck.t.opt_inner(y)),
+                    (Ty::Obj(a), Ty::Obj(b)) if self.ck.is_subtype(a, b)
+                ) =>
+            {
+                Ok(mk(K::Upcast(Box::new(e)), to))
+            }
             // an object used as an interface it implements (same pointer)
             (Ty::Obj(a), Ty::Obj(b)) if self.is_upcast(a, b) => self.upcast(e, a, b, to, span),
             (Ty::Opt(x), Ty::Opt(y))
@@ -1729,6 +1739,8 @@ impl<'c, 'a> Cx<'c, 'a> {
         match (a, b) {
             (a, b) if a == b => Some(a),
             (Ty::Int, Ty::Float) | (Ty::Float, Ty::Int) => Some(Ty::Float),
+            // two kinds of the same family: their closest common parent
+            (Ty::Obj(x), Ty::Obj(y)) => self.ck.common_parent(x, y).map(Ty::Obj),
             (Ty::Null, x) | (x, Ty::Null) if x != Ty::Void => Some(t.opt_of(x)),
             (Ty::Opt(o), x) | (x, Ty::Opt(o)) if x != Ty::Void && t.opt_inner(o) == x => Some(Ty::Opt(o)),
             _ => None,
@@ -2087,6 +2099,18 @@ impl<'c, 'a> Cx<'c, 'a> {
         {
             return self.optional_equality(op == B::Eq, l, r, span);
         }
+        // A subtype compared with its parent type is compared as the parent type.
+        let (l, r) = match (op, l.ty, r.ty) {
+            (B::Eq | B::Ne, Ty::Obj(a), Ty::Obj(b)) if a != b && self.ck.is_subtype(a, b) => {
+                let to = r.ty;
+                (mk(K::Upcast(Box::new(l)), to), r)
+            }
+            (B::Eq | B::Ne, Ty::Obj(a), Ty::Obj(b)) if a != b && self.ck.is_subtype(b, a) => {
+                let to = l.ty;
+                (l, mk(K::Upcast(Box::new(r)), to))
+            }
+            _ => (l, r),
+        };
         // Objects compare with their own `equals(other)` if they have one.
         if matches!(op, B::Eq | B::Ne)
             && let (Ty::Obj(a), Ty::Obj(b)) = (l.ty, r.ty)

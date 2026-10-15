@@ -1,0 +1,5 @@
+// error: cannot apply `==` to Dog and Cat
+open type Animal(n: String)
+type Dog(n: String) : Animal(n)
+type Cat(n: String) : Animal(n)
+println(Dog("a") == Cat("a"))

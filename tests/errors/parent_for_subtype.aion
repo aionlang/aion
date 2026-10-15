@@ -1,0 +1,4 @@
+// error: expected Dog, found Animal
+open type Animal(n: String)
+type Dog(n: String) : Animal(n)
+d: Dog = Animal("a")

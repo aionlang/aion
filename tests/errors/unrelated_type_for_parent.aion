@@ -1,0 +1,5 @@
+// error: expected Animal, found Rock
+open type Animal(n: String)
+type Rock(n: String)
+fn f(a: Animal) = 1
+f(Rock("r"))
