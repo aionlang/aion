@@ -63,6 +63,28 @@ fn String.split(separator: String) -> List<String> {
     return parts
 }
 
+// ── Characters ──────────────────────────────────────────────────
+//
+// A Char is a Unicode code point: 'a', '\n', '\u{1F600}'.  c + 1 and c - 1 are
+// Chars, c - 'a' is an Int.  Letter classification and case are exact for ASCII,
+// Latin-1, Greek and Cyrillic and a rule of thumb elsewhere.
+
+extern fn Char.isDigit() -> Bool = "aion_char_is_digit"
+extern fn Char.isLetter() -> Bool = "aion_char_is_letter"
+extern fn Char.isUpper() -> Bool = "aion_char_is_upper"
+extern fn Char.isLower() -> Bool = "aion_char_is_lower"
+extern fn Char.isWhitespace() -> Bool = "aion_char_is_space"
+extern fn Char.upper() -> Char = "aion_char_upper"
+extern fn Char.lower() -> Char = "aion_char_lower"
+// How many bytes the character takes in a String (UTF-8).
+extern fn Char.byteLength() -> Int = "aion_char_utf8_len"
+extern fn Char.toString() -> String = "aion_char_to_str"
+
+fn Char.code() = this - '\0'
+fn Int.toChar() = '\0' + this
+// 0..9 for a digit, else null.
+fn Char.digitValue() -> Int? = if isDigit() { this - '0' } else { null }
+
 // ── Collections ─────────────────────────────────────────────────
 //
 // `Array<T>` is built into the compiler: a fixed-size block of slots with

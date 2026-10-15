@@ -1,0 +1,21 @@
+// exit: 1
+// stderr: index 100 is out of bounds for length 13
+// Characters: classification, case, UTF-8 strings, indexing and looping over text
+println('7'.isDigit(), 'x'.isDigit(), 'x'.isLetter(), 'é'.isLetter(), '!'.isLetter(), ' '.isWhitespace(), '\t'.isWhitespace())
+println('a'.upper(), 'Z'.lower(), 'é'.upper(), 'Ж'.lower(), 'A'.isUpper(), 'a'.isUpper(), 'a'.isLower())
+println('a'.code(), 97.toChar(), 'é'.code(), 'é'.byteLength(), '😀'.byteLength(), 'a'.toString() + "b")
+println('7'.digitValue(), 'x'.digitValue(), ('7'.digitValue() ?: 0) + 1)
+s := "héllo, 😀!"
+println(s.length(), s.chars().size(), s.chars())
+println(s[0], s[1], s[2], s.charAt(7))
+for c in "añb" { print(c.upper(), "|") }
+println()
+n := 0
+for c in s { if c.isLetter() { n += 1 } }
+println("letters:", n)
+word := "hello"
+shifted := ""
+for c in word { shifted += "${(c - 'a' + 3) % 26 + 'a'}" }
+println(shifted)
+println("abc"[1], "abc".chars().map { it.upper() }.join(""))
+println(s[100])
