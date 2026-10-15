@@ -252,18 +252,50 @@ type List<T> {
     }
 
     // A new list, sorted by `compare(a, b)`: negative if a goes first, positive if b does.
+    // A stable merge sort (equal elements keep their order), O(n log n).
     fn sortedWith(compare: (T, T) -> Int) -> List<T> {
-        out := copy()
-        // insertion sort: simple, stable, fine for the sizes scripts deal with
-        for i in 1..count {
-            x := out.items[i]
-            j := i - 1
-            while j >= 0 && compare(out.items[j], x) > 0 {
-                out.items[j + 1] = out.items[j]
-                j -= 1
+        n := count
+        src := Array<T>(n)
+        for i in 0..n { src[i] = items[i] }
+        spare := Array<T>(n)
+        width := 1
+        while width < n {
+            lo := 0
+            while lo < n {
+                mid := if lo + width < n { lo + width } else { n }
+                hi := if lo + 2 * width < n { lo + 2 * width } else { n }
+                i := lo
+                j := mid
+                k := lo
+                while i < mid && j < hi {
+                    if compare(src[j], src[i]) < 0 {
+                        spare[k] = src[j]
+                        j += 1
+                    } else {
+                        spare[k] = src[i]
+                        i += 1
+                    }
+                    k += 1
+                }
+                while i < mid {
+                    spare[k] = src[i]
+                    i += 1
+                    k += 1
+                }
+                while j < hi {
+                    spare[k] = src[j]
+                    j += 1
+                    k += 1
+                }
+                lo += 2 * width
             }
-            out.items[j + 1] = x
+            done := spare
+            spare = src
+            src = done
+            width *= 2
         }
+        out := List<T>()
+        for i in 0..n { out.add(src[i]) }
         return out
     }
 

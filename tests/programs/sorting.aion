@@ -1,0 +1,20 @@
+// sortedWith is a stable merge sort
+xs := [5, 2, 9, 1, 5, 6, 0, 3]
+println(xs.sortedWith { a, b -> a - b })
+println(xs.sortedWith { a, b -> b - a })
+println(xs.sortedWith { a, b -> 0 })
+println([1].sortedWith { a, b -> a - b }, List<Int>().sortedWith { a, b -> a - b })
+// stability: sort pairs by their first letter only
+words := ["banana", "avocado", "blueberry", "apple", "cherry", "apricot"]
+println(words.sortedWith { a, b -> a[0] - b[0] })
+// a large list
+big := List<Int>()
+x := 12345
+for i in 0..50000 {
+    x = (x * 1103515245 + 12345) % 2147483648
+    big.add(x % 1000)
+}
+sorted := big.sortedWith { a, b -> a - b }
+ok := true
+for i in 1..sorted.size() { if sorted[i - 1] > sorted[i] { ok = false } }
+println(sorted.size(), ok, sorted[0], sorted[49999])
