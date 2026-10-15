@@ -1,0 +1,3 @@
+// error: unterminated string
+x := """never closed
+println(x)

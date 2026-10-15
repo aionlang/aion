@@ -882,6 +882,13 @@ impl<'a> Parser<'a> {
                 self.bump();
                 return self.string_expr(tok);
             }
+            Token::RawStr => {
+                self.bump();
+                let full = self.text(tok);
+                let body = if full.starts_with("r\"\"\"") && full.len() >= 8 { &full[4..full.len() - 3] } else { &full[2..full.len() - 1] };
+                let body = body.strip_prefix("\r\n").or_else(|| body.strip_prefix('\n')).filter(|_| full.starts_with("r\"\"\"")).unwrap_or(body);
+                ExprKind::Str(body.to_string())
+            }
             Token::Char => {
                 self.bump();
                 ExprKind::Char(self.char_literal(tok)?)
@@ -1170,13 +1177,23 @@ impl<'a> Parser<'a> {
 
     fn string_expr(&mut self, tok: Tok) -> Result<Expr> {
         let full = self.text(tok);
-        let raw = &full[1..full.len() - 1];
-        let raw_off = tok.span.start as usize + 1;
+        // `"""…"""` holds quotes and line breaks; a line break right after the opening is not part of the text.
+        let triple = full.len() >= 6 && full.starts_with("\"\"\"");
+        let quote = if triple { 3 } else { 1 };
+        let raw = &full[quote..full.len() - quote];
+        let raw_off = tok.span.start as usize + quote;
         let bytes = raw.as_bytes();
 
         let mut parts = Vec::new();
         let mut lit = String::new();
         let mut i = 0;
+        if triple {
+            if bytes.starts_with(b"\r\n") {
+                i = 2;
+            } else if bytes.starts_with(b"\n") {
+                i = 1;
+            }
+        }
         while i < bytes.len() {
             match bytes[i] {
                 b'\\' => {
@@ -1421,6 +1438,25 @@ mod tests {
         assert!(err(r#""\u41""#).contains("expected"));
         assert!(err(r#""\u{zz}""#).contains("invalid unicode escape"));
         assert!(err(r#""\u{110000}""#).contains("not a valid unicode code point"));
+    }
+
+    #[test]
+    fn triple_quoted_and_raw_strings() {
+        let text = |src: &str| match parse_expr(src).kind {
+            ExprKind::Str(s) => s,
+            other => panic!("expected a plain string, got {other:?}"),
+        };
+        assert_eq!(text("\"\"\"a \"b\" c\"\"\""), "a \"b\" c");
+        assert_eq!(text("\"\"\"\nline1\nline2\"\"\""), "line1\nline2");
+        assert_eq!(text("\"\"\"\"q\"\"\"\""), "\"q\"");
+        assert_eq!(text("\"\"\"tab\\tend\"\"\""), "tab\tend");
+        assert_eq!(text("r\"C:\\dir\\n$x\""), "C:\\dir\\n$x");
+        assert_eq!(text("r\"\"\"a\\n \"b\" ${c}\"\"\""), "a\\n \"b\" ${c}");
+        assert_eq!(text("r\"\""), "");
+        assert!(matches!(parse_expr("\"\"\"v = $name\"\"\"").kind, ExprKind::Interp(_)));
+        let err = |src: &str| Parser::new(0, src, 0).and_then(|mut p| p.expr()).unwrap_err().message;
+        assert!(err("\"\"\"never closed").contains("unterminated"));
+        assert!(err("r\"\"\"never closed").contains("unterminated"));
     }
 
     #[test]

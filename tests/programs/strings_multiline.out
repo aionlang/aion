@@ -1,0 +1,11 @@
+say "hi" to Ann
+  and ANN	Tab é
+[first line
+"second" line
+]
+C:\dir\new $name raw "quotes" and \n and ${x} true
+ab "quoted" 0
+trimmed
+[x, y\z, w] 9
+{"name": "Ann", "tags": ["a", "b"], "nested": {"k": 3}}
+{"escaped": "line\nbreak"}

@@ -64,9 +64,12 @@ pub enum Token {
     /// A character literal such as `'a'`, `'\n'` or `'\u{1F600}'`, quotes included.
     #[regex(r"'([^'\\\n]|\\[^\n]|\\u\{[0-9a-fA-F]{1,6}\})'")]
     Char,
-    /// A string literal, quotes included; see [`lex_string`].
+    /// A string literal, quotes included; see [`lex_string`].  `"""…"""` may span lines and hold quotes.
     #[token("\"", lex_string)]
     Str,
+    /// A raw string, `r"C:\dir"` or `r"""…"""`: no escapes and no interpolation.
+    #[token("r\"", lex_raw_string)]
+    RawStr,
     #[regex(r"[a-zA-Z_][a-zA-Z0-9_]*")]
     Ident,
 
@@ -184,7 +187,7 @@ impl Token {
             Token::True | Token::False => "a boolean",
             Token::Null => "`null`",
             Token::Float | Token::Int => "a number",
-            Token::Str => "a string",
+            Token::Str | Token::RawStr => "a string",
             Token::Char => "a character",
             Token::Ident => "an identifier",
             Token::LParen => "`(`",
@@ -235,13 +238,47 @@ impl Token {
 /// the scan tracks nesting instead of stopping at the first `"`.
 fn lex_string(lex: &mut logos::Lexer<Token>) -> bool {
     let rest = lex.remainder().as_bytes();
-    match string_len(rest) {
+    let found = if rest.starts_with(b"\"\"") { triple_len(&rest[2..], true).map(|n| n + 2) } else { string_len(rest) };
+    match found {
         Some(n) => {
             lex.bump(n);
             true
         }
         None => false,
     }
+}
+
+/// After the opening `r"`: a raw string ends at the next quote, or for `r"""` at the last of the
+/// first run of three or more quotes.
+fn lex_raw_string(lex: &mut logos::Lexer<Token>) -> bool {
+    let rest = lex.remainder().as_bytes();
+    let found = if rest.starts_with(b"\"\"") { triple_len(&rest[2..], false).map(|n| n + 2) } else { rest.iter().position(|&b| b == b'"').map(|i| i + 1) };
+    match found {
+        Some(n) => {
+            lex.bump(n);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Length of the body of a `"""` string including its closing quotes.  A run of more than three
+/// quotes at the end closes the string with the last three (the others belong to the text).
+/// With `cooked`, escapes and `${}` interpolations are skipped over.
+fn triple_len(b: &[u8], cooked: bool) -> Option<usize> {
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'"' if b[i..].starts_with(b"\"\"\"") => {
+                let run = b[i..].iter().take_while(|&&c| c == b'"').count();
+                return Some(i + run);
+            }
+            b'\\' if cooked => i += 2,
+            b'$' if cooked && b.get(i + 1) == Some(&b'{') => i = interpolation_end(b, i + 2)?,
+            _ => i += 1,
+        }
+    }
+    None
 }
 
 /// Length of the string body including the closing quote, if terminated.
@@ -302,7 +339,7 @@ pub fn lex(file: u32, src: &str, base: usize) -> Result<Vec<Tok>> {
         prev_end = r.end;
         match result {
             Ok(kind) => out.push(Tok { kind, span, nl }),
-            Err(()) if lexer.source()[r.start..].starts_with('"') => {
+            Err(()) if lexer.source()[r.start..].starts_with('"') || lexer.source()[r.start..].starts_with("r\"") => {
                 return Err(Diagnostic::new("unterminated string literal", span));
             }
             Err(()) => {

@@ -1,0 +1,18 @@
+// Triple-quoted strings span lines and hold quotes; raw strings keep backslashes and dollars
+name := "Ann"
+a := """say "hi" to $name
+  and ${name.upper()}\tTab \u{e9}"""
+println(a)
+b := """
+first line
+"second" line
+"""
+println("[" + b + "]")
+println(r"C:\dir\new $name", r"""raw "quotes" and \n and ${x}""", r"" == "")
+println("""a""" + """b""", """"quoted"""", """""".length())
+println(r"""
+trimmed""")
+println(["x", r"y\z", """w"""], r"""\d+\.\d*$""".length())
+text := """{"name": "$name", "tags": ["a", "b"], "nested": {"k": ${1 + 2}}}"""
+println(text)
+println(r"""{"escaped": "line\nbreak"}""")
