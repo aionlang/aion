@@ -7,17 +7,23 @@
  * locks.  The collector sees suspended tasks through aion_tasks_mark().
  *
  * Waiting is deliberately simple: aion_park() sleeps until *anything* calls
- * aion_notify(), which wakes every parked task so it can re-check its condition.  When no
- * task can run and none is sleeping, the program is deadlocked and says so.
+ * aion_notify(), which wakes every parked task so it can re-check its condition.  A task can
+ * also wait for a file descriptor (aion_wait_fd), so a server can serve many connections while
+ * each one blocks on its socket.  When no task can run and none is sleeping or waiting for
+ * input or output, the program is deadlocked and says so.
  */
 
 #include "aion.h"
 
+#include <errno.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 #ifdef _WIN32
+
+int aion_wait_fd(int fd, int events, int64_t timeout_ms) { (void)fd, (void)events, (void)timeout_ms; return 1; }
 
 void aion_spawn(void *closure) { (void)closure; aion_panic("tasks are not supported on Windows yet"); }
 void aion_yield(void) {}
@@ -29,6 +35,7 @@ void aion_tasks_mark(void (*mark)(void *)) { (void)mark; }
 
 #else
 
+#include <poll.h>
 #include <sys/mman.h>
 #include <time.h>
 #include <ucontext.h>
@@ -36,7 +43,7 @@ void aion_tasks_mark(void (*mark)(void *)) { (void)mark; }
 #define STACK_SIZE ((size_t)256 * 1024)
 #define GUARD_SIZE ((size_t)4096)
 
-typedef enum { READY, RUNNING, PARKED, SLEEPING, DONE } State;
+typedef enum { READY, RUNNING, PARKED, SLEEPING, WAITING, DONE } State;
 
 typedef struct Task {
     struct Task *next;
@@ -44,7 +51,8 @@ typedef struct Task {
     State state;
     void *stack; /* mmap'ed, with a guard page at the low end; NULL for the main task */
     void *closure;
-    int64_t wake_at; /* SLEEPING: monotonic milliseconds */
+    int64_t wake_at; /* SLEEPING, WAITING: monotonic milliseconds (INT64_MAX = no deadline) */
+    int wait_fd, wait_events, wait_result; /* WAITING: what for, and how it ended (1 ready, 0 timed out) */
     AionTaskState saved;
 } Task;
 
@@ -92,6 +100,32 @@ static Task *due_sleeper(void) {
     return best;
 }
 
+/*
+ * Look at the tasks waiting for descriptors: any that are ready (or whose deadline has passed) become READY.
+ * Blocks for up to `timeout_ms` (-1 = until something happens) if none is.  Returns whether any task woke.
+ */
+static bool poll_waiters(int64_t timeout_ms) {
+    int count = 0;
+    for (Task *t = all_tasks; t; t = t->next) count += t->state == WAITING;
+    if (count == 0) return false;
+    struct pollfd *fds = malloc((size_t)count * sizeof *fds);
+    Task **who = malloc((size_t)count * sizeof *who);
+    if (!fds || !who) aion_panic("out of memory");
+    int n = 0;
+    for (Task *t = all_tasks; t; t = t->next)
+        if (t->state == WAITING) fds[n] = (struct pollfd){t->wait_fd, (short)t->wait_events, 0}, who[n++] = t;
+    if (timeout_ms != 0) fflush(stdout);
+    int got = poll(fds, (nfds_t)n, timeout_ms > INT32_MAX ? INT32_MAX : (int)timeout_ms);
+    bool woke = false;
+    int64_t now = now_ms();
+    for (int i = 0; i < n; i++) {
+        if (got > 0 && fds[i].revents) who[i]->wait_result = 1, who[i]->state = READY, woke = true;
+        else if (who[i]->wake_at <= now) who[i]->wait_result = 0, who[i]->state = READY, woke = true;
+    }
+    free(fds), free(who);
+    return woke;
+}
+
 /* The next task that can run, going round the list from the current one. */
 static Task *find_ready(void) {
     Task *t = current;
@@ -105,6 +139,7 @@ static Task *find_ready(void) {
 /* The current task has set its own state; run something else (or itself again). */
 static void schedule(void) {
     for (;;) {
+        poll_waiters(0);
         Task *next = due_sleeper();
         if (next) next->state = READY;
         else next = find_ready();
@@ -114,11 +149,16 @@ static void schedule(void) {
             return;
         }
         int64_t earliest = INT64_MAX;
-        for (Task *t = all_tasks; t; t = t->next)
-            if (t->state == SLEEPING && t->wake_at < earliest) earliest = t->wake_at;
-        if (earliest == INT64_MAX) aion_panic("deadlock: every task is waiting and none can continue");
-        int64_t wait = earliest - now_ms();
-        if (wait > 0) {
+        bool waiting = false;
+        for (Task *t = all_tasks; t; t = t->next) {
+            if (t->state == WAITING) waiting = true;
+            if ((t->state == SLEEPING || t->state == WAITING) && t->wake_at < earliest) earliest = t->wake_at;
+        }
+        if (earliest == INT64_MAX && !waiting) aion_panic("deadlock: every task is waiting and none can continue");
+        int64_t wait = earliest == INT64_MAX ? -1 : earliest - now_ms();
+        if (waiting) {
+            poll_waiters(wait < 0 && earliest != INT64_MAX ? 0 : wait);
+        } else if (wait > 0) {
             fflush(stdout);
             struct timespec ts = {.tv_sec = wait / 1000, .tv_nsec = (wait % 1000) * 1000000};
             nanosleep(&ts, NULL);
@@ -177,6 +217,27 @@ void aion_sleep(int64_t ms) {
     current->wake_at = now_ms() + ms;
     current->state = SLEEPING;
     schedule();
+}
+
+/*
+ * Wait until `fd` is ready for `events` (POLLIN / POLLOUT) or `timeout_ms` passes (-1 = no limit); other tasks
+ * run meanwhile.  Returns 1 when ready, 0 on timeout, -1 if the wait itself failed.
+ */
+int aion_wait_fd(int fd, int events, int64_t timeout_ms) {
+    int others = 0;
+    for (Task *t = all_tasks; t; t = t->next) others += t != current && t->state != DONE;
+    if (others == 0) { /* nobody else could run: just block */
+        struct pollfd p = {fd, (short)events, 0};
+        fflush(stdout);
+        int r;
+        do r = poll(&p, 1, timeout_ms > INT32_MAX ? INT32_MAX : (int)timeout_ms); while (r < 0 && errno == EINTR);
+        return r < 0 ? -1 : r > 0;
+    }
+    current->wait_fd = fd, current->wait_events = events, current->wait_result = 0;
+    current->wake_at = timeout_ms < 0 ? INT64_MAX : now_ms() + timeout_ms;
+    current->state = WAITING;
+    schedule();
+    return current->wait_result;
 }
 
 /* Tasks that have not finished, the main one included. */

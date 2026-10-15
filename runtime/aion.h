@@ -73,6 +73,10 @@ typedef struct AionTaskState {
     size_t defer_len, defer_cap;
 } AionTaskState;
 
+/* Let other tasks run until `fd` is ready for `events` (poll's POLLIN / POLLOUT) or the timeout passes (-1 = never):
+ * 1 ready, 0 timed out, -1 failed. */
+int aion_wait_fd(int fd, int events, int64_t timeout_ms);
+
 void aion_task_save(AionTaskState *into);
 void aion_task_load(const AionTaskState *from);
 /* Mark everything the suspended tasks keep alive. */
