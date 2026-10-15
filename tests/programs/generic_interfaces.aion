@@ -1,0 +1,31 @@
+// Generic interfaces: Comparable<T>, Container<T>; bounds that mention the parameter
+interface Comparable<T> { fn compareTo(other: T) -> Int }
+interface Container<T> {
+    fn size() -> Int
+    fn get(i: Int) -> T
+}
+
+type Version(major: Int, minor: Int) {
+    fn compareTo(other: Version) = if major != other.major { major - other.major } else { minor - other.minor }
+}
+type Box<T>(items: List<T>) {
+    fn size() = items.size()
+    fn get(i: Int) = items[i]
+}
+
+fn bigger<T: Comparable<T>>(a: T, b: T) = if a.compareTo(b) >= 0 { a } else { b }
+fn sum(c: Container<Int>) -> Int {
+    total := 0
+    for i in 0..c.size() { total += c.get(i) }
+    return total
+}
+fn firstOf<T>(c: Container<T>) -> T = c.get(0)
+
+v := bigger(Version(1, 2), Version(1, 10))
+println(v)
+println(sum(Box([1, 2, 3])))
+println(firstOf<String>(Box(["x", "y"])))
+c: Container<String> = Box(["p", "q"])
+println(c.size(), c.get(1))
+cmp: Comparable<Version> = Version(2, 0)
+println(cmp.compareTo(Version(1, 9)) > 0)

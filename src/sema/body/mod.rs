@@ -472,7 +472,7 @@ impl<'c, 'a> Cx<'c, 'a> {
             Some(Sym::Fn(id)) => Some(Named::Fn(id)),
             Some(Sym::Type(id)) => Some(Named::Type(id)),
             Some(Sym::Global(id)) => Some(Named::Global(id)),
-            Some(Sym::GenericFn(_) | Sym::GenericType(_)) => Some(Named::Generic),
+            Some(Sym::GenericFn(_) | Sym::GenericType(_) | Sym::GenericIface(_)) => Some(Named::Generic),
             None => self.ck.t.scopes[self.module].modules.get(n).map(|&m| Named::Module(m)),
         }
     }
@@ -2304,6 +2304,10 @@ impl<'c, 'a> Cx<'c, 'a> {
                     Some(Sym::Fn(_) | Sym::Type(_)) => Err(not_generic(n)),
                     Some(Sym::GenericFn(g)) => self.call_generic_fn(g, None, type_args, args, span, expected),
                     Some(Sym::GenericType(g)) => self.call_generic_type(g, type_args, args, span, expected),
+                    Some(Sym::GenericIface(_)) => {
+                        Err(Diagnostic::new(format!("`{n}` is an interface, so it has no constructor"), callee.span)
+                            .hint("create a type that implements it"))
+                    }
                     Some(Sym::Global(g)) => {
                         let ty = self.global_use(g, callee.span)?;
                         self.call_value(mk(K::Global(g), ty), args, span, n)
@@ -2334,6 +2338,10 @@ impl<'c, 'a> Cx<'c, 'a> {
                                 Some(Sym::GenericType(g)) => {
                                     self.call_generic_type(g, type_args, args, span, expected)
                                 }
+                                Some(Sym::GenericIface(_)) => Err(Diagnostic::new(
+                                    format!("`{what}` is an interface, so it has no constructor"),
+                                    member.span,
+                                )),
                                 Some(Sym::Global(g)) => {
                                     let ty = self.global_use(g, member.span)?;
                                     self.call_value(mk(K::Global(g), ty), args, span, &what)

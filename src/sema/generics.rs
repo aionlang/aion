@@ -68,6 +68,17 @@ impl<'a> Checker<'a> {
                         };
                         Ok(self.t.array_of(self.resolve_value_type(module, elem, subst)?))
                     }
+                    Some(Sym::GenericIface(g)) => {
+                        if args.is_empty() {
+                            return Err(Diagnostic::new(format!("`{name}` needs type arguments"), ty.span)
+                                .hint(format!("write it like `{name}<Int>`")));
+                        }
+                        let targs = args
+                            .iter()
+                            .map(|a| self.resolve_value_type(module, a, subst))
+                            .collect::<Result<Vec<_>>>()?;
+                        Ok(Ty::Obj(self.instantiate_iface(g, targs, ty.span)?))
+                    }
                     _ => Err(Diagnostic::new(format!("unknown type `{name}`"), ty.span)),
                 }
             }
@@ -148,7 +159,9 @@ impl<'a> Checker<'a> {
     ) -> Result<()> {
         for ((name, bound), &arg) in tparams.iter().zip(bounds).zip(args) {
             let Some(bound) = bound else { continue };
-            let want = match self.resolve_type(module, bound, &self.empty)? {
+            // The bound may mention the parameters themselves: `T: Comparable<T>`.
+            let subst: Subst = Rc::new(tparams.iter().cloned().zip(args.iter().copied()).collect());
+            let want = match self.resolve_type(module, bound, &subst)? {
                 Ty::Obj(b) if self.t.ty(b).iface.is_some() => b,
                 other => {
                     return Err(Diagnostic::new(
@@ -166,6 +179,48 @@ impl<'a> Checker<'a> {
             })?;
         }
         Ok(())
+    }
+
+    /// The concrete interface `Comparable<Int>` for template `g` and arguments `[Int]`.
+    pub(super) fn instantiate_iface(&self, g: usize, args: Vec<Ty>, span: Span) -> Result<TypeId> {
+        let gi = self.generic_ifaces.borrow()[g].clone();
+        if args.len() != gi.tparams.len() {
+            return Err(Diagnostic::new(
+                format!(
+                    "`{}` takes {} type argument(s) but {} were given",
+                    gi.decl.name.name,
+                    gi.tparams.len(),
+                    args.len()
+                ),
+                span,
+            ));
+        }
+        if let Some(&id) = gi.instances.borrow().get(&args) {
+            return Ok(id);
+        }
+        if self.depth.get() > MAX_DEPTH {
+            return Err(Diagnostic::new("generic types nest too deeply", span));
+        }
+        let arg_names: Vec<String> = args.iter().map(|&a| self.t.ty_name(a)).collect();
+        let id = self.t.add_type(TypeInfo {
+            name: format!("{}<{}>", gi.decl.name.name, arg_names.join(", ")),
+            fields: Vec::new(),
+            methods: HashMap::new(),
+            generic_methods: HashMap::new(),
+            ctor: usize::MAX,
+            array_elem: None,
+            iface: Some(Vec::new()),
+        });
+        // Registered before its methods are resolved, so an interface can mention itself.
+        gi.instances.borrow_mut().insert(args.clone(), id);
+        self.iface_instance_of.borrow_mut().insert(id, (g, args.clone()));
+        let subst: Subst = Rc::new(gi.tparams.iter().cloned().zip(args.iter().copied()).collect());
+        self.depth.set(self.depth.get() + 1);
+        let methods = self.iface_methods(gi.module, gi.decl, &subst);
+        self.depth.set(self.depth.get() - 1);
+        let methods = methods?;
+        self.t.update_type(id, |ti| ti.iface = Some(methods));
+        Ok(id)
     }
 
     /// The concrete type `List<Int>` for template `g` and arguments `[Int]`.

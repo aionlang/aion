@@ -180,8 +180,12 @@ impl Cx<'_, '_> {
                 }
                 // `List<T>` against the instance `List<Int>`.
                 let Ty::Obj(id) = actual else { return };
-                let Some((g, targs)) = self.ck.instance_of.borrow().get(&id).cloned() else { return };
-                let Some(Sym::GenericType(want)) = self.ck.t.lookup(tpl.module, name) else { return };
+                let (want, found) = match self.ck.t.lookup(tpl.module, name) {
+                    Some(Sym::GenericType(want)) => (want, self.ck.instance_of.borrow().get(&id).cloned()),
+                    Some(Sym::GenericIface(want)) => (want, self.ck.iface_instance_of.borrow().get(&id).cloned()),
+                    _ => return,
+                };
+                let Some((g, targs)) = found else { return };
                 if want != g || targs.len() != args.len() {
                     return;
                 }

@@ -1,0 +1,4 @@
+// error: `Comparable<String>` needs `fn compareTo(String) -> Int`
+interface Comparable<T> { fn compareTo(other: T) -> Int }
+type V(n: Int) { fn compareTo(other: V) = n - other.n }
+x: Comparable<String> = V(1)

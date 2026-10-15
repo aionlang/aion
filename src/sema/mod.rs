@@ -72,6 +72,14 @@ pub struct GenericType<'a> {
     pub instances: RefCell<HashMap<Vec<Ty>, TypeId>>,
 }
 
+/// A generic interface: a template instantiated per list of type arguments.
+pub struct GenericIface<'a> {
+    pub module: usize,
+    pub decl: &'a ast::InterfaceDecl,
+    pub tparams: Vec<String>,
+    pub instances: RefCell<HashMap<Vec<Ty>, TypeId>>,
+}
+
 /// A literal usable as a default argument.
 #[derive(Clone)]
 pub enum Const {
@@ -118,6 +126,8 @@ pub enum Sym {
     GenericFn(usize),
     /// Index into the checker's generic type templates.
     GenericType(usize),
+    /// Index into the checker's generic interface templates.
+    GenericIface(usize),
 }
 
 /// Everything visible inside one module.
@@ -186,8 +196,11 @@ pub struct Checker<'a> {
     thunks: RefCell<HashMap<FnId, FnId>>,
     generic_fns: RefCell<Vec<Rc<GenericFn<'a>>>>,
     generic_types: RefCell<Vec<Rc<GenericType<'a>>>>,
+    generic_ifaces: RefCell<Vec<Rc<GenericIface<'a>>>>,
     /// For a type that is an instance of a generic one: which, and with what arguments.
     instance_of: RefCell<HashMap<TypeId, (usize, Vec<Ty>)>>,
+    /// The same for instances of generic interfaces.
+    iface_instance_of: RefCell<HashMap<TypeId, (usize, Vec<Ty>)>>,
     module_names: Vec<String>,
     empty: Subst,
     /// Nesting depth of generic instantiation, to stop runaway recursion.
@@ -359,7 +372,9 @@ impl<'a> Checker<'a> {
             thunks: RefCell::new(HashMap::new()),
             generic_fns: RefCell::new(Vec::new()),
             generic_types: RefCell::new(Vec::new()),
+            generic_ifaces: RefCell::new(Vec::new()),
             instance_of: RefCell::new(HashMap::new()),
+            iface_instance_of: RefCell::new(HashMap::new()),
             module_names: loaded.modules.iter().map(|m| m.name.clone()).collect(),
             empty: Rc::new(HashMap::new()),
             depth: Cell::new(0),
@@ -398,7 +413,16 @@ impl<'a> Checker<'a> {
                     own_types.push((id, td));
                 }
                 Item::Interface(d) if !d.type_params.is_empty() => {
-                    return Err(Diagnostic::new("generic interfaces are not available yet", d.name.span));
+                    let mut v = self.generic_ifaces.borrow_mut();
+                    v.push(Rc::new(GenericIface {
+                        module: mi,
+                        decl: d,
+                        tparams: d.type_params.iter().map(|t| t.name.clone()).collect(),
+                        instances: RefCell::new(HashMap::new()),
+                    }));
+                    let g = v.len() - 1;
+                    drop(v);
+                    self.t.define(mi, &d.name, Sym::GenericIface(g))?;
                 }
                 Item::Interface(d) => {
                     let id = self.t.add_type(TypeInfo {
@@ -470,24 +494,7 @@ impl<'a> Checker<'a> {
 
         // 3a. What each interface requires.
         for &(id, d) in &own_ifaces {
-            let mut methods: Vec<IfaceMethod> = Vec::new();
-            for m in &d.methods {
-                if methods.iter().any(|x| x.name == m.name.name) {
-                    return Err(Diagnostic::new(format!("duplicate method `{}`", m.name.name), m.name.span));
-                }
-                let mut params = Vec::new();
-                for p in &m.params {
-                    if p.default.is_some() {
-                        return Err(Diagnostic::new("interface methods cannot have default arguments", p.name.span));
-                    }
-                    params.push(self.resolve_value_type(mi, &p.ty, &empty)?);
-                }
-                let ret = match &m.ret {
-                    Some(r) => self.resolve_type(mi, r, &empty)?,
-                    None => Ty::Void,
-                };
-                methods.push(IfaceMethod { name: m.name.name.clone(), params, ret });
-            }
+            let methods = self.iface_methods(mi, d, &empty)?;
             self.t.update_type(id, |ti| ti.iface = Some(methods));
         }
 
@@ -566,6 +573,29 @@ impl<'a> Checker<'a> {
             self.inits.push(init_fn);
         }
         Ok(())
+    }
+
+    /// What interface `d` requires, with its type parameters bound by `subst`.
+    fn iface_methods(&self, mi: usize, d: &ast::InterfaceDecl, subst: &Subst) -> Result<Vec<IfaceMethod>> {
+        let mut methods: Vec<IfaceMethod> = Vec::new();
+        for m in &d.methods {
+            if methods.iter().any(|x| x.name == m.name.name) {
+                return Err(Diagnostic::new(format!("duplicate method `{}`", m.name.name), m.name.span));
+            }
+            let mut params = Vec::new();
+            for p in &m.params {
+                if p.default.is_some() {
+                    return Err(Diagnostic::new("interface methods cannot have default arguments", p.name.span));
+                }
+                params.push(self.resolve_value_type(mi, &p.ty, subst)?);
+            }
+            let ret = match &m.ret {
+                Some(r) => self.resolve_type(mi, r, subst)?,
+                None => Ty::Void,
+            };
+            methods.push(IfaceMethod { name: m.name.name.clone(), params, ret });
+        }
+        Ok(methods)
     }
 
     /// The fields of a type declaration: primary-constructor parameters, then body fields.
