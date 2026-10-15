@@ -23,12 +23,15 @@ const USAGE: &str = "\
 Aion compiler
 
 usage:
-  aion [run] [file.aion]              compile and run (default: the project's entry)
+  aion [run] [file.aion] [args…]      compile and run (default: the project's entry)
   aion build [file.aion] [-o <out>]   compile to a native executable
   aion emit-ir [file.aion]            print the generated LLVM IR
   aion new <name>                     create a project directory
   aion fetch                          download the project's dependencies
   aion clean                          delete the build cache
+
+Arguments after the file are passed to the program (`args()` in Aion); put `--`
+before them if they look like options.
 
 options:
   -O0..-O3       optimisation level (default -O2)
@@ -54,16 +57,24 @@ struct Cli {
     input: Option<PathBuf>,
     output: Option<PathBuf>,
     opts: toolchain::Options,
+    /// What follows the file: handed to the program.
+    program_args: Vec<String>,
 }
 
 fn parse_args(args: &[String]) -> Result<Cli, String> {
     let mut command = None;
     let (mut input, mut output) = (None, None);
     let mut opts = toolchain::Options { opt_level: "2".into(), keep_temps: false };
+    let mut program_args = Vec::new();
 
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
+            // `--` ends our options: everything after it belongs to the program.
+            "--" => {
+                program_args.extend(it.by_ref().cloned());
+                break;
+            }
             "run" | "build" | "emit-ir" | "new" | "fetch" | "clean" if command.is_none() && input.is_none() => {
                 command = Some(match arg.as_str() {
                     "run" => Subcommand::Run,
@@ -82,9 +93,10 @@ fn parse_args(args: &[String]) -> Result<Cli, String> {
             o if o.starts_with("-O") && o.len() == 3 && o.as_bytes()[2].is_ascii_digit() => {
                 opts.opt_level = o[2..].to_string();
             }
+            // After the file, anything we don't know is the program's.
+            _ if input.is_some() => program_args.push(arg.clone()),
             o if o.starts_with('-') => return Err(format!("unknown option `{o}`\n\n{USAGE}")),
-            _ if input.is_none() => input = Some(PathBuf::from(arg)),
-            _ => return Err(format!("unexpected argument `{arg}`")),
+            _ => input = Some(PathBuf::from(arg)),
         }
     }
     let command = command.unwrap_or(Subcommand::Run);
@@ -94,7 +106,10 @@ fn parse_args(args: &[String]) -> Result<Cli, String> {
     if matches!(command, Subcommand::New) && input.is_none() {
         return Err("usage: aion new <name>".into());
     }
-    Ok(Cli { command, input, output, opts })
+    if !program_args.is_empty() && !matches!(command, Subcommand::Run) {
+        return Err("arguments for the program only make sense when running it".into());
+    }
+    Ok(Cli { command, input, output, opts, program_args })
 }
 
 type Failure = (Diagnostic, Option<SourceMap>);
@@ -137,7 +152,12 @@ fn exe_name(stem: &str) -> String {
 }
 
 /// Build (or reuse) the program for `ir` and run it.
-fn run_program(ir: &str, c_sources: &[(String, &'static str)], opts: &toolchain::Options) -> Result<ExitCode, Diagnostic> {
+fn run_program(
+    ir: &str,
+    c_sources: &[(String, &'static str)],
+    opts: &toolchain::Options,
+    program_args: &[String],
+) -> Result<ExitCode, Diagnostic> {
     let cached = std::env::var_os("AION_NO_CACHE").is_none();
     let exe = if cached {
         let mut parts: Vec<&[u8]> = vec![env!("CARGO_PKG_VERSION").as_bytes(), opts.opt_level.as_bytes(), ir.as_bytes()];
@@ -169,7 +189,7 @@ fn run_program(ir: &str, c_sources: &[(String, &'static str)], opts: &toolchain:
         exe
     };
 
-    let status = Command::new(&exe).status();
+    let status = Command::new(&exe).args(program_args).status();
     if !cached {
         let _ = std::fs::remove_file(&exe);
     }
@@ -246,7 +266,7 @@ fn run() -> Result<ExitCode, Failure> {
             eprintln!("built {}", output.display());
             Ok(ExitCode::SUCCESS)
         }
-        _ => run_program(&ir, &c_sources, &cli.opts).map_err(general),
+        _ => run_program(&ir, &c_sources, &cli.opts, &cli.program_args).map_err(general),
     }
 }
 
@@ -257,5 +277,30 @@ fn main() -> ExitCode {
             eprint!("{}", diag.render(&map.unwrap_or_default()));
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Result<Cli, String> {
+        parse_args(&args.iter().map(|a| a.to_string()).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn arguments_after_the_file_belong_to_the_program() {
+        let cli = parse(&["script.aion", "one", "-x", "--flag=2"]).unwrap();
+        assert_eq!(cli.input.unwrap(), PathBuf::from("script.aion"));
+        assert_eq!(cli.program_args, ["one", "-x", "--flag=2"]);
+
+        // our own options still work after the file, and `--` hands over everything
+        let cli = parse(&["run", "script.aion", "-O3", "a", "--", "-O0", "b"]).unwrap();
+        assert_eq!(cli.opts.opt_level, "3");
+        assert_eq!(cli.program_args, ["a", "-O0", "b"]);
+
+        // before the file an unknown option is still an error, and builds take no arguments
+        assert!(parse(&["-x", "script.aion"]).is_err());
+        assert!(parse(&["build", "script.aion", "extra"]).is_err());
     }
 }
