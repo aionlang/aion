@@ -36,7 +36,9 @@ extern fn length(s: String) -> Int = "aion_strings_length"
 ```
 
 * Without `= "symbol"` the C symbol is the function's own name.
-* Parameter and return types are limited to `Int`, `Float`, `Bool` and `String`.
+* Parameter and return types are limited to `Int`, `Float`, `Bool`, `String` and
+  `String?` (a C `NULL` is `null`); function values may be passed in, as an opaque
+  closure pointer.
 * The function is called like any other: `math.sqrt(2.0)`.  An `Int` argument is
   widened to `Float` where a `Float` is expected.
 * `extern fn` works in any `.aion` file, so a program can bind libc/libm
@@ -122,6 +124,11 @@ ordinary Aion classes built on it.
 Always in scope.
 
 * `panic(message)`.
+* **Input and arguments** — `readLine() -> String?` (the next line without its line
+  break, `null` when the input has ended; pending output is flushed first, so a
+  `print("name? ")` prompt shows up), `readText() -> String` (everything left),
+  and `args() -> List<String>` (what follows the script: `aion script.aion a b`
+  gives `["a", "b"]`).
 * **String methods** — `length()` (bytes), `contains(s)`, `startsWith(s)`,
   `indexOf(s)` (-1 if absent), `substring(start, end)` (stops the program if the
   range is invalid), `trim()`, `replace(old, new)`, `split(sep)` (a

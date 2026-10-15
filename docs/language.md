@@ -688,6 +688,26 @@ import std.math            // …explicitly (aion.math works too)
 Arguments may be Int, Float, Bool, String or objects.  Floats print with C's
 `%g` (`3.0` prints as `3`).
 
+## Input
+
+`readLine()` returns the next line of standard input as a `String?`, `null` once
+the input has ended; `readText()` returns whatever is left.  `args()` is the list
+of command-line arguments after the script.
+
+```aion no_run
+print("your name? ")
+name := readLine() ?: "stranger"
+println("hello,", name)
+
+total := 0
+line := readLine()
+while line != null {                  // until the input ends
+    total += line.toIntOr(0)
+    line = readLine()
+}
+println("sum:", total, "from", args().size(), "arguments")
+```
+
 ## Calling C
 
 `extern fn` declares a function implemented in C — see
