@@ -40,6 +40,21 @@ pub struct TypeInfo {
     pub iface: Option<Vec<IfaceMethod>>,
 }
 
+impl TypeInfo {
+    /// A type with nothing declared yet.
+    fn new(name: String) -> Self {
+        TypeInfo {
+            name,
+            fields: Vec::new(),
+            methods: HashMap::new(),
+            generic_methods: HashMap::new(),
+            ctor: usize::MAX,
+            array_elem: None,
+            iface: None,
+        }
+    }
+}
+
 /// One method an interface requires (the receiver is not included in `params`).
 #[derive(Clone)]
 pub struct IfaceMethod {
@@ -243,13 +258,8 @@ impl Tables {
             return Ty::Obj(id);
         }
         let id = self.add_type(TypeInfo {
-            name: format!("Array<{}>", self.ty_name(elem)),
-            fields: Vec::new(),
-            methods: HashMap::new(),
-            generic_methods: HashMap::new(),
-            ctor: usize::MAX,
             array_elem: Some(elem),
-            iface: None,
+            ..TypeInfo::new(format!("Array<{}>", self.ty_name(elem)))
         });
         self.arrays.borrow_mut().insert(elem, id);
         Ty::Obj(id)
@@ -403,15 +413,7 @@ impl<'a> Checker<'a> {
                     return Err(Diagnostic::new("inheritance is not available yet", td.name.span));
                 }
                 Item::Type(td) if td.type_params.is_empty() => {
-                    let id = self.t.add_type(TypeInfo {
-                        name: td.name.name.clone(),
-                        fields: Vec::new(),
-                        methods: HashMap::new(),
-                        generic_methods: HashMap::new(),
-                        ctor: usize::MAX,
-                        array_elem: None,
-                        iface: None,
-                    });
+                    let id = self.t.add_type(TypeInfo::new(td.name.name.clone()));
                     self.t.define(mi, &td.name, Sym::Type(id))?;
                     own_types.push((id, td));
                 }
@@ -429,13 +431,8 @@ impl<'a> Checker<'a> {
                 }
                 Item::Interface(d) => {
                     let id = self.t.add_type(TypeInfo {
-                        name: d.name.name.clone(),
-                        fields: Vec::new(),
-                        methods: HashMap::new(),
-                        generic_methods: HashMap::new(),
-                        ctor: usize::MAX,
-                        array_elem: None,
                         iface: Some(Vec::new()),
+                        ..TypeInfo::new(d.name.name.clone())
                     });
                     self.t.define(mi, &d.name, Sym::Type(id))?;
                     own_ifaces.push((id, d));

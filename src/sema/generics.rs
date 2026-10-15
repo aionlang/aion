@@ -203,13 +203,8 @@ impl<'a> Checker<'a> {
         }
         let arg_names: Vec<String> = args.iter().map(|&a| self.t.ty_name(a)).collect();
         let id = self.t.add_type(TypeInfo {
-            name: format!("{}<{}>", gi.decl.name.name, arg_names.join(", ")),
-            fields: Vec::new(),
-            methods: HashMap::new(),
-            generic_methods: HashMap::new(),
-            ctor: usize::MAX,
-            array_elem: None,
             iface: Some(Vec::new()),
+            ..TypeInfo::new(format!("{}<{}>", gi.decl.name.name, arg_names.join(", ")))
         });
         // Registered before its methods are resolved, so an interface can mention itself.
         gi.instances.borrow_mut().insert(args.clone(), id);
@@ -253,15 +248,7 @@ impl<'a> Checker<'a> {
     fn build_instance(&self, gt: &Rc<super::GenericType<'a>>, g: usize, args: Vec<Ty>) -> Result<TypeId> {
         let td: &'a ast::TypeDecl = gt.decl;
         let arg_names: Vec<String> = args.iter().map(|&a| self.t.ty_name(a)).collect();
-        let id = self.t.add_type(TypeInfo {
-            name: format!("{}<{}>", td.name.name, arg_names.join(", ")),
-            fields: Vec::new(),
-            methods: HashMap::new(),
-            generic_methods: HashMap::new(),
-            ctor: usize::MAX,
-            array_elem: None,
-            iface: None,
-        });
+        let id = self.t.add_type(TypeInfo::new(format!("{}<{}>", td.name.name, arg_names.join(", "))));
         // Register before resolving anything, so a self-referential type (`next: Node<T>`) finds itself.
         gt.instances.borrow_mut().insert(args.clone(), id);
         self.instance_of.borrow_mut().insert(id, (g, args.clone()));
