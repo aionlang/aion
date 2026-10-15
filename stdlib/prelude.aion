@@ -46,6 +46,10 @@ fn String.chars() -> List<Char> {
 }
 fn String.iter() = chars()
 
+// s[from..to] is the text between two byte offsets; size() is the length in bytes.
+fn String.size() = length()
+fn String.slice(from: Int, to: Int) = substring(from, to)
+
 fn String.split(separator: String) -> List<String> {
     parts := List<String>()
     if separator.length() == 0 {
@@ -177,6 +181,15 @@ type List<T> {
     fn reversed() -> List<T> {
         out := List<T>()
         for i in 0..count { out.add(items[count - 1 - i]) }
+        return out
+    }
+    // The elements from `from` up to (not including) `to`: xs[from..to].
+    fn slice(from: Int, to: Int) -> List<T> {
+        if from < 0 || to > count || from > to {
+            panic("slice bounds [$from..$to] are out of range for size $count")
+        }
+        out := List<T>()
+        for i in from..to { out.add(items[i]) }
         return out
     }
     fn take(n: Int) -> List<T> {
