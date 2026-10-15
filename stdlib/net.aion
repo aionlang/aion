@@ -1,0 +1,94 @@
+// import net
+//
+//   conn := net.connect("example.com", 80)!!
+//   conn.sendText("GET / HTTP/1.0\r\nHost: example.com\r\n\r\n")
+//   reply := conn.receive()           // Bytes: whatever arrives first; empty at the end
+//
+//   server := net.listen(8080)!!
+//   while true {
+//       client := server.accept()
+//       if client == null { break }
+//       launch { client.sendText("hello\n"); client.close() }
+//   }
+//
+// TCP connections and listeners, plus TLS for clients (`conn.startTls(host)`, which needs OpenSSL's libssl
+// installed at run time).  While a task waits for the network the other tasks keep running.  Failures
+// give null or false, and `net.lastError()` says why.
+// link: dl
+
+extern fn __connect(host: String, port: Int, timeoutMs: Int) -> Int = "aion_net_connect"
+extern fn __listen(host: String, port: Int, backlog: Int) -> Int = "aion_net_listen"
+extern fn __accept(handle: Int, timeoutMs: Int) -> Int = "aion_net_accept"
+extern fn __port(handle: Int) -> Int = "aion_net_port"
+extern fn __send(handle: Int, data: Bytes) -> Bool = "aion_net_send"
+extern fn __receive(handle: Int, max: Int) -> Bytes? = "aion_net_receive"
+extern fn __close(handle: Int) = "aion_net_close"
+extern fn __peer(handle: Int) -> String = "aion_net_peer"
+extern fn __timeout(handle: Int, ms: Int) = "aion_net_set_timeout"
+extern fn __startTls(handle: Int, host: String, verify: Bool, cafile: String) -> Bool = "aion_net_start_tls"
+
+// Why the most recent call failed.
+extern fn lastError() -> String = "aion_net_error"
+// Can this machine do TLS (is libssl installed)?
+extern fn tlsAvailable() -> Bool = "aion_net_tls_available"
+
+type Conn(handle: Int) {
+    open: Bool = true
+
+    // Send all the bytes (or the UTF-8 bytes of a text); false if that failed.
+    fn send(data: Bytes) -> Bool = open && __send(handle, data)
+    fn sendText(text: String) -> Bool = send(text.toBytes())
+
+    // Up to `max` bytes: whatever arrives first.  Empty at the end of the stream; null on an error or a timeout.
+    fn receive(max: Int = 65536) -> Bytes? = if open { __receive(handle, max) } else { null }
+
+    // How long a send or receive may wait, in milliseconds (-1 for ever).  The default is 30 seconds.
+    fn setTimeout(ms: Int) { __timeout(handle, ms) }
+
+    // The address of the other end as "ip:port"; and the local port.
+    fn peer() = __peer(handle)
+    fn port() = __port(handle)
+
+    // Secure the connection: do the TLS handshake with the server called `host`.  By default the server's
+    // certificate must be valid for that name (set SSL_CERT_FILE or pass `cafile` for private authorities).
+    fn startTls(host: String, verify: Bool = true, cafile: String = "") -> Bool = __startTls(handle, host, verify, cafile)
+
+    fn close() {
+        if open {
+            open = false
+            __close(handle)
+        }
+    }
+}
+
+type Listener(handle: Int) {
+    open: Bool = true
+
+    // The port being listened on (useful after `listen(0)`).
+    fn port() = __port(handle)
+
+    // Wait for the next client.  Null on timeout or once the listener was closed.
+    fn accept(timeoutMs: Int = -1) -> Conn? {
+        h := __accept(handle, timeoutMs)
+        return if h < 0 { null } else { Conn(h) }
+    }
+
+    fn close() {
+        if open {
+            open = false
+            __close(handle)
+        }
+    }
+}
+
+// Connect to host:port.  The timeout (ms) also becomes the connection's send/receive timeout.
+fn connect(host: String, port: Int, timeoutMs: Int = 30000) -> Conn? {
+    h := __connect(host, port, timeoutMs)
+    return if h < 0 { null } else { Conn(h) }
+}
+
+// Listen on a port (0 picks a free one; `host` "" means every interface, "127.0.0.1" only this machine).
+fn listen(port: Int, host: String = "", backlog: Int = 128) -> Listener? {
+    h := __listen(host, port, backlog)
+    return if h < 0 { null } else { Listener(h) }
+}

@@ -1,0 +1,88 @@
+// net: TCP clients and servers in one program; waiting for the network lets other tasks run
+import net
+
+// An echo server: one task per connection.
+server := net.listen(0, "127.0.0.1")!!
+port := server.port()
+println(port > 0, server.port() == port)
+launch {
+    while true {
+        c := server.accept()
+        if c == null { break }
+        launch {
+            while true {
+                data := c.receive(4096)
+                if data == null || data.size() == 0 { break }
+                c.send(data)
+            }
+            c.close()
+        }
+    }
+}
+
+fn readAll(c: net.Conn, count: Int) -> Bytes {
+    out := Bytes(0)
+    while out.size() < count {
+        part := c.receive()
+        if part == null || part.size() == 0 { break }
+        out = out + part
+    }
+    return out
+}
+
+c := net.connect("127.0.0.1", port)!!
+println(c.peer() == "127.0.0.1:$port", c.port() != port)
+c.sendText("hello")
+println(readAll(c, 5).toText())
+
+// several clients at once, each talking in small pieces
+done := Channel<String>(10)
+for id in 0..4 {
+    launch {
+        client := net.connect("127.0.0.1", port)!!
+        for round in 0..3 {
+            client.sendText("client $id round $round;")
+            expected := "client $id round $round;".length()
+            echoed := readAll(client, expected)
+            if echoed.toText() != "client $id round $round;" {
+                done.send("client $id got the wrong data")
+            }
+            sleep(1)
+        }
+        client.close()
+        done.send("client $id done")
+    }
+}
+results := List<String>()
+for i in 0..4 {
+    results.add(done.receive()!!)
+}
+println(results.sorted())
+
+// a large transfer needs many partial sends and receives
+big := Bytes(300000)
+for i in 0..big.size() {
+    big[i] = i % 251
+}
+c.send(big)
+echoed := readAll(c, big.size())
+println(echoed.size(), echoed == big)
+
+// timeouts and errors
+silent := net.listen(0, "127.0.0.1")!!
+quiet := net.connect("127.0.0.1", silent.port())!!
+peer := silent.accept()!!
+quiet.setTimeout(50)
+println(quiet.receive(), net.lastError())
+println(silent.accept(30), net.lastError())
+peer.close()
+println(quiet.receive()!!.size())
+quiet.close()
+println(quiet.send(Bytes(1)), quiet.receive())
+silent.close()
+
+c.close()
+server.close()
+println(net.connect("127.0.0.1", port), net.lastError().startsWith("cannot connect"))
+println(net.connect("no-such-host.invalid", 80), net.lastError().startsWith("cannot resolve"))
+println(net.listen(port, "127.0.0.1") != null)
