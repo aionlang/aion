@@ -914,17 +914,17 @@ impl<'c, 'a> Cx<'c, 'a> {
         let A::Range { start, end, inclusive } = &iter.kind else {
             return self.for_each(var, iter, body, out);
         };
-        let int = |cx: &mut Self, e: &ast::Expr| -> Result<hir::Expr> {
-            let v = cx.value(e)?;
-            cx.coerce(v, Ty::Int, e.span)
-        };
-        let start = int(self, start)?;
-        let end = int(self, end)?;
+        // The bounds are Ints, or Chars (`'a'..='z'`), and the loop variable has their type.
+        let first = self.value(start)?;
+        let kind = if first.ty == Ty::Char { Ty::Char } else { Ty::Int };
+        let start = self.coerce(first, kind, start.span)?;
+        let end_value = self.value(end)?;
+        let end = self.coerce(end_value, kind, end.span)?;
 
         // for i in a..b { body }  ⇒  $i := a; $end := b; while $i < $end { i := $i; body; $i += 1 }
         self.scopes.push(HashMap::new());
-        let counter = self.new_local("$i", Ty::Int);
-        let limit = self.new_local("$end", Ty::Int);
+        let counter = self.new_local("$i", kind);
+        let limit = self.new_local("$end", kind);
         out.push(hir::Stmt::Let(counter, Some(start)));
         out.push(hir::Stmt::Let(limit, Some(end)));
         let cmp = if *inclusive { hir::BinOp::Le } else { hir::BinOp::Lt };
@@ -934,7 +934,7 @@ impl<'c, 'a> Cx<'c, 'a> {
         );
 
         self.scopes.push(HashMap::new());
-        let v = self.new_local(&var.name, Ty::Int);
+        let v = self.new_local(&var.name, kind);
         self.scopes.last_mut().unwrap().insert(var.name.clone(), v);
         self.loops += 1;
         self.loop_bases.push(self.block_defers.len());
@@ -948,7 +948,7 @@ impl<'c, 'a> Cx<'c, 'a> {
         full.extend(inner?);
         let bump = mk(
             K::Binary(hir::BinOp::Add, Box::new(self.local_expr(counter)), Box::new(mk(K::Int(1), Ty::Int))),
-            Ty::Int,
+            kind,
         );
         out.push(hir::Stmt::While { cond, body: full, step: vec![hir::Stmt::Set(counter, bump)] });
         Ok(())

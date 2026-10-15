@@ -19,3 +19,10 @@ println(hashOf('a') == hashOf('a'), hashOf('a') == hashOf('b'))
 x := if c == 'a' { 'Y' } else { 'N' }
 println(x)
 println('\u{1F600}', '\t' + 0)
+
+// loops and ranges over characters
+for c in 'a'..'e' { print(c, "") }
+println()
+for c in 'x'..='z' { print(c, "") }
+println()
+println('c' in 'a'..'f', 'z' in 'a'..'f')
