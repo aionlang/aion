@@ -185,6 +185,16 @@ of its own (`"hi".length()`, `.contains(s)`, `.upper()` and friends are
 is just a dollar sign.  `Int`, `Float`, `Bool` and objects convert to text in
 `${}`; build text with interpolation, not `+`.
 
+A string in triple quotes spans lines and may hold quotes (`$name` and `${…}` still work, and a line
+break right after the opening `"""` is dropped); a **raw** string, `r"C:\dir"` or `r"""…"""`, keeps backslashes
+and dollar signs as they are, which suits regular expressions and JSON:
+
+```aion
+name := "Ann"
+println("""He said "hi" to $name""")
+println(r"""{"path": "C:\temp\n", "cost": "$5"}""")
+```
+
 `\u{1F600}` puts any Unicode code point in a string (`"caf\u{e9}"` is `café`).  A `Float`
 prints as the shortest text that reads back as the same number: `0.1`, `0.30000000000000004`,
 `12` for a whole number, `1e+20` for a huge one.  For fixed decimals use
@@ -917,7 +927,9 @@ import math                // the standard library
 import std.math            // …explicitly (aion.math works too)
 ```
 
-* `import m` makes `m.name(...)` and `m.variable` available.
+* `import m` makes `m.name(...)` and `m.variable` available, and a type of the module can be
+  written `m.Type` wherever a type is expected (`fn show(d: time.DateTime)`,
+  `x: List<json.Json>`).
 * An import is looked up as a file beside the importing file (or in its `lib/`
   folder, or the project root), then among the project's
   [dependencies](projects.md), then in the standard library.  A local file
