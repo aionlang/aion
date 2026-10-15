@@ -130,6 +130,9 @@ Always in scope.
   `print("name? ")` prompt shows up), `readText() -> String` (everything left),
   and `args() -> List<String>` (what follows the script: `aion script.aion a b`
   gives `["a", "b"]`).
+* **Building text** — `StringBuilder()` with `append(text)`, `appendChar(c)`, `appendLine(text = "")`,
+  `length()`, `truncate(n)`, `clear()` and `toString()`; `BytesBuilder()` does the same for bytes
+  (`add`, `addText`, `addByte`, `find`, `take`, `toBytes`).  Use them instead of `text += piece` in a loop.
 * **Char methods** — `isDigit() isLetter() isUpper() isLower() isWhitespace()`,
   `upper() lower()`, `code() -> Int`, `digitValue() -> Int?`, `byteLength()` (its
   UTF-8 size), `toString()`; and `Int.toChar()`.
@@ -267,6 +270,167 @@ operating system's source.
 Function forms of the `String` methods: `length(s) -> Int` (bytes),
 `contains(s, needle)`, `starts_with(s, prefix)` (Bool), `upper(s)`, `lower(s)`
 (ASCII).  Prefer the methods: `s.length()`.
+
+### `std.hash`
+
+Digests and checksums of text or `Bytes`.
+
+```aion
+import hash
+println(hash.sha256("abc"))        // ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+println(hash.md5("abc"), hash.crc32("hello"))
+key := "secret".toBytes()
+println(hash.hmacSha256(key, "message".toBytes()).toHex().substring(0, 16))
+```
+
+`md5 sha1 sha256 sha512` take text and return lower-case hex; `md5Bytes sha1Bytes sha256Bytes
+sha512Bytes` take and return `Bytes`; `hmacSha1 hmacSha256 hmacSha512(key, message)` return `Bytes`;
+`crc32(text)` and `crc32Bytes(data, previous)` return an `Int`.  MD5 and SHA-1 are for checksums only.
+
+### `std.encoding`
+
+```aion
+import encoding
+println(encoding.base64("hello"), encoding.base64Decode("aGVsbG8=")?.toText())    // aGVsbG8= hello
+println(encoding.urlEncode("a b&c"), encoding.urlDecode("a%20b"))                  // a%20b%26c a b
+println(encoding.uuid().length())                                                  // 36
+```
+
+`base64`, `base64Bytes`, `base64Url`, `base64UrlBytes` (no padding, `-` and `_`),
+`base64Decode(text) -> Bytes?` (either alphabet, padding optional);
+`urlEncode`, `urlEncodePath` (keeps `/`), `urlDecode(text, plusIsSpace = false) -> String?`;
+`uuid()` (random, version 4).  Hex is `bytes.toHex()` and `text.fromHex()`.
+
+### `std.json`
+
+```aion
+import json
+
+doc := json.parse(r"""{"name": "Ann", "tags": ["a", "b"], "address": {"city": "Oslo"}}""")
+if doc == null {
+    println(json.lastError())
+} else {
+    println(doc.getString("name"), doc.get("tags")?.at(1)?.asString(), doc.get("address")?.getString("city"))
+    println(doc["tags"], doc.size(), doc.keys())
+}
+
+out := json.object()
+out["ok"] = json.bool(true)
+out["items"] = json.array().add(json.int(1)).add(json.string("two")).add(json.number(2.5))
+println(out.compact())          // {"ok":true,"items":[1,"two",2.5]}
+println(out.pretty(2).lines().size())
+```
+
+A parsed value is a `Json`: one of the types `JsonNull`, `JsonBool`, `JsonNumber`, `JsonString`,
+`JsonArray` and `JsonObject` that extend it (an [inheritance](language.md#inheritance) example in the
+library itself).  Every `Json` has `kind()`, `asString() asInt() asFloat() asBool()` (null for the
+wrong kind), `get(key)`, `at(index)`, `size()`, `keys()`, `items()`, the `getString(key, fallback)`
+family, `isNull()`, `compact()` and `pretty(indent = 2)`.  `parse(text)` returns null for invalid
+text and `lastError()` gives the position and the problem.  Build documents with `object()`,
+`array()`, `string(s)`, `int(n)`, `number(x)`, `bool(b)` and `nil()`.  Whole numbers stay exact
+`Int`s; nesting deeper than 512 levels is refused.
+
+### `std.regex`
+
+```aion
+import regex
+
+r := regex.compile(r"(?<user>\w+)@(?<host>[\w.]+)")!!
+m := r.find("write to ann@example.com today")!!
+println(m.value(), m.named("user"), m.group(2), m.start())    // ann@example.com ann example.com 9
+println(regex.compile(r"\s+")!!.replaceAll("a   b \t c", " "))                // a b c
+println(regex.compile(r"(\d+)-(\d+)")!!.replaceAll("10-20", "$2-$1"))          // 20-10
+println(regex.compile(r"[,;]\s*")!!.split("a, b;c"))                         // [a, b, c]
+println(regex.matches(r"[a-z]+\d?", "abc1"), regex.test(r"^\d+$", "12a"))     // true false
+```
+
+Write patterns as [raw strings](language.md#strings).  Syntax: literals, `.`, classes
+(`[a-z\d_]`, `[^…]`), `\d \D \w \W \s \S`, `\b \B \A \z`, `^ $`, groups `( )`, `(?: )`,
+`(?<name> )`, alternation, `* + ? {n} {n,} {n,m}` and their lazy forms (`*?`), flags `"i"` (ignore case),
+`"m"` (`^`/`$` at every line) and `"s"` (`.` matches line breaks).  Not supported: backreferences and
+lookaround.  The matcher simulates the pattern instead of backtracking, so even `(a+)+b` on a long
+text of `a`s answers at once.  Positions are byte offsets.
+
+`compile(pattern, flags = "") -> Regex?` (`lastError()` says why not), `regex(pattern, flags)` (stops
+the program on a bad pattern), `Regex`: `test find(text, from = 0) findAll count matches`
+(the whole text) `replace replaceAll replaceWith(text) { match -> … } split`; `Match`: `value() start() end()
+group(i) named(name) groups() groupStart(i) groupEnd(i)`.  A replacement may use `$1`, `${name}`
+and `$$`.  `escape(text)` quotes a literal for use in a pattern.
+
+### `std.net`
+
+TCP clients and servers.  While one task waits for the network, the others keep running.
+
+```aion
+import net
+
+server := net.listen(0, "127.0.0.1")!!        // port 0: any free port
+launch {
+    client := server.accept()
+    if client != null {
+        client.sendText("hello " + client.receive()!!.toText())
+        client.close()
+    }
+}
+conn := net.connect("127.0.0.1", server.port())!!
+conn.sendText("net")
+println(conn.receive()!!.toText())               // hello net
+conn.close()
+server.close()
+```
+
+`connect(host, port, timeoutMs = 30000) -> Conn?`, `listen(port, host = "", backlog = 128) -> Listener?`;
+`Listener`: `accept(timeoutMs = -1) -> Conn?`, `port()`, `close()`; `Conn`: `send(bytes)`,
+`sendText(text)`, `receive(max = 65536) -> Bytes?` (empty at the end of the stream, null on an error or a
+timeout), `setTimeout(ms)`, `peer()`, `port()`, `startTls(host, verify = true, cafile = "")`, `close()`.
+`lastError()` explains a failure.  TLS uses OpenSSL's `libssl`, found at run time, so only programs that
+use it need it; with `verify` the certificate must be valid for `host` and signed by a trusted authority
+(the system's, or the file named by `cafile` or the `SSL_CERT_FILE` variable).
+
+### `std.http`
+
+```aion no_run
+import http
+import json
+
+r := http.get("https://example.com/api/items")
+if r == null {
+    println("failed: ${http.lastError()}")
+} else if r.ok() {
+    println(r.status, r.header("content-type"), r.json())
+}
+
+http.post("http://localhost:8080/notes", "hello", headers: {"X-Token": "abc"})
+http.postJson("https://example.com/api", json.object().put("name", json.string("Ann")))
+http.download("https://example.com/file.zip", "file.zip")
+```
+
+```aion
+import http
+
+server := http.listen(0, "127.0.0.1") { req ->
+    if req.path == "/hello" { http.text("Hello, ${req.param("name") ?: "world"}!") } else { http.notFound() }
+}!!
+url := "http://127.0.0.1:${server.port()}"
+println(http.get(url + "/hello?name=Ann")!!.text(), http.get(url + "/other")!!.status)   // Hello, Ann! 404
+server.close()
+```
+
+Client: `get head delete(url, headers, options)`, `post put(url, text, headers, options)`, `postBytes`,
+`postJson`, `putJson`, `request(method, url, headers, body, options)` and `download(url, path)`; each
+returns a `Response?` — null when no answer arrived, with `http.lastError()` saying why (an answer with
+status 404 is still a `Response`).  A `Response` has `status`, `reason`, `headers` (lower-case names),
+`body` (`Bytes`), `ok()`, `text()`, `json()` and `header(name)`.  `Options(timeoutMs = 30000, follow = true,
+maxRedirects = 10, verify = true, caFile = "", useProxy = true, maxBody = 268435456)`.  Redirects are
+followed (a POST becomes a GET after 301/302/303); `http_proxy`, `https_proxy` and `no_proxy` are honoured
+(never for `localhost` and `127.x`).  Responses are read as `Connection: close`, whole, with
+`Content-Length`, chunked or until the stream ends; compressed answers are not requested.
+
+Server: `listen(port, host = "") { req -> response } -> Server?` starts serving in the background and
+`serve(...)` never returns.  A `Request` has `method`, `path`, `query` and `param(name)`, `headers`,
+`body`, `peer`, `text()`, `json()` and `header(name)`; answer with `text`, `html`, `jsonResponse`,
+`bytes`, `redirect`, `notFound` or `respond(status, body, contentType)` (add headers with
+`.with(name, value)`).  A handler that panics answers 500.  Each connection is answered once and then closed.
 
 ### `std.sockets`
 
