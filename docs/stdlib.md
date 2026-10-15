@@ -36,8 +36,8 @@ extern fn length(s: String) -> Int = "aion_strings_length"
 ```
 
 * Without `= "symbol"` the C symbol is the function's own name.
-* Parameter and return types are limited to `Int`, `Float`, `Bool`, `String` and
-  `String?` (a C `NULL` is `null`); function values may be passed in, as an opaque
+* Parameter and return types are limited to `Int`, `Float`, `Bool`, `Char`, `String`, `Bytes`,
+  `String?` and `Bytes?` (a C `NULL` is `null`); function values may be passed in, as an opaque
   closure pointer.
 * The function is called like any other: `math.sqrt(2.0)`.  An `Int` argument is
   widened to `Float` where a `Float` is expected.
@@ -53,6 +53,7 @@ extern fn length(s: String) -> Int = "aion_strings_length"
 | `Float`  | `double`         |                                                          |
 | `Bool`   | `bool`           | `<stdbool.h>`                                            |
 | `String` | `const char *`   | NUL-terminated; see the ownership rules below            |
+| `Bytes`  | `void *`         | raw data of any content; `aion_bytes_size()` / `aion_bytes_data()` |
 | *(none)* | `void`           | omit `-> T`                                              |
 
 ### Strings across the boundary
@@ -104,7 +105,18 @@ That is the whole job: no registry entries, no codegen changes.
 const char *aion_string(const char *s);              // copy into a new Aion String
 const char *aion_string_n(const char *s, size_t n);  // …first n bytes
 void aion_panic(const char *msg);                    // "[aion] panic: msg", exit 1
+
+void *aion_bytes_new(int64_t len);                   // a zero-filled Bytes (never NULL; len may be 0)
+int64_t aion_bytes_size(const void *bytes);          // its length
+uint8_t *aion_bytes_data(void *bytes);               // its contents
+
+int aion_wait_fd(int fd, int events, int64_t ms);    // let other tasks run until fd is ready (poll's POLLIN / POLLOUT)
 ```
+
+Return a `Bytes` from C by creating it with `aion_bytes_new` and filling `aion_bytes_data`; return a
+`Bytes?` by returning `NULL`.  A C function that waits for a socket or a pipe should call `aion_wait_fd`
+instead of blocking, so that other [tasks](language.md#tasks-and-channels) keep running.  A `// link: name ...` comment at the
+top of a module's `.aion` file adds `-lname` to the link step of every program that imports the module.
 
 Don't call `aion_string*` while holding another Aion `String` obtained *from the
 GC heap* in a C local — a collection may run inside the call.  (Arguments passed
