@@ -164,8 +164,12 @@ that is per-task lives in `AionTaskState` — the shadow stack of GC roots, the 
 unaware of the others.  The collector reaches suspended tasks through
 `aion_tasks_mark`.  Scheduling is round-robin over a list, with sleepers woken
 earliest deadline first.  Waiting is `aion_park` (sleep until some `aion_notify`, which
-wakes every parked task to re-check its condition); if nothing is runnable and
-nothing sleeps, that is a deadlock and the program panics.  `Job`, `Task<T>` and
+wakes every parked task to re-check its condition) or `aion_wait_fd` (a task parks
+with a file descriptor, an event mask and an optional deadline; the scheduler `poll`s
+every waiting task's descriptor before picking the next task and, when nothing else can
+run, blocks in `poll` until the earliest deadline).  If nothing is runnable, sleeping or
+waiting for a descriptor, that is a deadlock and the program panics.  This is what lets
+`std.net` and `std.http` serve many connections from one thread.  `Job`, `Task<T>` and
 `Channel<T>` are ordinary Aion types in the prelude built on `__spawn`, `__park` and
 `__notify`.
 
@@ -222,6 +226,18 @@ sugar over methods (`get`/`set`/`contains`/`size`/`iter`/`add`) that the checker
 resolves by name, so user types can opt in; `List`, `Map` and `Set` are generic
 types written in Aion in the prelude.  `x in coll` is rewritten by the parser to
 `coll.contains(x)` unless the right side is a range.
+
+### Bytes
+
+`Bytes` is a built-in type (`Ty::Bytes`) represented like a `String`: a pointer to a GC
+object whose payload is the data, with the length in the header (so it may hold any byte,
+unlike a NUL-terminated `String`) and no pointers to scan.  It is never null: the zero value
+is the static object `@aion_empty_bytes` (`ExprKind::EmptyBytes`), and `Bytes?` is the
+same pointer with `NULL` for absent.  `b[i]` and `b[i] = v` go through the `get` and `set`
+methods the prelude adds to the type (extension methods on built-in types work for
+indexing, slicing, `for`, and `+`), `==` and `hashOf` call prelude functions that compare and
+hash the contents, and `extern fn` accepts `Bytes` / `Bytes?` so C code can produce and
+consume them (`aion_bytes_new`, `aion_bytes_size`, `aion_bytes_data`).
 
 ### Code generation (`src/codegen.rs`)
 
@@ -300,8 +316,11 @@ as garbage output rather than a rare crash.
 of imported stdlib modules to a temp directory and runs one
 
 ```text
-clang -O2 -w -I <dir> program.ll core.c [stdlib C files] -lm -o <exe>
+clang -O2 -w -I <dir> program.ll core.c tasks.c [stdlib C files] [package C files] -lm [-l<lib> …] -o <exe>
 ```
+
+The libraries come from `link = [...]` in `aion.project` and `// link: name` comments at the top
+of stdlib modules; a package's `c = [...]` files are compiled in beside the stdlib's.
 
 It tries `clang`, then `clang-22 … clang-15`; `AION_CLANG` overrides.  `aion run`
 hashes the generated IR and C sources and stores the executable in the cache
@@ -317,7 +336,8 @@ hashes the generated IR and C sources and stores the executable in the cache
   `// error:` header (these only run the front end).
 * projects, dependencies (including git, with a moved tag), the run cache, shebang
   scripts, import cycles, diagnostics rendering and `aion build`.
-* every ```` ```aion ```` block in the documentation is compiled and run.
+* every ```` ```aion ```` block in the documentation is compiled and run;
+* `https` against a local `openssl s_server`, keys from a piped terminal, a package that bundles C code.
 
 ## Extending the language
 

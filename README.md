@@ -69,6 +69,15 @@ aion emit-ir examples/hello.aion   # print the generated LLVM IR
 More programs live in [`examples/`](examples). Run the test-suite with
 `cargo test`.
 
+## Batteries
+
+The standard library covers what scripts and small tools need: text and numbers
+(`StringBuilder`, `regex`, `json`, `csv`, `encoding`, `hash`), files and the machine (`fs`, `path`,
+`os`, `time`, `random`, `cli`, `term`), the network (`net`, `http` client and server, TLS) and
+data (`sqlite`, `zlib`, `Bytes`). Each is one `import` away; see [docs/stdlib.md](docs/stdlib.md).
+Anything missing can be bound from C with one `extern fn` line, or shipped as a
+[package](docs/packages.md).
+
 ## How it works
 
 ```
@@ -103,6 +112,7 @@ See **[docs/architecture.md](docs/architecture.md)** for the details.
 |---|---|
 | [docs/language.md](docs/language.md) | the language: syntax, types, lambdas, modules |
 | [docs/projects.md](docs/projects.md) | `aion.project`, dependencies, the build cache |
+| [docs/packages.md](docs/packages.md) | writing, testing and publishing packages; bundling C code |
 | [docs/stdlib.md](docs/stdlib.md) | the standard library, and how to add C-backed functions with `extern fn` |
 | [docs/architecture.md](docs/architecture.md) | compiler internals, memory model, garbage collector |
 | [docs/LOCAL-BUILDING.MD](docs/LOCAL-BUILDING.MD) | setting up a development machine |

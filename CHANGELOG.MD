@@ -80,6 +80,39 @@ migration notes at the end of this section.
   project. See docs/projects.md.
 - **Faster re-runs.** `aion file.aion` caches the built binary by a hash of the
   generated program: ≈4 ms for an unchanged script instead of ≈180 ms.
+- **Numbers.** Hex, binary and octal literals (`0xFF`, `0b1010`, `0o17`), `1_000_000`,
+  exponents (`1.5e-3`); bit operations as `Int` methods (`and or xor inv shl shr ushr`);
+  `Float` values print as the shortest text that reads back exactly (`0.1`,
+  `0.30000000000000004`); conversions and helpers (`toFloat toInt round floor ceil format
+  roundTo pow gcd clamp toHex toRadix parseInt …`).
+- **Strings.** `"""triple-quoted"""` strings (multi-line, may hold quotes, interpolation
+  still works), raw strings `r"C:\dir"` / `r"""…"""`, `\u{…}` escapes, and many more methods
+  (`endsWith lastIndexOf trimStart trimEnd repeat padLeft padRight lines isBlank charCount
+  toFloatOrNull indexOf(needle, from)`); `StringBuilder`; `eprint` / `eprintln`.
+- **Bytes.** A `Bytes` type for binary data (`Bytes(n)`, `bytesOf([…])`, `b[i]`, slices, `+`,
+  `==`, `Map` keys, `toHex`/`fromHex`, `toText`/`toBytes`, `find`, `copyFrom`) and `BytesBuilder`;
+  `extern fn` can pass `Bytes`, `Bytes?` and `Char`.
+- **Language details.** Optional parameters may default to `null`; a module's types can be
+  written `module.Type`; indexing, `for`, slices, `==` and `hashOf` on an `open` type now
+  dispatch to the real kind's method (they called the parent's before).
+- **Packages.** `link = ["sqlite3"]` and `c = ["native/x.c"]` in `aion.project` (system libraries
+  and bundled C code); `// link: name` in stdlib modules. See docs/packages.md.
+
+### Standard library
+New modules, all written for this release:
+- `fs`, `path` (files, directories, temporary directories, path arithmetic), `os`
+  (environment, process info, running programs with captured output), `time` (clocks,
+  `DateTime`, formatting and parsing), `random` (seedable generator, secure bytes), `math`
+  (constants, logs, trigonometry, rounding).
+- `hash` (MD5, SHA-1, SHA-2, HMAC, CRC-32), `encoding` (Base64, percent-encoding, UUIDs),
+  `json` (a family of types built with inheritance), `regex` (a self-contained linear-time
+  engine with groups, named groups, lazy quantifiers and flags), `csv`, `cli` (argument parsing
+  with usage text), `term` (ANSI styles, terminal size, key input).
+- `net` (TCP, TLS clients through a run-time-loaded OpenSSL; every wait lets other tasks run)
+  and `http` (client with redirects, proxies and TLS; a small multi-connection server).
+- `sqlite` (prepared statements, transactions) and `zlib` (gzip, zlib, raw deflate with a
+  decompression-bomb guard); they need the system development packages and declare
+  their `-l` flags themselves.
 
 ### Compiler
 - Return types of `= expr` functions and types of top-level variables are inferred
@@ -87,6 +120,8 @@ migration notes at the end of this section.
 - Closures are GC objects (`{ code, captured… }`); captured variables that are also
   reassigned live in shared heap cells. Module variables are GC roots.
 - Every ```` ```aion ```` block in the documentation is compiled and run by the tests.
+- Tasks can wait for file descriptors (`aion_wait_fd`), which `net` and `http` use so a
+  server can handle many connections at once.
 
 ### Migrating from 0.2
 | 0.2                               | 0.3                                   |
