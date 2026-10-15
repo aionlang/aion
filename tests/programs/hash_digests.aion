@@ -1,0 +1,32 @@
+// hash: known test vectors for MD5, SHA-1, SHA-256, SHA-512, HMAC and CRC-32
+import hash
+
+println(hash.md5(""))
+println(hash.md5("abc"))
+println(hash.sha1(""))
+println(hash.sha1("abc"))
+println(hash.sha256(""))
+println(hash.sha256("abc"))
+println(hash.sha512("abc"))
+println(hash.sha256("The quick brown fox jumps over the lazy dog"))
+println(hash.sha1("The quick brown fox jumps over the lazy dog"))
+println(hash.md5("The quick brown fox jumps over the lazy dog"))
+
+// lengths around the padding boundaries
+for n in [55, 56, 63, 64, 65, 111, 112, 127, 128, 129] {
+    text := "a".repeat(n)
+    println(n, hash.sha256(text).substring(0, 16), hash.sha512(text).substring(0, 16), hash.sha1(text).substring(0, 16), hash.md5(text).substring(0, 16))
+}
+println(hash.sha256("a".repeat(1000000)))
+
+// HMAC test vectors (RFC 4231 case 2; RFC 2202 case 2)
+key := "Jefe".toBytes()
+msg := "what do ya want for nothing?".toBytes()
+println(hash.hmacSha256(key, msg).toHex())
+println(hash.hmacSha512(key, msg).toHex())
+println(hash.hmacSha1(key, msg).toHex())
+println(hash.hmacSha256(Bytes(131, 170), "Test Using Larger Than Block-Size Key - Hash Key First".toBytes()).toHex())
+
+println(hash.crc32(""), hash.crc32("hello"), hash.crc32("123456789"))
+println(hash.crc32Bytes("456789".toBytes(), hash.crc32Bytes("123".toBytes(), 0)))
+println(hash.sha256Bytes(bytesOf([0, 1, 2, 255])).toHex(), hash.sha256Bytes(Bytes(0)).size())

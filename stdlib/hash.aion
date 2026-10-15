@@ -1,0 +1,33 @@
+// import hash
+//
+//   hash.sha256("hello").toHex()          // 2cf24dba5fb0a30e26e83b2ac5b9e29e...
+//   hash.sha256Bytes(data)                // Bytes
+//   hash.hmacSha256(key, message)         // Bytes
+//   hash.crc32("hello")                   // 907060870
+//
+// Message digests of text or Bytes.  Text is hashed as its UTF-8 bytes; the result of the
+// `...Bytes` forms is a Bytes (`.toHex()` shows it in the usual hex notation) and the text forms return
+// that hex string directly.  MD5 and SHA-1 are no longer safe against deliberate collisions:
+// use them for checksums and compatibility, SHA-256 or SHA-512 for anything else.
+
+extern fn __digest(algorithm: Int, data: Bytes) -> Bytes = "aion_hash_digest"
+extern fn __hmac(algorithm: Int, key: Bytes, message: Bytes) -> Bytes = "aion_hash_hmac"
+extern fn crc32Bytes(data: Bytes, previous: Int) -> Int = "aion_hash_crc32"
+
+fn md5Bytes(data: Bytes) = __digest(0, data)
+fn sha1Bytes(data: Bytes) = __digest(1, data)
+fn sha256Bytes(data: Bytes) = __digest(2, data)
+fn sha512Bytes(data: Bytes) = __digest(3, data)
+
+// Hex digests of text.
+fn md5(text: String) = md5Bytes(text.toBytes()).toHex()
+fn sha1(text: String) = sha1Bytes(text.toBytes()).toHex()
+fn sha256(text: String) = sha256Bytes(text.toBytes()).toHex()
+fn sha512(text: String) = sha512Bytes(text.toBytes()).toHex()
+
+fn hmacSha1(key: Bytes, message: Bytes) = __hmac(1, key, message)
+fn hmacSha256(key: Bytes, message: Bytes) = __hmac(2, key, message)
+fn hmacSha512(key: Bytes, message: Bytes) = __hmac(3, key, message)
+
+// CRC-32 (as in zip and PNG) of text, or of Bytes; pass the previous result to continue a checksum over several pieces.
+fn crc32(text: String) -> Int = crc32Bytes(text.toBytes(), 0)
