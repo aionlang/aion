@@ -11,6 +11,7 @@
 #include "aion.h"
 
 #include <inttypes.h>
+#include <math.h>
 #include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -367,9 +368,27 @@ const char *aion_char_to_str(int64_t c) {
     return aion_string_n(buf, n);
 }
 
+/* The shortest text that reads back as exactly `f`: 0.1 prints as 0.1, 1/3 as 0.3333333333333333,
+ * a whole number without a point (12), and very large or small values with an exponent (1e+20). */
+static void float_text(double f, char *out, size_t cap) {
+    if (isnan(f)) { snprintf(out, cap, "nan"); return; }
+    if (isinf(f)) { snprintf(out, cap, f < 0 ? "-inf" : "inf"); return; }
+    int digits = 1;
+    for (; digits < 17; digits++) {
+        snprintf(out, cap, "%.*e", digits - 1, f);
+        if (strtod(out, NULL) == f) break;
+    }
+    snprintf(out, cap, "%.*e", digits - 1, f);
+    int exponent = atoi(strchr(out, 'e') + 1);
+    if (f == 0 || (exponent >= -5 && exponent < 16)) {
+        int decimals = digits - 1 - exponent;
+        snprintf(out, cap, "%.*f", decimals < 0 ? 0 : decimals, f);
+    }
+}
+
 const char *aion_float_to_str(double f) {
-    char buf[64];
-    snprintf(buf, sizeof buf, "%g", f);
+    char buf[400];
+    float_text(f, buf, sizeof buf);
     return aion_string(buf);
 }
 
@@ -405,5 +424,10 @@ void aion_print_char(int64_t c, int64_t nl) {
     end_line(nl);
 }
 void aion_print_int(int64_t n, int64_t nl) { printf("%" PRId64, n); end_line(nl); }
-void aion_print_float(double f, int64_t nl) { printf("%g", f); end_line(nl); }
+void aion_print_float(double f, int64_t nl) {
+    char buf[400];
+    float_text(f, buf, sizeof buf);
+    fputs(buf, stdout);
+    end_line(nl);
+}
 void aion_print_bool(int64_t b, int64_t nl) { fputs(b ? "true" : "false", stdout); end_line(nl); }
