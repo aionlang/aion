@@ -320,6 +320,21 @@ fn a_script_with_a_shebang_line_runs() {
     assert_eq!(stdout(&aion_in(&root, &["s.aion"])), "answer 42\n");
 }
 
+#[test]
+fn arguments_after_the_script_reach_the_program() {
+    let root = scratch("args");
+    write(
+        &root.join("a.aion"),
+        "xs := args()\nprintln(xs.size(), xs)\nfor a in xs { println(\"arg:\", a) }\n",
+    );
+    let out = aion_in(&root, &["a.aion", "one", "two words", "-x"]);
+    assert_eq!(stdout(&out), "3 [one, two words, -x]\narg: one\narg: two words\narg: -x\n", "{}", stderr(&out));
+    // no arguments: an empty list; `--` passes things that look like options
+    assert_eq!(stdout(&aion_in(&root, &["a.aion"])).lines().next().unwrap(), "0 []");
+    let out = aion_in(&root, &["a.aion", "--", "-O0"]);
+    assert_eq!(stdout(&out).lines().next().unwrap(), "1 [-O0]");
+}
+
 // ── documentation ───────────────────────────────────────────────────
 
 /// `(first line, info string, body)` of every fenced code block in `text`.

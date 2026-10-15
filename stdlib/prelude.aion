@@ -403,6 +403,18 @@ fn setOf<T>(items: List<T>) -> Set<T> {
     return out
 }
 
+// ── Program arguments ───────────────────────────────────────────
+
+extern fn __argc() -> Int = "aion_argc"
+extern fn __argv(index: Int) -> String = "aion_argv"
+
+// The command-line arguments after the script: `aion script.aion a b` gives ["a", "b"].
+fn args() -> List<String> {
+    out := List<String>()
+    for i in 0..__argc() { out.add(__argv(i)) }
+    return out
+}
+
 // ── Support for `defer` and `try` (the compiler calls these; not for direct use) ──
 extern fn __defer_push(action: () -> Unit) = "aion_defer_push"
 extern fn __defer_mark() -> Int = "aion_defer_mark"
