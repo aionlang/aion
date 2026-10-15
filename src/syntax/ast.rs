@@ -73,6 +73,17 @@ pub struct FnDecl {
     pub ret: Option<TypeRef>,
     pub body: FnBody,
     pub span: Span,
+    /// `open fn` / `override fn` inside a type.
+    pub modifier: Modifier,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Modifier {
+    None,
+    /// May be overridden by subtypes.
+    Open,
+    /// Replaces a method of the parent type.
+    Override,
 }
 
 #[derive(Debug)]
@@ -112,6 +123,19 @@ pub struct TypeDecl {
     /// `init { ... }` blocks, run after the fields are set up.
     pub inits: Vec<Vec<Stmt>>,
     pub methods: Vec<FnDecl>,
+    /// `open type Animal(…)`: other types may extend it.
+    pub open: bool,
+    /// `type Dog(…) : Animal(name)`
+    pub parent: Option<ParentRef>,
+}
+
+/// The `: Animal(name)` of a type that extends another.
+#[derive(Debug)]
+pub struct ParentRef {
+    pub name: Ident,
+    /// Arguments for the parent's constructor, evaluated with the child's parameters in scope.
+    pub args: Vec<Arg>,
+    pub span: Span,
 }
 
 /// `interface Shape { fn area() -> Float }`: the methods a type must have to be used as a `Shape`.

@@ -399,6 +399,9 @@ impl<'a> Checker<'a> {
         let mut own_ifaces: Vec<(TypeId, &ast::InterfaceDecl)> = Vec::new();
         for item in &module.ast.items {
             match item {
+                Item::Type(td) if td.open || td.parent.is_some() => {
+                    return Err(Diagnostic::new("inheritance is not available yet", td.name.span));
+                }
                 Item::Type(td) if td.type_params.is_empty() => {
                     let id = self.t.add_type(TypeInfo {
                         name: td.name.name.clone(),

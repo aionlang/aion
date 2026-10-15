@@ -219,6 +219,12 @@ impl<'a> Parser<'a> {
                 Token::Import => imports.push(self.import()?),
                 Token::Ident if self.at_from_import() => imports.push(self.import_from()?),
                 Token::Type => items.push(Item::Type(self.type_decl()?)),
+                Token::Ident if self.text(self.toks[self.pos]) == "open" && self.peek_at(1) == Some(Token::Type) => {
+                    self.bump();
+                    let mut decl = self.type_decl()?;
+                    decl.open = true;
+                    items.push(Item::Type(decl));
+                }
                 Token::Interface => items.push(Item::Interface(self.interface_decl()?)),
                 Token::Extern => {
                     let start = self.bump().span;
@@ -359,7 +365,7 @@ impl<'a> Parser<'a> {
         } else {
             return Err(self.expected("`{` or `=`"));
         };
-        Ok(FnDecl { name, type_params, bounds, params, ret, body, span: start.to(self.prev_span()) })
+        Ok(FnDecl { name, type_params, bounds, params, ret, body, span: start.to(self.prev_span()), modifier: Modifier::None })
     }
 
     /// `interface Name { fn method(params) -> Type … }`
@@ -401,10 +407,23 @@ impl<'a> Parser<'a> {
         self.bump(); // `type`
         let name = self.ident()?;
         let (type_params, bounds) = self.bounded_type_params()?;
-        if self.peek() == Some(Token::Colon) {
-            return Err(Diagnostic::new("type inheritance is not supported", self.here()));
-        }
         let primary = if self.peek() == Some(Token::LParen) && !self.nl() { Some(self.params()?) } else { None };
+        // `: Parent(args)` — extend another type, handing it its constructor arguments.
+        let parent = if self.peek() == Some(Token::Colon) && !self.nl() {
+            let colon = self.bump().span;
+            let name = self.ident()?;
+            let args = if self.peek() == Some(Token::LParen) && !self.nl() {
+                self.bump();
+                let args = self.scoped(true, false, |p| p.args())?;
+                self.expect(Token::RParen)?;
+                args
+            } else {
+                Vec::new()
+            };
+            Some(ParentRef { span: colon.to(self.prev_span()), name, args })
+        } else {
+            None
+        };
 
         let (mut fields, mut methods, mut ctor, mut inits) = (Vec::new(), Vec::new(), None, Vec::new());
         if self.peek() == Some(Token::LBrace) && !self.nl() {
@@ -418,6 +437,17 @@ impl<'a> Parser<'a> {
                         Some(Token::Fn) => {
                             let s = p.bump().span;
                             methods.push(p.fn_decl(s, false)?);
+                        }
+                        // `open fn` and `override fn`
+                        Some(Token::Ident)
+                            if matches!(p.text(p.toks[p.pos]), "open" | "override") && p.peek_at(1) == Some(Token::Fn) =>
+                        {
+                            let word = p.bump();
+                            let modifier = if p.text(word) == "open" { Modifier::Open } else { Modifier::Override };
+                            let s = p.bump().span;
+                            let mut decl = p.fn_decl(s, false)?;
+                            decl.modifier = modifier;
+                            methods.push(decl);
                         }
                         Some(Token::Constructor) => {
                             let s = p.bump().span;
@@ -448,7 +478,7 @@ impl<'a> Parser<'a> {
             })?;
             self.expect(Token::RBrace)?;
         }
-        Ok(TypeDecl { name, type_params, bounds, primary, fields, ctor, inits, methods })
+        Ok(TypeDecl { name, type_params, bounds, primary, fields, ctor, inits, methods, open: false, parent })
     }
 
     // ── statements ──────────────────────────────────────────────
@@ -1511,6 +1541,29 @@ mod tests {
         // slices chain with other postfix operators
         assert!(matches!(parse_expr("xs[1..3][0]").kind, ExprKind::Index { .. }));
         assert!(matches!(parse_expr("xs[1..3].size()").kind, ExprKind::Call { .. }));
+    }
+
+    #[test]
+    fn inheritance_syntax() {
+        let m = module(
+            "open type Animal(name: String) {\n    open fn sound() = \"...\"\n    fn describe() = name\n}\n\
+             type Dog(name: String, breed: String) : Animal(name) {\n    override fn sound() = \"Woof\"\n}\n\
+             type Puppy : Dog(\"rex\", breed: \"lab\")\nopen = 1\n",
+        );
+        let Item::Type(animal) = &m.items[0] else { panic!("expected a type") };
+        assert!(animal.open && animal.parent.is_none());
+        assert_eq!(animal.methods[0].modifier, Modifier::Open);
+        assert_eq!(animal.methods[1].modifier, Modifier::None);
+        let Item::Type(dog) = &m.items[1] else { panic!("expected a type") };
+        assert!(!dog.open);
+        let parent = dog.parent.as_ref().unwrap();
+        assert_eq!((parent.name.name.as_str(), parent.args.len()), ("Animal", 1));
+        assert_eq!(dog.methods[0].modifier, Modifier::Override);
+        let Item::Type(puppy) = &m.items[2] else { panic!("expected a type") };
+        let parent = puppy.parent.as_ref().unwrap();
+        assert!(puppy.primary.is_none() && parent.args.len() == 2 && parent.args[1].name.is_some());
+        // `open` is not reserved: it is still a fine variable name
+        assert!(matches!(&m.items[3], Item::Stmt(_)));
     }
 
     #[test]

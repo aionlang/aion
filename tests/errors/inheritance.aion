@@ -1,4 +1,4 @@
-// error: type inheritance is not supported
+// error: inheritance is not available yet
 type A {}
 type B: A {}
 fn main() {}
