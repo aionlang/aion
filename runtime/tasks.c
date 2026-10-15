@@ -83,10 +83,13 @@ static void switch_to(Task *next) {
     reap(); /* back in `prev`, on its own stack */
 }
 
-static void wake_sleepers(void) {
+/* The sleeping task whose time has come, earliest deadline first. */
+static Task *due_sleeper(void) {
     int64_t now = now_ms();
+    Task *best = NULL;
     for (Task *t = all_tasks; t; t = t->next)
-        if (t->state == SLEEPING && t->wake_at <= now) t->state = READY;
+        if (t->state == SLEEPING && t->wake_at <= now && (!best || t->wake_at < best->wake_at)) best = t;
+    return best;
 }
 
 /* The next task that can run, going round the list from the current one. */
@@ -102,8 +105,9 @@ static Task *find_ready(void) {
 /* The current task has set its own state; run something else (or itself again). */
 static void schedule(void) {
     for (;;) {
-        wake_sleepers();
-        Task *next = find_ready();
+        Task *next = due_sleeper();
+        if (next) next->state = READY;
+        else next = find_ready();
         if (next) {
             if (next == current) current->state = RUNNING;
             else switch_to(next);
