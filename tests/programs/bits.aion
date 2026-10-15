@@ -1,0 +1,11 @@
+// Bit operations on Int: and, or, xor, shl, shr, ushr, inv
+println(0xF0.and(0x3C), 0xF0.or(0x0F), 0xFF.xor(0x0F), 5.inv(), 0.inv())
+println(1.shl(10), 1.shl(63), (-8).shr(1), (-8).ushr(60), 0xFF.shr(4))
+println(1.shl(64), 1.shl(65))        // the amount counts modulo 64
+x := 0b1011
+println(x.and(1) == 1, x.shr(1).and(1), x.shl(2).or(1))
+mask := 0xFFFF_FFFF
+h := 2166136261
+for c in "hello" { h = (h.xor(c.code()) * 16777619).and(mask) }
+println(h)
+println(255.and(0x0F).xor(3))

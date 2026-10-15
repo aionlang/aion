@@ -2592,6 +2592,33 @@ impl<'c, 'a> Cx<'c, 'a> {
         }
     }
 
+    /// `a.and(b)`, `a.shl(3)`, `a.inv()`: the bit operations of an Int.
+    fn bit_operation(&mut self, recv: hir::Expr, member: &ast::Ident, args: &[ast::Arg], span: Span) -> Result<hir::Expr> {
+        use hir::BinOp as H;
+        let op = match member.name.as_str() {
+            "and" => H::BitAnd,
+            "or" => H::BitOr,
+            "xor" => H::BitXor,
+            "shl" => H::Shl,
+            "shr" => H::Shr,
+            "ushr" => H::UShr,
+            "inv" => H::BitXor,
+            _ => unreachable!("checked by the caller"),
+        };
+        let want = usize::from(member.name != "inv");
+        if args.len() != want || args.iter().any(|a| a.name.is_some()) {
+            return Err(Diagnostic::new(format!("`{}` takes {want} argument(s)", member.name), span));
+        }
+        let operand = match args.first() {
+            Some(a) => {
+                let v = self.value_expected(&a.value, Some(Ty::Int))?;
+                self.coerce(v, Ty::Int, a.value.span)?
+            }
+            None => mk(K::Int(-1), Ty::Int), // inv() flips every bit
+        };
+        Ok(mk(K::Binary(op, Box::new(recv), Box::new(operand)), Ty::Int))
+    }
+
     /// `recv.member(args)` for an already evaluated receiver: a method of its type, a method
     /// added to a built-in type, or a function stored in a field.
     fn method_call(
@@ -2606,6 +2633,12 @@ impl<'c, 'a> Cx<'c, 'a> {
         let not_generic = |what: &str| {
             Diagnostic::new(format!("`{what}` is not generic, so it takes no type arguments"), member.span)
         };
+        if recv.ty == Ty::Int
+            && matches!(member.name.as_str(), "and" | "or" | "xor" | "shl" | "shr" | "ushr" | "inv")
+            && self.ck.ext_method(Ty::Int, &member.name).is_none()
+        {
+            return self.bit_operation(recv, member, args, span);
+        }
         if let Some(id) = self.ck.ext_method(recv.ty, &member.name) {
             if !type_args.is_empty() {
                 return Err(not_generic(&member.name));

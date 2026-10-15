@@ -175,6 +175,15 @@ pub enum BinOp {
     Le,
     Gt,
     Ge,
+    // Int only
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    /// Arithmetic shift right (keeps the sign).
+    Shr,
+    /// Logical shift right (fills with zeros).
+    UShr,
 }
 
 pub enum ExprKind {

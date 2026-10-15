@@ -1103,7 +1103,21 @@ impl<'a> FnGen<'a> {
                 if matches!(op, Div | Rem) {
                     self.zero_check(b);
                 }
+                // A shift by 64 or more is undefined in LLVM: shift by the amount modulo 64, as hardware does.
+                let b = if matches!(op, Shl | Shr | UShr) {
+                    let masked = self.tmp();
+                    self.line(format!("{masked} = and i64 {b}, 63"));
+                    masked
+                } else {
+                    b.to_string()
+                };
                 let inst = match op {
+                    BitAnd => "and",
+                    BitOr => "or",
+                    BitXor => "xor",
+                    Shl => "shl",
+                    Shr => "ashr",
+                    UShr => "lshr",
                     Add => "add",
                     Sub => "sub",
                     Mul => "mul",
@@ -1133,6 +1147,7 @@ impl<'a> FnGen<'a> {
                     Le => "fcmp ole",
                     Gt => "fcmp ogt",
                     Ge => "fcmp oge",
+                    BitAnd | BitOr | BitXor | Shl | Shr | UShr => unreachable!("the checker allows bit operations on Int only"),
                 };
                 let t = self.tmp();
                 self.line(format!("{t} = {inst} double {a}, {b}"));
