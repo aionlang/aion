@@ -576,6 +576,13 @@ println(total)
 println(shapes)                                           // each element prints as its own type
 ```
 
+Interfaces can take type parameters, `interface Container<T> { fn get(i: Int) -> T }`,
+and are used as `Container<Int>`; the standard library has
+`interface Comparable<T> { fn compareTo(other: T) -> Int }`, which `Int`, `Float`,
+`String`, `Char` and `Bool` satisfy.  A function that takes `Container<T>` cannot
+work out `T` from an argument that merely *has* the right methods; write it,
+`firstOf<String>(box)`.
+
 A `Circle` converts to a `Shape` automatically wherever a `Shape` is expected —
 arguments, variables, fields, list elements, return values, `Shape?`.  The
 methods must match in name, parameter types and result type; the error says what
@@ -615,6 +622,22 @@ interface Loud { fn shout() -> String }
 fn String.shout() = this.upper() + "!"          // methods added to built-in types count
 fn twice<T: Loud>(x: T) = x.shout() + x.shout()
 println(twice("hey"))                           // HEY!HEY!
+```
+
+A bound can mention the parameter itself, which is how "can be ordered" is written:
+
+```aion
+type Version(major: Int, minor: Int) {
+    fn compareTo(other: Version) = if major != other.major { major - other.major } else { minor - other.minor }
+    fn toString() = "v$major.$minor"
+}
+
+fn newest<T: Comparable<T>>(a: T, b: T) = if a.compareTo(b) >= 0 { a } else { b }
+println(newest(Version(1, 2), Version(1, 10)), newest(3, 9), newest("pear", "apple"))
+
+versions := [Version(1, 10), Version(1, 2), Version(0, 9)]
+println(versions.sorted(), versions.maxOrNull())          // [v0.9, v1.2, v1.10]  v1.10
+println(["kiwi", "fig", "banana"].sortedBy { it.length() })   // [fig, kiwi, banana]
 ```
 
 Without a bound, a generic function still works for any type whose operations
@@ -787,5 +810,5 @@ memory, and `panic(...)` — unless a [`try`](#cleanup-and-errors) catches it.
 
 ## Not (yet) in the language
 
-Concurrency, inheritance and generic interfaces.  (Plain object types are not checked against
+Concurrency and inheritance.  (Plain object types are not checked against
 being unset; use `T?` where a value may be missing.)

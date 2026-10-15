@@ -52,6 +52,9 @@ migration notes at the end of this section.
   enclosing block is left (end, `return`, `break`, `continue`, panic); `try { … }
   catch e { … }` is an expression that catches `panic(...)` and runtime errors
   (the message is a String, or `it` without a name).
+- **Generic interfaces and ordering.** `interface Container<T>`, bounds that mention
+  the parameter (`T: Comparable<T>`), the standard `Comparable<T>`, `sorted()`,
+  `sortedBy`, `maxOrNull`, `minOrNull`; `sortedWith` is now a stable merge sort.
 - **Value equality and hashing.** A type with `equals(other)` is compared by value
   by `==`, `contains` and friends; with `hashCode()` too it can be a `Map` key or
   `Set` member.

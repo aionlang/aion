@@ -143,6 +143,14 @@ Always in scope.
 * `hashOf(value) -> Int` — a non-negative hash of an Int, Float, Bool, String
   (by content) or object (by identity); what `Map` and `Set` use.
 
+#### Ordering
+
+`interface Comparable<T> { fn compareTo(other: T) -> Int }` (negative, zero or
+positive); `Int`, `Float`, `String`, `Char` and `Bool` have `compareTo`, and any
+type with a matching method qualifies.  `List` has `sorted()`, `sortedDescending()`,
+`sortedBy(key)`, `sortedWith(compare)` (a stable O(n log n) merge sort),
+`maxOrNull()` and `minOrNull()`.
+
 #### Collections
 
 `Array<T>` is built into the compiler (see the [language guide](language.md#collections));
