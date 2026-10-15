@@ -1,0 +1,6 @@
+import cli
+p := cli.parser("tool", "does a thing")
+p.option("level", "l", "how much", "3")
+println("before")
+p.parseOrExit(["-h"])
+println("not reached")

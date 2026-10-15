@@ -1,0 +1,58 @@
+// cli: options, flags, positionals, clusters, defaults, repeats and error messages
+import cli
+
+fn parser() -> cli.Parser {
+    p := cli.parser("tool", "does a thing")
+    p.flag("verbose", "v", "say more")
+    p.flag("quiet", "q", "say less")
+    p.flag("force", "f", "do it anyway")
+    p.option("output", "o", "where to write", "out.txt")
+    p.option("count", "n", "how many")
+    p.multi("include", "I", "extra directory")
+    p.positional("input", "the file to read")
+    p.rest("others", "more files")
+    return p
+}
+
+fn show(arguments: List<String>) {
+    p := parser()
+    a := p.parse(arguments)
+    if a == null {
+        println(if p.wantsHelp { "HELP" } else { "ERROR " + p.message })
+        return
+    }
+    println(a.flag("verbose"), a.flag("quiet"), a.flag("force"), a.get("output"), a.get("count"), a.getInt("count", -1), a.get("input"), a.rest(), a.all("include"))
+    println(a.has("output"), a.has("count"), a.has("verbose"), a.has("input"), a.has("nothing"), a.get("nothing") == "", a.flag("nothing"))
+}
+
+show(["in.txt"])
+show(["--verbose", "in.txt", "--output", "result.bin"])
+show(["--output=x.y", "-v", "in.txt", "more1", "more2"])
+show(["-vqf", "in.txt"])
+show(["-o", "o.txt", "-n5", "in.txt"])
+show(["-ofile", "-vn", "7", "in.txt"])
+show(["-I", "a", "--include", "b", "-Ic", "--include=d", "in.txt"])
+show(["in.txt", "--", "--verbose", "-x", "-"])
+show(["-", "-5", "--count", "-3"])
+show(["--output=", "in.txt"])
+show(["--count=1=2", "in.txt"])
+
+show([])
+show(["--help"])
+show(["in.txt", "-h"])
+show(["--bogus", "in.txt"])
+show(["-z", "in.txt"])
+show(["--output"])
+show(["in.txt", "-o"])
+show(["--verbose=yes", "in.txt"])
+show(["-vz", "in.txt"])
+show(["--verbose"])
+
+solo := cli.parser("solo")
+solo.positional("only", "the only one")
+println(solo.parse(["a", "b"]) == null, solo.message, cli.lastError())
+println(solo.parse(["a"])!!.get("only"), cli.lastError() == "")
+
+println(parser().usage())
+bare := cli.parser("bare")
+print(bare.usage())

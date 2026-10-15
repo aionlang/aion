@@ -1,0 +1,55 @@
+false false false out.txt  -1 in.txt [] []
+false false false true false true false
+true false false result.bin  -1 in.txt [] []
+true false true true false true false
+true false false x.y  -1 in.txt [more1, more2] []
+true false true true false true false
+true true true out.txt  -1 in.txt [] []
+false false true true false true false
+false false false o.txt 5 5 in.txt [] []
+true true false true false true false
+true false false file 7 7 in.txt [] []
+true true true true false true false
+false false false out.txt  -1 in.txt [] [a, b, c, d]
+false false false true false true false
+false false false out.txt  -1 in.txt [--verbose, -x, -] []
+false false false true false true false
+false false false out.txt -3 -3 - [-5] []
+false true false true false true false
+false false false   -1 in.txt [] []
+true false false true false true false
+false false false out.txt 1=2 -1 in.txt [] []
+false true false true false true false
+ERROR missing <input>
+HELP
+HELP
+ERROR unknown option --bogus
+ERROR unknown option -z
+ERROR --output needs a value
+ERROR -o needs a value
+ERROR --verbose does not take a value
+ERROR unknown option -z
+ERROR missing <input>
+true unexpected argument 'b' unexpected argument 'b'
+a true
+Usage: tool [options] <input> [others...]
+
+does a thing
+
+Options:
+  -v, --verbose          say more
+  -q, --quiet            say less
+  -f, --force            do it anyway
+  -o, --output <value>   where to write (default: out.txt)
+  -n, --count <value>    how many
+  -I, --include <value>  extra directory (repeatable)
+  -h, --help             show this help
+
+Arguments:
+  input                  the file to read
+  others                 more files
+
+Usage: bare [options]
+
+Options:
+  -h, --help  show this help

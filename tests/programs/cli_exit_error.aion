@@ -1,0 +1,10 @@
+// exit: 2
+// stderr: tool: unknown option --bogus
+import cli
+p := cli.parser("tool", "does a thing")
+p.flag("verbose", "v", "say more")
+p.positional("input", "the file")
+a := p.parseOrExit(["--verbose", "x"])
+println("parsed", a.get("input"))
+p.parseOrExit(["--bogus"])
+println("not reached")

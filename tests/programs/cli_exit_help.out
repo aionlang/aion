@@ -1,0 +1,8 @@
+before
+Usage: tool [options]
+
+does a thing
+
+Options:
+  -l, --level <value>  how much (default: 3)
+  -h, --help           show this help

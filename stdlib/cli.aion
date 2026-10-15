@@ -1,0 +1,245 @@
+// import cli
+//
+//   p := cli.parser("wc-lite", "count lines and words")
+//   p.flag("words", "w", "count words instead of lines")
+//   p.option("min", "m", "ignore lines shorter than this", "0")
+//   p.positional("file", "the file to read")
+//   p.rest("more", "more files")
+//   a := p.parseOrExit(args())               // prints usage and exits on --help or a mistake
+//   println(a.flag("words"), a.getInt("min"), a.get("file"), a.rest())
+//
+// Command-line arguments the usual way: `--long`, `--long=value`, `--long value`, `-s`, `-s value`, `-abc` (several
+// flags together), `-ovalue`, `--` (everything after it is a plain argument), and an automatic `--help`.
+
+import os
+
+lastErr := ""
+
+// What went wrong in the latest `parse`.
+fn lastError() -> String = lastErr
+
+type Spec(name: String, short: String, help: String, kind: String, default: String)
+
+// What the command line said.
+type Args(values: Map<String, String>, lists: Map<String, List<String>>, given: Set<String>, extra: List<String>) {
+    // Was this flag given?
+    fn flag(name: String) = values.getOrNull(name) == "true"
+    // The value of an option or positional (its default when it was not given; "" if it has none).
+    fn get(name: String) = values.getOrNull(name) ?: ""
+    fn getInt(name: String, fallback: Int = 0) = get(name).toIntOrNull() ?: fallback
+    fn getFloat(name: String, fallback: Float = 0.0) = get(name).toFloatOrNull() ?: fallback
+    // Was the option, flag or positional given explicitly?
+    fn has(name: String) = given.contains(name)
+    // Every value of a repeatable option (`multi`), in order.
+    fn all(name: String) -> List<String> = lists.getOrNull(name) ?: List<String>()
+    // The arguments after the declared positionals (the `rest` ones).
+    fn rest() = extra
+}
+
+type Parser(program: String, about: String) {
+    specs: List<Spec> = List<Spec>()
+    message: String = ""
+    wantsHelp: Bool = false
+
+    // A switch: `--verbose`, `-v`.  `short` may be "".
+    fn flag(name: String, short: String, help: String) { specs.add(Spec(name, short, help, "flag", "")) }
+    // An option with a value: `--output file`, `--output=file`, `-o file`; used when absent: `default`.
+    fn option(name: String, short: String, help: String, default: String = "") { specs.add(Spec(name, short, help, "option", default)) }
+    // An option that may be repeated: `-I a -I b`; read with `args.all(name)`.
+    fn multi(name: String, short: String, help: String) { specs.add(Spec(name, short, help, "multi", "")) }
+    // A required argument by position.
+    fn positional(name: String, help: String) { specs.add(Spec(name, "", help, "positional", "")) }
+    // Any further arguments (zero or more); read with `args.rest()`.
+    fn rest(name: String, help: String) { specs.add(Spec(name, "", help, "rest", "")) }
+
+    fn find(name: String, isShort: Bool) -> Spec? {
+        for s in specs {
+            if (s.kind == "flag" || s.kind == "option" || s.kind == "multi") && (if isShort { s.short == name } else { s.name == name }) { return s }
+        }
+        return null
+    }
+
+    // The help text.
+    fn usage() -> String {
+        line := "Usage: $program"
+        line += " [options]"
+        for s in specs {
+            if s.kind == "positional" { line += " <${s.name}>" }
+            if s.kind == "rest" { line += " [${s.name}...]" }
+        }
+        out := StringBuilder()
+        out.append(line).appendLine()
+        if about.length() > 0 { out.appendLine().appendLine(about) }
+        labels := List<String>()
+        helps := List<String>()
+        for s in specs {
+            if s.kind == "positional" || s.kind == "rest" { continue }
+            label := (if s.short.length() > 0 { "-${s.short}, " } else { "    " }) + "--${s.name}"
+            if s.kind != "flag" { label += " <value>" }
+            labels.add(label)
+            note := s.help
+            if s.kind == "option" && s.default.length() > 0 { note += " (default: ${s.default})" }
+            if s.kind == "multi" { note += " (repeatable)" }
+            helps.add(note)
+        }
+        labels.add("-h, --help")
+        helps.add("show this help")
+        width := 0
+        for l in labels { width = width.max(l.length()) }
+        out.appendLine().appendLine("Options:")
+        for i in 0..labels.size() {
+            out.append("  ").append(labels[i].padRight(width + 2)).appendLine(helps[i])
+        }
+        first := true
+        for s in specs {
+            if s.kind != "positional" && s.kind != "rest" { continue }
+            if first { out.appendLine().appendLine("Arguments:") }
+            first = false
+            out.append("  ").append(s.name.padRight(width + 2)).appendLine(s.help)
+        }
+        return out.toString()
+    }
+
+    fn problem(text: String) -> Args? {
+        message = text
+        lastErr = text
+        return null
+    }
+
+    // Read the arguments.  Returns null when there is nothing to run: `wantsHelp` is true after --help,
+    // and otherwise `message` (also `cli.lastError()`) says what is wrong.
+    fn parse(arguments: List<String>) -> Args? {
+        message = ""
+        wantsHelp = false
+        lastErr = ""
+        values := Map<String, String>()
+        lists := Map<String, List<String>>()
+        given := Set<String>()
+        positionals := List<String>()
+        for s in specs {
+            if s.kind == "flag" { values[s.name] = "false" }
+            if s.kind == "option" && s.default.length() > 0 { values[s.name] = s.default }
+        }
+
+        i := 0
+        plain := false
+        while i < arguments.size() {
+            arg := arguments[i]
+            i += 1
+            if plain || arg == "-" || !arg.startsWith("-") || (arg.length() > 1 && arg.charAt(1).isDigit() && find(arg.substring(1, 2), true) == null) {
+                positionals.add(arg)
+                continue
+            }
+            if arg == "--" {
+                plain = true
+                continue
+            }
+            if arg == "--help" || arg == "-h" {
+                wantsHelp = true
+                return null
+            }
+            if arg.startsWith("--") {
+                body := arg.substring(2, arg.length())
+                eq := body.indexOf("=")
+                name := if eq < 0 { body } else { body.substring(0, eq) }
+                spec := find(name, false)
+                if spec == null { return problem("unknown option --$name") }
+                if spec.kind == "flag" {
+                    if eq >= 0 { return problem("--$name does not take a value") }
+                    values[name] = "true"
+                    given.add(name)
+                    continue
+                }
+                value := ""
+                if eq >= 0 {
+                    value = body.substring(eq + 1, body.length())
+                } else if i < arguments.size() {
+                    value = arguments[i]
+                    i += 1
+                } else {
+                    return problem("--$name needs a value")
+                }
+                store(spec, value, values, lists, given)
+                continue
+            }
+            // short options, possibly clustered: -abc, -ofile
+            letters := arg.substring(1, arg.length())
+            j := 0
+            while j < letters.length() {
+                letter := letters.substring(j, j + 1)
+                spec := find(letter, true)
+                if spec == null { return problem("unknown option -$letter") }
+                j += 1
+                if spec.kind == "flag" {
+                    values[spec.name] = "true"
+                    given.add(spec.name)
+                    continue
+                }
+                value := ""
+                if j < letters.length() {
+                    value = letters.substring(j, letters.length())
+                } else if i < arguments.size() {
+                    value = arguments[i]
+                    i += 1
+                } else {
+                    return problem("-$letter needs a value")
+                }
+                store(spec, value, values, lists, given)
+                break
+            }
+        }
+
+        extra := List<String>()
+        at := 0
+        for s in specs {
+            if s.kind == "positional" {
+                if at >= positionals.size() { return problem("missing <${s.name}>") }
+                values[s.name] = positionals[at]
+                given.add(s.name)
+                at += 1
+            }
+        }
+        hasRest := false
+        for s in specs {
+            if s.kind == "rest" { hasRest = true }
+        }
+        while at < positionals.size() {
+            extra.add(positionals[at])
+            at += 1
+        }
+        if extra.size() > 0 && !hasRest { return problem("unexpected argument '${extra[0]}'") }
+        return Args(values, lists, given, extra)
+    }
+
+    // Like `parse`, but on --help prints the usage and exits with 0, and on a mistake prints it with the usage to
+    // standard error and exits with 2.
+    fn parseOrExit(arguments: List<String>) -> Args {
+        result := parse(arguments)
+        if result != null { return result }
+        if wantsHelp {
+            print(usage())
+            os.exit(0)
+        }
+        eprintln("$program: $message")
+        eprint(usage())
+        os.exit(2)
+        return Args(Map<String, String>(), Map<String, List<String>>(), Set<String>(), List<String>())
+    }
+}
+
+fn store(spec: Spec, value: String, values: Map<String, String>, lists: Map<String, List<String>>, given: Set<String>) {
+    values[spec.name] = value
+    given.add(spec.name)
+    if spec.kind == "multi" {
+        list := lists.getOrNull(spec.name)
+        if list == null {
+            made := List<String>()
+            made.add(value)
+            lists[spec.name] = made
+        } else {
+            list.add(value)
+        }
+    }
+}
+
+fn parser(program: String, about: String = "") -> Parser = Parser(program, about)
