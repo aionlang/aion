@@ -1,0 +1,5 @@
+// exit: 1
+// stderr: cannot turn NaN into an Int
+println((1.0 / 0.0).toInt())
+println((0.0 / 0.0).toInt())
+println("not reached")

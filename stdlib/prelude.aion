@@ -67,6 +67,69 @@ fn String.split(separator: String) -> List<String> {
     return parts
 }
 
+// ── Numbers ─────────────────────────────────────────────────────
+
+// Int and Float convert only where you say so: n.toFloat(), x.toInt().
+fn Int.toFloat() -> Float = this + 0.0
+// Drops the fraction (towards zero); too-large values stop at the limits of Int, NaN stops the program.
+extern fn Float.toInt() -> Int = "aion_float_to_int"
+// Nearest whole number (halves go away from zero), and the next whole number down / up.
+extern fn Float.round() -> Int = "aion_float_round"
+extern fn Float.floor() -> Int = "aion_float_floor"
+extern fn Float.ceil() -> Int = "aion_float_ceil"
+extern fn Float.isNaN() -> Bool = "aion_float_is_nan"
+extern fn Float.isInfinite() -> Bool = "aion_float_is_inf"
+// 3.14159.format(2) is "3.14", 2.34567.roundTo(2) is 2.35 (decimal ties round to even, like printf).
+extern fn Float.format(decimals: Int) -> String = "aion_float_format"
+extern fn Float.roundTo(decimals: Int) -> Float = "aion_float_round_to"
+
+fn Int.abs() = if this < 0 { -this } else { this }
+fn Float.abs() = if this < 0.0 { -this } else { this }
+fn Int.sign() = if this < 0 { -1 } else if this > 0 { 1 } else { 0 }
+fn Float.sign() = if this < 0.0 { -1 } else if this > 0.0 { 1 } else { 0 }
+fn Int.min(other: Int) = if other < this { other } else { this }
+fn Int.max(other: Int) = if other > this { other } else { this }
+fn Float.min(other: Float) = if other < this { other } else { this }
+fn Float.max(other: Float) = if other > this { other } else { this }
+// The number, or `low` / `high` if it lies outside them.
+fn Int.clamp(low: Int, high: Int) = if this < low { low } else if this > high { high } else { this }
+fn Float.clamp(low: Float, high: Float) = if this < low { low } else if this > high { high } else { this }
+
+// n.pow(k) for k >= 0, wrapping on overflow like all Int arithmetic.
+fn Int.pow(exponent: Int) -> Int {
+    if exponent < 0 {
+        panic("pow needs a non-negative exponent")
+    }
+    result := 1
+    base := this
+    e := exponent
+    while e > 0 {
+        if e % 2 == 1 {
+            result *= base
+        }
+        base *= base
+        e /= 2
+    }
+    return result
+}
+
+// The largest number that divides both (always non-negative).
+fn Int.gcd(other: Int) -> Int {
+    a := abs()
+    b := other.abs()
+    while b != 0 {
+        t := a % b
+        a = b
+        b = t
+    }
+    return a
+}
+
+// The digits in another base, 2 to 36: 255.toRadix(16) is "ff".
+extern fn Int.toRadix(radix: Int) -> String = "aion_int_to_radix"
+fn Int.toHex() = toRadix(16)
+fn Int.toBinary() = toRadix(2)
+
 // ── Characters ──────────────────────────────────────────────────
 //
 // A Char is a Unicode code point: 'a', '\n', '\u{1F600}'.  c + 1 and c - 1 are

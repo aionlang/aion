@@ -1,0 +1,13 @@
+// Int and Float: conversions, rounding, formatting and helpers
+x := 7
+println(x.toFloat() / 2, 7 / 2, 3.99.toInt(), (-3.99).toInt(), 1e30.toInt())
+println(2.5.round(), (-2.5).round(), 2.4.round(), 2.5.floor(), (-2.5).floor(), 2.1.ceil(), (-2.1).ceil())
+println(3.14159.format(2), 2.0.format(0), 1234567.891.format(1), (-0.5).format(3), 1e6.format(0))
+println(2.675.roundTo(2), 2.5.roundTo(0), 1234.5678.roundTo(1))
+println((0.0 / 0.0).isNaN(), (1.0 / 0.0).isInfinite(), 1.5.isNaN(), 1.5.isInfinite())
+println((-5).abs(), 5.abs(), (-2.5).abs(), (-9).sign(), 0.sign(), 4.2.sign())
+println(3.min(9), 3.max(9), 3.5.min(1.5), 3.5.max(1.5), 15.clamp(0, 10), (-1).clamp(0, 10), 5.clamp(0, 10), 7.5.clamp(0.0, 5.0))
+println(2.pow(10), 3.pow(0), (-2).pow(3), 10.pow(18), 0.pow(0))
+println(12.gcd(18), (-12).gcd(18), 7.gcd(0), 0.gcd(0))
+println(255.toHex(), 255.toBinary(), 255.toRadix(8), (-255).toHex(), 0.toHex(), 35.toRadix(36))
+println(0xFF.toHex() == "ff", 1_000.toRadix(10))

@@ -2,6 +2,7 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -85,6 +86,60 @@ bool aion_strings_is_int(const char *s) {
     errno = 0;
     (void)strtoll(s, &end, 10);
     return end != s && *end == '\0' && errno == 0;
+}
+
+/* ── Numbers ──────────────────────────────────────────────────── */
+
+int64_t aion_float_to_int(double x) {
+    if (x != x) aion_panic("cannot turn NaN into an Int");
+    if (x >= 9223372036854775808.0) return INT64_MAX;
+    if (x <= -9223372036854775808.0) return INT64_MIN;
+    return (int64_t)x;
+}
+
+int64_t aion_float_round(double x) { return aion_float_to_int(round(x)); }
+int64_t aion_float_floor(double x) { return aion_float_to_int(floor(x)); }
+int64_t aion_float_ceil(double x) { return aion_float_to_int(ceil(x)); }
+bool aion_float_is_nan(double x) { return isnan(x); }
+bool aion_float_is_inf(double x) { return isinf(x); }
+
+static char *format_float(double x, int64_t decimals, int *length) {
+    if (decimals < 0 || decimals > 100) aion_panic("the number of decimals must be between 0 and 100");
+    int n = snprintf(NULL, 0, "%.*f", (int)decimals, x);
+    char *buf = malloc((size_t)n + 1);
+    if (!buf) aion_panic("out of memory");
+    snprintf(buf, (size_t)n + 1, "%.*f", (int)decimals, x);
+    *length = n;
+    return buf;
+}
+
+const char *aion_float_format(double x, int64_t decimals) {
+    int n;
+    char *buf = format_float(x, decimals, &n);
+    const char *s = aion_string_n(buf, (size_t)n);
+    free(buf);
+    return s;
+}
+
+double aion_float_round_to(double x, int64_t decimals) {
+    int n;
+    char *buf = format_float(x, decimals, &n);
+    double r = strtod(buf, NULL);
+    free(buf);
+    return r;
+}
+
+const char *aion_int_to_radix(int64_t v, int64_t radix) {
+    if (radix < 2 || radix > 36) aion_panic("the base must be between 2 and 36");
+    char buf[72];
+    int at = (int)sizeof buf;
+    uint64_t u = v < 0 ? 0 - (uint64_t)v : (uint64_t)v;
+    do {
+        buf[--at] = "0123456789abcdefghijklmnopqrstuvwxyz"[u % (uint64_t)radix];
+        u /= (uint64_t)radix;
+    } while (u);
+    if (v < 0) buf[--at] = '-';
+    return aion_string_n(buf + at, sizeof buf - (size_t)at);
 }
 
 /* ── Standard input ───────────────────────────────────────────── */

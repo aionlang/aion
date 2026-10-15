@@ -1,0 +1,5 @@
+// exit: 1
+// stderr: pow needs a non-negative exponent
+println(2.pow(3))
+println(2.pow(-1))
+println("not reached")
