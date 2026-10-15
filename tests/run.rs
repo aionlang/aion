@@ -372,6 +372,28 @@ fn arguments_after_the_script_reach_the_program() {
     assert_eq!(stdout(&out).lines().next().unwrap(), "1 [-O0]");
 }
 
+#[test]
+fn projects_can_link_system_libraries() {
+    let root = scratch("link");
+    // zlibCompileFlags() lives in libz, which is not linked unless the project asks for it
+    let source = "extern fn zlibCompileFlags() -> Int\nprintln(zlibCompileFlags() > 0)\n";
+    write(&root.join("main.aion"), source);
+    write(&root.join("aion.project"), "name = \"z\"\nlink = [\"z\"]\n");
+    let out = aion_in(&root, &[]);
+    assert_eq!(stdout(&out), "true\n", "{}", stderr(&out));
+
+    write(&root.join("aion.project"), "name = \"z\"\n");
+    let out = aion_in(&root, &[]);
+    assert!(!out.status.success(), "without `link` the symbol is undefined");
+
+    write(&root.join("aion.project"), "name = \"z\"\nlink = [\"-lz\"]\n");
+    let out = aion_in(&root, &[]);
+    assert!(stderr(&out).contains("is not a library name"), "{}", stderr(&out));
+    write(&root.join("aion.project"), "name = \"z\"\nlink = \"z\"\n");
+    let out = aion_in(&root, &[]);
+    assert!(stderr(&out).contains("`link` must be a list"), "{}", stderr(&out));
+}
+
 // ── documentation ───────────────────────────────────────────────────
 
 /// `(first line, info string, body)` of every fenced code block in `text`.

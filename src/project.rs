@@ -5,6 +5,7 @@
 //! version = "0.1.0"
 //! entry = "main.aion"             # default
 //! lib = "src/lib.aion"            # what `import myapp` loads when used as a dependency
+//! link = ["sqlite3"]              # system libraries (`-lsqlite3`) the C code of this package needs
 //!
 //! [dependencies]
 //! utils = { path = "../utils" }
@@ -31,6 +32,8 @@ pub struct Project {
     pub name: String,
     pub entry: PathBuf,
     pub lib: Option<PathBuf>,
+    /// System libraries to link (`-l<name>`).
+    pub link: Vec<String>,
     pub deps: Vec<Dependency>,
 }
 
@@ -71,8 +74,17 @@ pub struct Package {
     pub root: PathBuf,
     /// The module `import <dependency-name>` loads.
     pub lib: Option<PathBuf>,
+    /// System libraries this package's C code needs.
+    pub link: Vec<String>,
     /// Dependency name → index into the package list.
     pub deps: HashMap<String, usize>,
+}
+
+/// Is `name` fit to follow `-l`?  (No spaces or leading dashes: it ends up on a command line.)
+pub fn valid_library(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with('-')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '+' | '.'))
 }
 
 /// Find the nearest `aion.project` in `start` or its ancestors.
@@ -98,7 +110,7 @@ pub fn load(file: &Path) -> Result<Project> {
         }
     };
     for (k, _, line) in &toml.top {
-        if !["name", "version", "entry", "lib"].contains(&k.as_str()) {
+        if !["name", "version", "entry", "lib", "link"].contains(&k.as_str()) {
             return Err(Diagnostic::general(format!("{}:{line}: unknown key `{k}`", file.display())));
         }
     }
@@ -106,6 +118,18 @@ pub fn load(file: &Path) -> Result<Project> {
     let name = string("name")?.ok_or_else(|| err("missing `name`".into()))?;
     let entry = root.join(string("entry")?.unwrap_or_else(|| "main.aion".into()));
     let lib = string("lib")?.map(|l| root.join(l));
+    let link = match toml.top.iter().find(|(k, _, _)| k == "link") {
+        None => Vec::new(),
+        Some((_, Value::List(names), line)) => {
+            if let Some(bad) = names.iter().find(|n| !valid_library(n)) {
+                return Err(Diagnostic::general(format!("{}:{line}: `{bad}` is not a library name", file.display())));
+            }
+            names.clone()
+        }
+        Some((_, _, line)) => {
+            return Err(Diagnostic::general(format!("{}:{line}: `link` must be a list: [\"sqlite3\"]", file.display())));
+        }
+    };
 
     let mut deps = Vec::new();
     for (section, entries) in &toml.sections {
@@ -140,7 +164,7 @@ pub fn load(file: &Path) -> Result<Project> {
             deps.push(Dependency { name: dep.clone(), source });
         }
     }
-    Ok(Project { root, name, entry, lib, deps })
+    Ok(Project { root, name, entry, lib, link, deps })
 }
 
 // ── resolving dependencies ──────────────────────────────────────────
@@ -150,7 +174,12 @@ pub fn load(file: &Path) -> Result<Project> {
 pub fn resolve(project: Option<&Project>, entry_dir: &Path) -> Result<Vec<Package>> {
     let root = project.map_or_else(|| entry_dir.to_path_buf(), |p| p.root.clone());
     let mut r = Resolver {
-        packages: vec![Package { root: root.clone(), lib: project.and_then(|p| p.lib.clone()), deps: HashMap::new() }],
+        packages: vec![Package {
+            root: root.clone(),
+            lib: project.and_then(|p| p.lib.clone()),
+            link: project.map(|p| p.link.clone()).unwrap_or_default(),
+            deps: HashMap::new(),
+        }],
         by_root: HashMap::new(),
         lock: Lock::read(&root.join(LOCK_NAME)),
         lock_changed: false,
@@ -189,7 +218,8 @@ impl Resolver {
                     let sub = dir.join(FILE_NAME).is_file().then(|| load(&dir.join(FILE_NAME))).transpose()?;
                     let lib = sub.as_ref().and_then(|p| p.lib.clone()).or_else(|| default_lib(&dir, &dep.name));
                     let idx = self.packages.len();
-                    self.packages.push(Package { root: dir.clone(), lib, deps: HashMap::new() });
+                    let link = sub.as_ref().map(|p| p.link.clone()).unwrap_or_default();
+                    self.packages.push(Package { root: dir.clone(), lib, link, deps: HashMap::new() });
                     self.by_root.insert(dir, idx);
                     if let Some(sub) = sub {
                         self.add_deps(idx, &sub.deps)?;
@@ -312,6 +342,7 @@ impl Lock {
 #[derive(Clone, Debug)]
 enum Value {
     Str(String),
+    List(Vec<String>),
     Table(Vec<(String, String)>),
 }
 
@@ -372,24 +403,19 @@ fn unquote(s: &str) -> std::result::Result<String, String> {
 }
 
 fn parse_value(s: &str) -> std::result::Result<Value, String> {
+    if let Some(inner) = s.strip_prefix('[') {
+        let inner = inner.strip_suffix(']').ok_or("expected `]`")?;
+        let items = split_commas(inner)
+            .into_iter()
+            .filter(|p| !p.trim().is_empty())
+            .map(|p| unquote_string(p.trim()))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        return Ok(Value::List(items));
+    }
     if let Some(inner) = s.strip_prefix('{') {
         let inner = inner.strip_suffix('}').ok_or("expected `}`")?;
         let mut fields = Vec::new();
-        // Split on commas that aren't inside quotes.
-        let (mut depth_quote, mut start) = (false, 0);
-        let mut pieces = Vec::new();
-        for (i, c) in inner.char_indices() {
-            match c {
-                '"' => depth_quote = !depth_quote,
-                ',' if !depth_quote => {
-                    pieces.push(&inner[start..i]);
-                    start = i + 1;
-                }
-                _ => {}
-            }
-        }
-        pieces.push(&inner[start..]);
-        for piece in pieces.into_iter().filter(|p| !p.trim().is_empty()) {
+        for piece in split_commas(inner).into_iter().filter(|p| !p.trim().is_empty()) {
             let (k, v) = piece.split_once('=').ok_or("expected `key = \"value\"`")?;
             let Value::Str(v) = parse_value(v.trim())? else { return Err("nested tables are not supported".into()) };
             fields.push((unquote(k.trim())?, v));
@@ -397,6 +423,24 @@ fn parse_value(s: &str) -> std::result::Result<Value, String> {
         return Ok(Value::Table(fields));
     }
     unquote_string(s).map(Value::Str)
+}
+
+/// Split on the commas that aren't inside quotes.
+fn split_commas(s: &str) -> Vec<&str> {
+    let (mut in_quote, mut start) = (false, 0);
+    let mut pieces = Vec::new();
+    for (i, c) in s.char_indices() {
+        match c {
+            '"' => in_quote = !in_quote,
+            ',' if !in_quote => {
+                pieces.push(&s[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    pieces.push(&s[start..]);
+    pieces
 }
 
 fn unquote_string(s: &str) -> std::result::Result<String, String> {
@@ -425,6 +469,17 @@ mod tests {
         let Value::Table(fields) = &entries[1].1 else { panic!() };
         assert_eq!(fields[0], ("git".into(), "https://x/y#z".into()));
         assert_eq!(fields[1], ("tag".into(), "v1".into()));
+    }
+
+    #[test]
+    fn parses_lists() {
+        let t = parse("link = [\"sqlite3\", \"m\"]\nnone = []\n").unwrap();
+        let Value::List(libs) = &t.top[0].1 else { panic!("expected a list") };
+        assert_eq!(libs, &["sqlite3", "m"]);
+        let Value::List(empty) = &t.top[1].1 else { panic!("expected a list") };
+        assert!(empty.is_empty());
+        assert!(parse("link = [\"a\"").is_err());
+        assert!(valid_library("sqlite3") && valid_library("stdc++") && !valid_library("-lx") && !valid_library("a b"));
     }
 
     #[test]

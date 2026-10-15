@@ -132,8 +132,12 @@ fn locate(input: Option<&Path>) -> Result<(PathBuf, Option<project::Project>), D
     }
 }
 
-/// Generated LLVM IR plus the C sources it must be linked with.
-type Compiled = (String, Vec<(String, &'static str)>);
+/// Generated LLVM IR plus the C sources and system libraries it must be linked with.
+struct Compiled {
+    ir: String,
+    c_sources: Vec<(String, &'static str)>,
+    libs: Vec<String>,
+}
 
 /// Everything up to (but not including) invoking the C toolchain.
 fn compile(map: &mut SourceMap, entry: &Path, project: Option<&project::Project>) -> Result<Compiled, Failure> {
@@ -142,7 +146,7 @@ fn compile(map: &mut SourceMap, entry: &Path, project: Option<&project::Project>
     let result = (|| {
         let loaded = loader::load(map, entry, packages)?;
         let program = sema::analyze(&loaded)?;
-        Ok::<_, Diagnostic>((codegen::emit(&program), loaded.c_sources))
+        Ok::<_, Diagnostic>(Compiled { ir: codegen::emit(&program), c_sources: loaded.c_sources, libs: loaded.libs })
     })();
     result.map_err(|d| (d, None))
 }
@@ -153,11 +157,11 @@ fn exe_name(stem: &str) -> String {
 
 /// Build (or reuse) the program for `ir` and run it.
 fn run_program(
-    ir: &str,
-    c_sources: &[(String, &'static str)],
+    program: &Compiled,
     opts: &toolchain::Options,
     program_args: &[String],
 ) -> Result<ExitCode, Diagnostic> {
+    let Compiled { ir, c_sources, libs } = program;
     let cached = std::env::var_os("AION_NO_CACHE").is_none();
     let exe = if cached {
         let mut parts: Vec<&[u8]> = vec![env!("CARGO_PKG_VERSION").as_bytes(), opts.opt_level.as_bytes(), ir.as_bytes()];
@@ -170,6 +174,9 @@ fn run_program(
             parts.push(name.as_bytes());
             parts.push(text.as_bytes());
         }
+        for lib in libs {
+            parts.push(lib.as_bytes());
+        }
         let bin_dir = cache::dir().join("bin");
         let exe = bin_dir.join(exe_name(&format!("{:016x}", cache::hash(&parts))));
         if !exe.is_file() {
@@ -177,7 +184,7 @@ fn run_program(
                 .map_err(|e| Diagnostic::general(format!("cannot create {}: {e}", bin_dir.display())))?;
             // Build beside the final name, then rename, so a crash never leaves a half-written binary.
             let partial = bin_dir.join(exe_name(&format!("partial-{}", std::process::id())));
-            toolchain::build(ir, c_sources, &partial, opts)?;
+            toolchain::build(ir, c_sources, libs, &partial, opts)?;
             std::fs::rename(&partial, &exe)
                 .map_err(|e| Diagnostic::general(format!("cannot store the build: {e}")))?;
             cache::trim(&bin_dir, 128);
@@ -185,7 +192,7 @@ fn run_program(
         exe
     } else {
         let exe = std::env::temp_dir().join(exe_name(&format!("aion-run-{}", std::process::id())));
-        toolchain::build(ir, c_sources, &exe, opts)?;
+        toolchain::build(ir, c_sources, libs, &exe, opts)?;
         exe
     };
 
@@ -250,11 +257,11 @@ fn run() -> Result<ExitCode, Failure> {
 
     let (entry, proj) = locate(cli.input.as_deref()).map_err(general)?;
     let mut map = SourceMap::default();
-    let (ir, c_sources) = compile(&mut map, &entry, proj.as_ref()).map_err(|(d, _)| (d, Some(map)))?;
+    let program = compile(&mut map, &entry, proj.as_ref()).map_err(|(d, _)| (d, Some(map)))?;
 
     match cli.command {
         Subcommand::EmitIr => {
-            print!("{ir}");
+            print!("{}", program.ir);
             Ok(ExitCode::SUCCESS)
         }
         Subcommand::Build => {
@@ -262,11 +269,11 @@ fn run() -> Result<ExitCode, Failure> {
                 entry.file_stem().map_or("a".into(), |s| s.to_string_lossy().into_owned())
             });
             let output = cli.output.clone().unwrap_or_else(|| PathBuf::from(exe_name(&stem)));
-            toolchain::build(&ir, &c_sources, &output, &cli.opts).map_err(general)?;
+            toolchain::build(&program.ir, &program.c_sources, &program.libs, &output, &cli.opts).map_err(general)?;
             eprintln!("built {}", output.display());
             Ok(ExitCode::SUCCESS)
         }
-        _ => run_program(&ir, &c_sources, &cli.opts, &cli.program_args).map_err(general),
+        _ => run_program(&program, &cli.opts, &cli.program_args).map_err(general),
     }
 }
 

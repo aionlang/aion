@@ -44,6 +44,8 @@ pub struct Loaded {
     pub modules: Vec<LoadedModule>,
     /// `(file name, source)` of the C half of every imported stdlib module.
     pub c_sources: Vec<(String, &'static str)>,
+    /// System libraries to link: the packages' `link` settings and the `// link:` lines of stdlib modules.
+    pub libs: Vec<String>,
 }
 
 /// `packages[0]` is the program itself; the rest are its (transitive) dependencies.
@@ -58,8 +60,12 @@ pub fn load(map: &mut SourceMap, entry: &Path, packages: Vec<Package>) -> Result
         by_key: HashMap::new(),
         stack: Vec::new(),
         c_sources: Vec::new(),
+        libs: Vec::new(),
         packages,
     };
+    for lib in loader.packages.iter().flat_map(|p| p.link.clone()).collect::<Vec<_>>() {
+        loader.link(lib);
+    }
 
     let (prelude, prelude_c) = embedded::stdlib_module("prelude").expect("stdlib/prelude.aion exists");
     if let Some(c) = prelude_c {
@@ -71,7 +77,7 @@ pub fn load(map: &mut SourceMap, entry: &Path, packages: Vec<Package>) -> Result
     let stem = entry.file_stem().map_or("main".into(), |s| s.to_string_lossy().into_owned());
     loader.add(key.display().to_string(), &entry.display().to_string(), &text, stem, Some(entry_dir), 0)?;
 
-    Ok(Loaded { modules: loader.modules, c_sources: loader.c_sources })
+    Ok(Loaded { modules: loader.modules, c_sources: loader.c_sources, libs: loader.libs })
 }
 
 struct Loader<'a> {
@@ -81,6 +87,7 @@ struct Loader<'a> {
     /// Keys of modules currently being loaded, for cycle detection.
     stack: Vec<String>,
     c_sources: Vec<(String, &'static str)>,
+    libs: Vec<String>,
     packages: Vec<Package>,
 }
 
@@ -186,6 +193,12 @@ impl Loader<'_> {
         }
     }
 
+    fn link(&mut self, lib: String) {
+        if !self.libs.contains(&lib) {
+            self.libs.push(lib);
+        }
+    }
+
     fn load_std(&mut self, name: &str, span: Span) -> Result<usize> {
         let key = format!("std:{name}");
         if let Some(&i) = self.by_key.get(&key) {
@@ -197,6 +210,12 @@ impl Loader<'_> {
         };
         if let Some(c) = c {
             self.c_sources.push((format!("{name}.c"), c));
+        }
+        // `// link: sqlite3 z` at the top of a module names the system libraries its C code needs.
+        for lib in aion.lines().take_while(|l| l.starts_with("//")).filter_map(|l| l.strip_prefix("// link:")) {
+            for name in lib.split_whitespace() {
+                self.link(name.to_string());
+            }
         }
         self.add(key, &format!("<std>/{name}.aion"), aion, name.to_string(), None, 0)
     }

@@ -26,12 +26,18 @@ fn candidates() -> Vec<String> {
     v
 }
 
-pub fn build(ir: &str, c_sources: &[(String, &'static str)], output: &Path, opts: &Options) -> Result<()> {
+pub fn build(
+    ir: &str,
+    c_sources: &[(String, &'static str)],
+    libs: &[String],
+    output: &Path,
+    opts: &Options,
+) -> Result<()> {
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
     let dir: PathBuf = std::env::temp_dir().join(format!("aion-{}-{nanos}", std::process::id()));
     std::fs::create_dir_all(&dir).map_err(io_err("create a temporary directory"))?;
 
-    let result = compile(&dir, ir, c_sources, output, opts);
+    let result = compile(&dir, ir, c_sources, libs, output, opts);
     if opts.keep_temps {
         eprintln!("kept intermediate files in {}", dir.display());
     } else {
@@ -40,7 +46,14 @@ pub fn build(ir: &str, c_sources: &[(String, &'static str)], output: &Path, opts
     result
 }
 
-fn compile(dir: &Path, ir: &str, c_sources: &[(String, &'static str)], output: &Path, opts: &Options) -> Result<()> {
+fn compile(
+    dir: &Path,
+    ir: &str,
+    c_sources: &[(String, &'static str)],
+    libs: &[String],
+    output: &Path,
+    opts: &Options,
+) -> Result<()> {
     let write = |name: &str, text: &str| -> Result<PathBuf> {
         let path = dir.join(name);
         std::fs::write(&path, text).map_err(io_err("write a temporary file"))?;
@@ -69,6 +82,9 @@ fn compile(dir: &Path, ir: &str, c_sources: &[(String, &'static str)], output: &
             .arg("-o")
             .arg(output)
             .arg("-lm");
+        for lib in libs {
+            cmd.arg(format!("-l{lib}"));
+        }
         if cfg!(windows) {
             cmd.arg("-lws2_32");
         }
