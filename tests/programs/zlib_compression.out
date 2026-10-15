@@ -1,0 +1,16 @@
+gzip true true 47
+zlib true true 47
+raw true true null
+1f8b08 78 78da
+hello world
+hello world
+50000 true true true true true
+null the level must be from 0 to 9
+0 0
+true true
+null the compressed data is cut short
+null true
+null null
+true
+null the compressed data is cut short
+true null the data expands to more than 1000000 bytes 50000000

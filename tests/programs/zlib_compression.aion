@@ -1,0 +1,51 @@
+// zlib: gzip, zlib and raw deflate round trips, known data, damaged data and size limits
+import zlib
+import hash
+import encoding
+
+text := "hello hello hello hello hello hello hello hello"
+data := text.toBytes()
+
+for name in ["gzip", "zlib", "raw"] {
+    packed := if name == "gzip" { zlib.gzip(data) } else if name == "zlib" { zlib.compress(data) } else { zlib.deflate(data) }!!
+    back := if name == "gzip" { zlib.gunzip(packed) } else if name == "zlib" { zlib.decompress(packed) } else { zlib.inflate(packed) }
+    println(name, packed.size() < data.size(), back?.toText() == text, zlib.decompressAny(packed)?.size())
+}
+
+// headers of the three formats
+println(zlib.gzip(data)!!.slice(0, 3).toHex(), zlib.compress(data)!!.slice(0, 1).toHex(), zlib.compress(data, 9)!!.slice(0, 2).toHex())
+// data compressed by other tools
+println(zlib.gunzip(encoding.base64Decode("H4sIAAAAAAAAA8tIzcnJVyjPL8pJAQCFEUoNCwAAAA==")!!)?.toText())
+println(zlib.decompress(encoding.base64Decode("eJzLSM3JyVcozy/KSQEAGgsEXQ==")!!)?.toText())
+
+// levels
+big := "abcdefghij".repeat(5000).toBytes()
+fast := zlib.gzip(big, 1)!!
+best := zlib.gzip(big, 9)!!
+stored := zlib.gzip(big, 0)!!
+println(big.size(), fast.size() < 1000, best.size() <= fast.size(), stored.size() > big.size(), zlib.gunzip(stored) == big, zlib.gunzip(best) == big)
+println(zlib.gzip(data, 10), zlib.lastError())
+
+// empty and binary
+println(zlib.gunzip(zlib.gzip(Bytes(0))!!)!!.size(), zlib.decompress(zlib.compress(Bytes(0))!!)!!.size())
+noise := Bytes(100000)
+seed := 12345
+for i in 0..noise.size() {
+    seed = (seed * 1103515245 + 12345).and(0x7fffffff)
+    noise[i] = seed.shr(16).and(255)
+}
+println(zlib.gunzip(zlib.gzip(noise)!!) == noise, hash.crc32Bytes(zlib.decompress(zlib.compress(noise)!!)!!, 0) == hash.crc32Bytes(noise, 0))
+
+// damaged, truncated and mismatched data
+packed := zlib.gzip(big)!!
+println(zlib.gunzip(packed.slice(0, packed.size() - 5)), zlib.lastError())
+println(zlib.gunzip("not compressed".toBytes()), zlib.lastError().startsWith("the data is not valid"))
+println(zlib.decompress(packed), zlib.gunzip(zlib.compress(data)!!))
+broken := zlib.gzip(data)!!
+broken[12] = broken[12].xor(255)
+println(zlib.gunzip(broken) == null || zlib.gunzip(broken)?.toText() != text)
+println(zlib.gunzip(Bytes(0)), zlib.lastError())
+
+// a decompression bomb is refused
+bomb := zlib.gzip(Bytes(50000000))!!
+println(bomb.size() < 100000, zlib.gunzip(bomb, 1000000), zlib.lastError(), zlib.gunzip(bomb)!!.size())

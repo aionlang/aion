@@ -1,0 +1,27 @@
+// import zlib
+//
+//   packed := zlib.gzip("hello hello hello hello".toBytes())
+//   println(packed.size() < 23, zlib.gunzip(packed)?.toText())
+//   zlib.decompress(zlib.compress(data))
+//
+// Compression with deflate in its three wrappers: gzip (files ending in .gz, HTTP bodies), zlib (the common
+// stream format) and raw deflate (zip entries).  Needs the zlib development package (zlib1g-dev, zlib-devel, ...)
+// when the program is built.
+// link: z
+
+extern fn lastError() -> String = "aion_zlib_error"
+extern fn __deflate(data: Bytes, level: Int, windowBits: Int) -> Bytes? = "aion_zlib_deflate"
+extern fn __inflate(data: Bytes, windowBits: Int, maxSize: Int) -> Bytes? = "aion_zlib_inflate"
+
+// Compress with a level from 0 (store) to 9 (smallest); -1 is the library's default (about 6).  Null on failure.
+fn gzip(data: Bytes, level: Int = -1) -> Bytes? = __deflate(data, level, 31)
+fn compress(data: Bytes, level: Int = -1) -> Bytes? = __deflate(data, level, 15)
+fn deflate(data: Bytes, level: Int = -1) -> Bytes? = __deflate(data, level, -15)
+
+// Decompress; null if the data is damaged or would expand past `maxSize` bytes (1 GiB unless you say otherwise;
+// `lastError()` says which).
+fn gunzip(data: Bytes, maxSize: Int = 1073741824) -> Bytes? = __inflate(data, 31, maxSize)
+fn decompress(data: Bytes, maxSize: Int = 1073741824) -> Bytes? = __inflate(data, 15, maxSize)
+fn inflate(data: Bytes, maxSize: Int = 1073741824) -> Bytes? = __inflate(data, -15, maxSize)
+// Either gzip or zlib, whichever the data is.
+fn decompressAny(data: Bytes, maxSize: Int = 1073741824) -> Bytes? = __inflate(data, 47, maxSize)
