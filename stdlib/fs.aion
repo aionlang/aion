@@ -1,0 +1,72 @@
+// import fs
+//
+//   text := fs.readText("notes.txt") ?: ""
+//   fs.writeText("out.txt", "hello\n")
+//   for name in fs.listDir(".") ?: [] { println(name) }
+//
+// Files and directories.  A call that can fail says so with `null`, `false` or -1,
+// and `fs.lastError()` then holds the reason ("No such file or directory").
+// Paths use "/" as the separator; see the `path` module for taking them apart.
+
+// ── C primitives (fs.c) ──────────────────────────────────────────
+
+extern fn readBytes(path: String) -> Bytes? = "aion_fs_read_bytes"
+extern fn __writeBytes(path: String, data: Bytes, append: Bool) -> Bool = "aion_fs_write_bytes"
+extern fn __writeText(path: String, text: String, append: Bool) -> Bool = "aion_fs_write_text"
+extern fn __list(path: String) -> String? = "aion_fs_list"
+
+// The reason the most recent call failed.
+extern fn lastError() -> String = "aion_fs_last_error"
+
+extern fn exists(path: String) -> Bool = "aion_fs_exists"
+extern fn isDir(path: String) -> Bool = "aion_fs_is_dir"
+extern fn isFile(path: String) -> Bool = "aion_fs_is_file"
+// Size in bytes, or -1 if the file is missing.
+extern fn size(path: String) -> Int = "aion_fs_size"
+// When the file last changed: milliseconds since 1970, or -1.
+extern fn modified(path: String) -> Int = "aion_fs_modified"
+
+// Create one directory; `mkdirs` also creates the missing parents and accepts an existing one.
+extern fn mkdir(path: String) -> Bool = "aion_fs_mkdir"
+extern fn mkdirs(path: String) -> Bool = "aion_fs_mkdirs"
+// Delete a file or an empty directory; `removeAll` also deletes a directory with everything in it.
+extern fn remove(path: String) -> Bool = "aion_fs_remove"
+extern fn removeAll(path: String) -> Bool = "aion_fs_remove_all"
+extern fn rename(from: String, to: String) -> Bool = "aion_fs_rename"
+extern fn copy(from: String, to: String) -> Bool = "aion_fs_copy"
+
+// The working directory, and changing it.
+extern fn cwd() -> String = "aion_fs_cwd"
+extern fn chdir(path: String) -> Bool = "aion_fs_chdir"
+// The full path with `.`, `..` and links resolved; null if it does not exist.
+extern fn absolute(path: String) -> String? = "aion_fs_absolute"
+
+// The place for temporary files ($TMPDIR or /tmp), and a fresh empty directory in it.
+extern fn tempDir() -> String = "aion_fs_temp_dir"
+extern fn makeTempDir(prefix: String) -> String? = "aion_fs_make_temp_dir"
+
+// ── Reading and writing ──────────────────────────────────────────
+
+// The file's text (up to a zero byte, if it has one), or null if it can't be read.
+fn readText(path: String) -> String? = readBytes(path)?.toText()
+
+// The lines of a text file without their line breaks, or null.
+fn readLines(path: String) -> List<String>? = readText(path)?.lines()
+
+// Replace the file's contents (creating it); false on failure.
+fn writeText(path: String, text: String) -> Bool = __writeText(path, text, false)
+fn writeBytes(path: String, data: Bytes) -> Bool = __writeBytes(path, data, false)
+fn writeLines(path: String, lines: List<String>) -> Bool = writeText(path, lines.join("\n") + "\n")
+
+// Add to the end of the file (creating it).
+fn appendText(path: String, text: String) -> Bool = __writeText(path, text, true)
+fn appendBytes(path: String, data: Bytes) -> Bool = __writeBytes(path, data, true)
+
+// The names (not full paths) in a directory, sorted; null if it can't be read.
+fn listDir(path: String) -> List<String>? {
+    text := __list(path)
+    if text == null {
+        return null
+    }
+    return if text.length() == 0 { List<String>() } else { text.split("\n") }
+}

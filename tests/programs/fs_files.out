@@ -1,0 +1,23 @@
+false null -1
+true true true false 8
+one
+two
+ [one, two]
+true 3
+true 4
+true true 5
+true 6
+false true true true
+false
+File exists
+[bin, notes.txt, x] [z] [f.txt]
+null null
+true true
+true false true
+true false No such file or directory
+false
+true false
+true -1
+true true true
+true false true
+true

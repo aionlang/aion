@@ -1,0 +1,37 @@
+// fs: reading, writing, listing and removing files
+import fs
+import path
+
+dir := fs.makeTempDir("aion-fs-test-")!!
+defer fs.removeAll(dir)
+file := path.join(dir, "notes.txt")
+
+println(fs.exists(file), fs.readText(file), fs.size(file))
+println(fs.writeText(file, "one\ntwo\n"), fs.exists(file), fs.isFile(file), fs.isDir(file), fs.size(file))
+println(fs.readText(file), fs.readLines(file))
+println(fs.appendText(file, "three\n"), fs.readLines(file)!!.size())
+println(fs.writeLines(file, ["a", "b"]), fs.readText(file)!!.length())
+
+data := bytesOf([0, 255, 10, 13, 0])
+println(fs.writeBytes(path.join(dir, "bin"), data), fs.readBytes(path.join(dir, "bin")) == data, fs.size(path.join(dir, "bin")))
+println(fs.appendBytes(path.join(dir, "bin"), bytesOf([1])), fs.readBytes(path.join(dir, "bin"))!!.size())
+
+sub := path.join(dir, "x/y/z")
+println(fs.mkdir(sub), fs.mkdirs(sub), fs.isDir(sub), fs.mkdirs(sub))
+println(fs.mkdir(sub))
+println(fs.lastError())
+fs.writeText(path.join(sub, "f.txt"), "deep")
+println(fs.listDir(dir), fs.listDir(path.join(dir, "x/y")), fs.listDir(sub))
+println(fs.listDir(path.join(dir, "nope")), fs.listDir(file))
+
+println(fs.copy(file, path.join(dir, "copy.txt")), fs.readText(path.join(dir, "copy.txt")) == fs.readText(file))
+println(fs.rename(path.join(dir, "copy.txt"), path.join(dir, "moved.txt")), fs.exists(path.join(dir, "copy.txt")), fs.exists(path.join(dir, "moved.txt")))
+println(fs.remove(path.join(dir, "moved.txt")), fs.remove(path.join(dir, "moved.txt")), fs.lastError())
+println(fs.remove(path.join(dir, "x")))
+println(fs.removeAll(path.join(dir, "x")), fs.exists(path.join(dir, "x")))
+println(fs.modified(file) > 1_600_000_000_000, fs.modified(path.join(dir, "nope")))
+
+before := fs.cwd()
+println(fs.chdir(dir), path.basename(fs.cwd()) == path.basename(dir), fs.absolute("notes.txt") == path.join(fs.absolute(dir)!!, "notes.txt"))
+println(fs.chdir(before), fs.chdir(path.join(dir, "nope")), fs.absolute("nope-nope") == null)
+println(fs.tempDir().length() > 0)
