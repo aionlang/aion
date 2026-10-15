@@ -254,7 +254,7 @@ impl<'a> Checker<'a> {
         self.instance_of.borrow_mut().insert(id, (g, args.clone()));
 
         let subst: Subst = Rc::new(gt.tparams.iter().cloned().zip(args.iter().copied()).collect());
-        let fields = self.type_fields(gt.module, td, &subst)?;
+        let fields = self.type_fields(gt.module, td, &subst, &[])?;
         self.t.update_type(id, |ti| ti.fields = fields);
 
         let module_name = &self.module_names[gt.module];

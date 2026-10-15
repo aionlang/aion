@@ -1,0 +1,2 @@
+// error: generic types cannot take part in inheritance
+open type A<T>(x: T)

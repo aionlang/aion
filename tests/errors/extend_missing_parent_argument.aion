@@ -1,0 +1,3 @@
+// error: `A` is missing the argument `x`
+open type A(x: Int)
+type B : A

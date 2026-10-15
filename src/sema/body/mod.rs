@@ -30,7 +30,7 @@ pub(super) fn check_fn(ck: &Checker, id: FnId, work: &Work) -> Result<hir::Func>
             FnBody::Expr(e) => lambda_assigned(|f| walk_expr(e, false, f)),
             FnBody::Extern { .. } => HashSet::new(),
         },
-        Work::Ctor { decl, .. } => lambda_assigned(|f| {
+        Work::Ctor { decl, .. } | Work::TypeInit { decl, .. } => lambda_assigned(|f| {
             decl.fields.iter().filter_map(|fl| fl.init.as_ref()).for_each(|e| walk_expr(e, false, f));
             decl.inits.iter().for_each(|blk| walk_stmts(blk, false, f));
             if let Some(c) = &decl.ctor {
@@ -74,6 +74,55 @@ pub(super) fn check_fn(ck: &Checker, id: FnId, work: &Work) -> Result<hir::Func>
                     }
                 }),
             }
+        }
+
+        // allocate, run the type's initialiser on the new object, hand it back
+        Work::Ctor { ty, .. } if ck.t.ty(*ty).init.is_some() => {
+            let init = ck.t.ty(*ty).init.expect("checked by the guard");
+            let this = cx.new_local("this", Ty::Obj(*ty));
+            let mut args = vec![cx.local_expr(this)];
+            args.extend((0..info.params.len()).map(|i| cx.local_expr(i)));
+            Some(vec![
+                hir::Stmt::Let(this, Some(mk(K::New(*ty), Ty::Obj(*ty)))),
+                hir::Stmt::Expr(mk(K::Call { func: init, args }, Ty::Void)),
+                hir::Stmt::Return(Some(cx.local_expr(this))),
+            ])
+        }
+
+        // the part of construction that a subtype's constructor reuses on its own object
+        Work::TypeInit { ty, decl } => {
+            cx.this = Some(*ty);
+            let mut body = Vec::new();
+            let fields = ck.t.ty(*ty).fields.clone();
+            let inherited = ck.t.ty(*ty).parent.map_or(0, |p| ck.t.ty(p).fields.len());
+
+            // The parent first, with the arguments written after the colon.
+            if let (Some(parent), Some(clause)) = (ck.t.ty(*ty).parent, &decl.parent) {
+                let init = ck.t.ty(parent).init.expect("an open type has an initialiser");
+                body.push(hir::Stmt::Expr(cx.call_fn(init, Some(cx.local_expr(0)), &clause.args, clause.span)?));
+            }
+            // Primary-constructor parameters that are fields of this type (the others went to the parent).
+            for (i, p) in decl.primary.iter().flatten().enumerate() {
+                let index = fields.iter().position(|f| f.name == p.name.name).expect("every parameter is a field");
+                if index >= inherited {
+                    body.push(hir::Stmt::SetField { obj: cx.local_expr(0), index, value: cx.local_expr(i + 1) });
+                }
+            }
+            for f in &decl.fields {
+                if let Some(init) = &f.init {
+                    let index = fields.iter().position(|g| g.name == f.name.name).unwrap();
+                    let v = cx.value_expected(init, Some(fields[index].ty))?;
+                    let value = cx.coerce(v, fields[index].ty, init.span)?;
+                    body.push(hir::Stmt::SetField { obj: cx.local_expr(0), index, value });
+                }
+            }
+            for blk in &decl.inits {
+                body.extend(cx.block(blk)?);
+            }
+            if let Some(c) = &decl.ctor {
+                body.extend(cx.block(&c.body)?);
+            }
+            Some(body)
         }
 
         Work::Ctor { ty, decl, subst } => {

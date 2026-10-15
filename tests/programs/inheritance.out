@@ -1,0 +1,8 @@
+  [animal init: Rex]
+  [dog init: labrador]
+Rex has 4 legs Rex 4 ...
+Max has 4 legs and is a labrador with 2 tricks
+Dog(name=Max, legs=4, sound=..., breed=labrador, tricks=2)
+  [animal init: Polly]
+Polly has 2 legs Polly says hello 2
+Parrot(name=Polly, legs=2, sound=..., word=hello)

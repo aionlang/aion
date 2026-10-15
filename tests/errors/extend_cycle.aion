@@ -1,0 +1,3 @@
+// error: extends itself, directly or through other types
+open type A : B
+open type B : A

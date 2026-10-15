@@ -1,0 +1,5 @@
+// error: `x` is already a field of the parent type
+open type A(x: Int)
+type B : A(1) {
+  x: Int
+}

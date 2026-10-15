@@ -1,0 +1,29 @@
+// Inheritance: inherited fields and methods, parent constructor arguments, initialisation order
+open type Animal(name: String, legs: Int = 4) {
+    sound: String = "..."
+    init { println("  [animal init: $name]") }
+    fn describe() = "$name has $legs legs"
+    fn rename(newName: String) { name = newName }
+}
+type Dog(name: String, breed: String) : Animal(name) {
+    tricks: Int = 0
+    init { println("  [dog init: $breed]") }
+    fn learn() { tricks += 1 }
+    fn card() = "${describe()} and is a $breed with $tricks tricks"
+}
+open type Bird(name: String) : Animal(name, legs: 2)
+type Parrot(name: String, word: String) : Bird(name) {
+    fn speak() = "$name says $word"
+}
+
+d := Dog("Rex", "labrador")
+println(d.describe(), d.name, d.legs, d.sound)
+d.learn()
+d.learn()
+d.rename("Max")
+println(d.card())
+println(d)
+
+p := Parrot("Polly", "hello")
+println(p.describe(), p.speak(), p.legs)
+println(p)

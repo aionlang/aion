@@ -1,0 +1,2 @@
+// error: unknown type `Nope`
+type B : Nope(1)

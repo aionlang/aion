@@ -1,0 +1,3 @@
+// error: `B` cannot extend `A`: it is not `open`
+type A(x: Int)
+type B(x: Int) : A(x)

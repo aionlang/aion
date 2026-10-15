@@ -38,6 +38,15 @@ pub struct TypeInfo {
     pub array_elem: Option<Ty>,
     /// For an `interface`: the methods a type needs to be used as it.
     pub iface: Option<Vec<IfaceMethod>>,
+    /// `type Dog : Animal(…)`: the type this one extends.
+    pub parent: Option<TypeId>,
+    /// Declared `open type`, so others may extend it.
+    pub open: bool,
+    /// The initialiser (everything a constructor does after allocating) of a type that
+    /// is open or extends another, so a subtype's constructor can run it on its own object.
+    pub init: Option<FnId>,
+    /// Methods taken over from the parent and not replaced.
+    pub inherited: HashSet<String>,
 }
 
 impl TypeInfo {
@@ -51,6 +60,10 @@ impl TypeInfo {
             ctor: usize::MAX,
             array_elem: None,
             iface: None,
+            parent: None,
+            open: false,
+            init: None,
+            inherited: HashSet::new(),
         }
     }
 }
@@ -175,6 +188,8 @@ pub enum Work<'a> {
     Fn { decl: &'a ast::FnDecl, subst: Subst },
     Method { decl: &'a ast::FnDecl, subst: Subst },
     Ctor { ty: TypeId, decl: &'a ast::TypeDecl, subst: Subst },
+    /// The initialiser of a type that is open or extends another (`this`, then the constructor's parameters).
+    TypeInit { ty: TypeId, decl: &'a ast::TypeDecl },
     /// A module's top-level statements.
     Init { stmts: Vec<&'a ast::Stmt> },
 }
@@ -409,11 +424,11 @@ impl<'a> Checker<'a> {
         let mut own_ifaces: Vec<(TypeId, &ast::InterfaceDecl)> = Vec::new();
         for item in &module.ast.items {
             match item {
-                Item::Type(td) if td.open || td.parent.is_some() => {
-                    return Err(Diagnostic::new("inheritance is not available yet", td.name.span));
+                Item::Type(td) if !td.type_params.is_empty() && (td.open || td.parent.is_some()) => {
+                    return Err(Diagnostic::new("generic types cannot take part in inheritance", td.name.span));
                 }
                 Item::Type(td) if td.type_params.is_empty() => {
-                    let id = self.t.add_type(TypeInfo::new(td.name.name.clone()));
+                    let id = self.t.add_type(TypeInfo { open: td.open, ..TypeInfo::new(td.name.name.clone()) });
                     self.t.define(mi, &td.name, Sym::Type(id))?;
                     own_types.push((id, td));
                 }
@@ -498,9 +513,32 @@ impl<'a> Checker<'a> {
             self.t.update_type(id, |ti| ti.iface = Some(methods));
         }
 
-        // 3. Field types: primary-constructor parameters first, then body fields.
+        // 3a. Parents: `type Dog : Animal(…)`.  Parents come first, so a child sees their fields and methods.
         for &(id, td) in &own_types {
-            let fields = self.type_fields(mi, td, &empty)?;
+            let Some(parent) = &td.parent else { continue };
+            let pid = match self.t.lookup(mi, &parent.name.name) {
+                Some(Sym::Type(pid)) => pid,
+                Some(Sym::GenericType(_)) => {
+                    return Err(Diagnostic::new("generic types cannot take part in inheritance", parent.name.span));
+                }
+                _ => return Err(Diagnostic::new(format!("unknown type `{}`", parent.name.name), parent.name.span)),
+            };
+            let p = self.t.ty(pid);
+            if p.iface.is_some() {
+                return Err(Diagnostic::new(format!("`{}` is an interface, which a type implements by having its methods, not by extending it", p.name), parent.name.span));
+            }
+            if !p.open {
+                return Err(Diagnostic::new(format!("`{}` cannot extend `{}`: it is not `open`", td.name.name, p.name), parent.name.span)
+                    .hint(format!("declare it `open type {}`", p.name)));
+            }
+            self.t.update_type(id, |ti| ti.parent = Some(pid));
+        }
+        let own_types = self.parents_first(own_types)?;
+
+        // 3. Field types: the parent's, then primary-constructor parameters, then body fields.
+        for &(id, td) in &own_types {
+            let inherited = self.t.ty(id).parent.map(|p| self.t.ty(p).fields.clone()).unwrap_or_default();
+            let fields = self.type_fields(mi, td, &empty, &inherited)?;
             self.t.update_type(id, |ti| ti.fields = fields);
         }
 
@@ -538,6 +576,7 @@ impl<'a> Checker<'a> {
             }
         }
         for &(id, td) in &own_types {
+            self.inherit_methods(id);
             for m in &td.methods {
                 self.declare_method(&module.name, mi, id, m, &empty)?;
             }
@@ -599,19 +638,35 @@ impl<'a> Checker<'a> {
     }
 
     /// The fields of a type declaration: primary-constructor parameters, then body fields.
-    fn type_fields(&self, mi: usize, td: &ast::TypeDecl, subst: &Subst) -> Result<Vec<hir::Field>> {
-        let mut fields: Vec<hir::Field> = Vec::new();
+    fn type_fields(
+        &self,
+        mi: usize,
+        td: &ast::TypeDecl,
+        subst: &Subst,
+        inherited: &[hir::Field],
+    ) -> Result<Vec<hir::Field>> {
+        let mut fields: Vec<hir::Field> = inherited.to_vec();
         let declared = td
             .primary
             .iter()
             .flatten()
-            .map(|p| (&p.name, &p.ty))
-            .chain(td.fields.iter().map(|f| (&f.name, &f.ty)));
-        for (name, ty) in declared {
-            if fields.iter().any(|g| g.name == name.name) {
-                return Err(Diagnostic::new(format!("duplicate field `{}`", name.name), name.span));
+            .map(|p| (&p.name, &p.ty, true))
+            .chain(td.fields.iter().map(|f| (&f.name, &f.ty, false)));
+        for (name, ty, is_param) in declared {
+            let ty = self.resolve_value_type(mi, ty, subst)?;
+            if let Some(prev) = fields.iter().position(|g| g.name == name.name) {
+                // A constructor parameter named like an inherited field just forwards its value to the parent.
+                if is_param && prev < inherited.len() && fields[prev].ty == ty {
+                    continue;
+                }
+                let msg = if prev < inherited.len() {
+                    format!("`{}` is already a field of the parent type", name.name)
+                } else {
+                    format!("duplicate field `{}`", name.name)
+                };
+                return Err(Diagnostic::new(msg, name.span));
             }
-            fields.push(hir::Field { name: name.name.clone(), ty: self.resolve_value_type(mi, ty, subst)? });
+            fields.push(hir::Field { name: name.name.clone(), ty });
         }
         if fields.len() > 64 {
             return Err(Diagnostic::new("a type can have at most 64 fields", td.name.span));
@@ -689,6 +744,47 @@ impl<'a> Checker<'a> {
         Ok(FnInfo { name: decl.name.name.clone(), module: mi, symbol, kind, params, ret: Cell::new(ret) })
     }
 
+    /// Order types so that every type comes after the one it extends (when both are in this module).
+    fn parents_first(
+        &self,
+        types: Vec<(TypeId, &'a ast::TypeDecl)>,
+    ) -> Result<Vec<(TypeId, &'a ast::TypeDecl)>> {
+        let mut done = Vec::new();
+        let mut pending = types;
+        while !pending.is_empty() {
+            let ids: Vec<TypeId> = pending.iter().map(|&(id, _)| id).collect();
+            let (ready, rest): (Vec<_>, Vec<_>) =
+                pending.into_iter().partition(|&(id, _)| self.t.ty(id).parent.is_none_or(|p| !ids.contains(&p)));
+            if ready.is_empty() {
+                let (_, td) = rest[0];
+                return Err(Diagnostic::new(
+                    format!("`{}` extends itself, directly or through other types", td.name.name),
+                    td.name.span,
+                ));
+            }
+            done.extend(ready);
+            pending = rest;
+        }
+        Ok(done)
+    }
+
+    /// A type starts with its parent's methods (the ones it does not replace).
+    fn inherit_methods(&self, id: TypeId) {
+        let Some(parent) = self.t.ty(id).parent else { return };
+        let p = self.t.ty(parent);
+        self.t.update_type(id, |ti| {
+            for (name, &f) in &p.methods {
+                if !ti.methods.contains_key(name) {
+                    ti.methods.insert(name.clone(), f);
+                    ti.inherited.insert(name.clone());
+                }
+            }
+            for (name, &g) in &p.generic_methods {
+                ti.generic_methods.entry(name.clone()).or_insert(g);
+            }
+        });
+    }
+
     /// Declare method `decl` on type `ty`.  Under `subst` for instances of generic types.
     fn declare_method(
         &self,
@@ -703,6 +799,9 @@ impl<'a> Checker<'a> {
         }
         let owner = self.t.ty(ty).name.clone();
         let existing = self.t.ty(ty);
+        if decl.modifier != ast::Modifier::None || existing.inherited.contains(&decl.name.name) {
+            return Err(Diagnostic::new("overriding methods is not available yet", decl.name.span));
+        }
         if existing.methods.contains_key(&decl.name.name) || existing.generic_methods.contains_key(&decl.name.name) {
             return Err(Diagnostic::new(
                 format!("`{owner}` already has a method `{}`", decl.name.name),
@@ -747,6 +846,23 @@ impl<'a> Checker<'a> {
             (None, None) => Vec::new(),
         };
         let owner = self.t.ty(ty).name.clone();
+        // Open types and subtypes split construction in two: allocate, then run the initialiser.
+        if td.open || td.parent.is_some() {
+            let mut init_params = vec![ParamInfo { name: "this".into(), ty: Ty::Obj(ty), default: None }];
+            init_params.extend(params.iter().cloned());
+            let init = self.declare_fn(
+                FnInfo {
+                    name: td.name.name.clone(),
+                    module: mi,
+                    symbol: method_symbol(module_name, &owner, ty, "init"),
+                    kind: FuncKind::Method,
+                    params: init_params,
+                    ret: Cell::new(Some(Ty::Void)),
+                },
+                Work::TypeInit { ty, decl: td },
+            );
+            self.t.update_type(ty, |ti| ti.init = Some(init));
+        }
         let id = self.declare_fn(
             FnInfo {
                 name: td.name.name.clone(),
@@ -811,7 +927,7 @@ impl<'a> Checker<'a> {
         let mut fns = self.fns.borrow_mut();
         let lazy = match &work {
             Work::Fn { subst, .. } | Work::Method { subst, .. } | Work::Ctor { subst, .. } => !subst.is_empty(),
-            Work::Init { .. } => false,
+            Work::Init { .. } | Work::TypeInit { .. } => false,
         };
         fns.push(FnSlot { info: Some(Rc::new(info)), work: Some(work), state: State::New, func: None, lazy, used: false });
         fns.len() - 1
@@ -862,7 +978,7 @@ impl<'a> Checker<'a> {
     fn note_instance(&self, mut d: Diagnostic, work: &Work) -> Diagnostic {
         let subst = match work {
             Work::Fn { subst, .. } | Work::Method { subst, .. } | Work::Ctor { subst, .. } => subst,
-            Work::Init { .. } => return d,
+            Work::Init { .. } | Work::TypeInit { .. } => return d,
         };
         if subst.is_empty() {
             return d;
