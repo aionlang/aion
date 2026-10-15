@@ -44,6 +44,7 @@ declare void @aion_panic_null() noreturn
 declare void @aion_panic_div_zero() noreturn
 declare void @aion_panic_index(i64, i64) noreturn
 declare void @aion_panic_unwrap() noreturn
+declare void @aion_set_args(i32, ptr)
 declare ptr @aion_array_new(i64, i64, i64)
 declare i64 @aion_hash_int(i64)
 declare i64 @aion_hash_str(ptr)
@@ -54,7 +55,7 @@ declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
 const RUNTIME_SYMBOLS: &[&str] = &[
     "aion_new_object", "aion_concat", "aion_int_to_str", "aion_float_to_str", "aion_bool_to_str",
     "aion_str_eq", "aion_str_cmp", "aion_print_str", "aion_print_int", "aion_print_float", "aion_print_bool",
-    "aion_panic_null", "aion_panic_div_zero", "aion_panic_index", "aion_panic_unwrap", "aion_array_new", "aion_hash_int", "aion_hash_str", "aion_frame_top",
+    "aion_panic_null", "aion_panic_div_zero", "aion_panic_index", "aion_panic_unwrap", "aion_set_args", "aion_array_new", "aion_hash_int", "aion_hash_str", "aion_frame_top",
 ];
 
 pub fn emit(p: &Program) -> String {
@@ -125,7 +126,7 @@ pub fn emit(p: &Program) -> String {
     out.push('\n');
     out.push_str(&funcs);
 
-    out.push_str("define i32 @main(i32 %argc, ptr %argv) {\n");
+    out.push_str("define i32 @main(i32 %argc, ptr %argv) {\n  call void @aion_set_args(i32 %argc, ptr %argv)\n");
     for &init in &p.inits {
         let _ = writeln!(out, "  call void @\"{}\"()", p.funcs[init].symbol);
     }

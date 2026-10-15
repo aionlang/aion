@@ -309,6 +309,23 @@ const char *aion_float_to_str(double f) {
 
 const char *aion_bool_to_str(int64_t b) { return aion_string(b ? "true" : "false"); }
 
+/* ── Program arguments ────────────────────────────────────────── */
+
+static int program_argc = 0;
+static char **program_argv = NULL;
+
+void aion_set_args(int argc, char **argv) {
+    program_argc = argc;
+    program_argv = argv;
+}
+
+/* The arguments after the program name. */
+int64_t aion_argc(void) { return program_argc > 0 ? program_argc - 1 : 0; }
+const char *aion_argv(int64_t i) {
+    if (i < 0 || i >= aion_argc()) aion_panic("argument index out of range");
+    return aion_string(program_argv[i + 1]);
+}
+
 /* ── Printing ─────────────────────────────────────────────────── */
 
 static void end_line(int64_t newline) {
