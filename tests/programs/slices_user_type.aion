@@ -1,0 +1,9 @@
+// Slices: collection[a..b] calls slice(a, b); open ends use 0 and size()
+type Digits(text: String) {
+    fn size() = text.length()
+    fn slice(from: Int, to: Int) = Digits(text.substring(from, to))
+}
+d := Digits("0123456789")
+println(d[2..5], d[..3], d[7..], d[..], d[1..=3], d[d.size() - 2..])
+i := 4
+println(d[i..i + 2], d[i - 1..=i + 1])

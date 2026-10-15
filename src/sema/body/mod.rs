@@ -1013,8 +1013,63 @@ impl<'c, 'a> Cx<'c, 'a> {
         Ok(())
     }
 
+    /// `collection[a..b]`  ⇒  `{ $s := collection; $s.slice(a, b) }`
+    ///
+    /// A missing start is 0, a missing end is `$s.size()`, and `..=b` ends at `b + 1`.
+    fn slice_expr(
+        &mut self,
+        obj: &ast::Expr,
+        start: Option<&ast::Expr>,
+        end: Option<&ast::Expr>,
+        inclusive: bool,
+        span: Span,
+    ) -> Result<hir::Expr> {
+        let whole = self.value(obj)?;
+        let method = match whole.ty {
+            Ty::Obj(t) => self.ck.t.ty(t).methods.get("slice").copied(),
+            other => self.ck.ext_method(other, "slice"),
+        };
+        let Some(method) = method else {
+            return Err(Diagnostic::new(format!("a {} cannot be sliced", self.name(whole.ty)), span)
+                .hint("slicing needs a `slice(from, to)` method"));
+        };
+        let tmp = self.new_local("$slice", whole.ty);
+        let int = |cx: &mut Self, e: &ast::Expr| -> Result<hir::Expr> {
+            let v = cx.value(e)?;
+            cx.coerce(v, Ty::Int, e.span)
+        };
+        let from = match start {
+            Some(e) => int(self, e)?,
+            None => mk(K::Int(0), Ty::Int),
+        };
+        let to = match end {
+            Some(e) => {
+                let v = int(self, e)?;
+                if inclusive {
+                    mk(K::Binary(hir::BinOp::Add, Box::new(v), Box::new(mk(K::Int(1), Ty::Int))), Ty::Int)
+                } else {
+                    v
+                }
+            }
+            None => {
+                let all = self.local_expr(tmp);
+                self.size_of(all, span)?
+            }
+        };
+        let recv = self.local_expr(tmp);
+        let call = self.call_values(method, Some(recv), vec![(from, span), (to, span)], span)?;
+        let ty = call.ty;
+        Ok(mk(K::Block(vec![hir::Stmt::Let(tmp, Some(whole))], Box::new(call)), ty))
+    }
+
     /// `collection.size()`
     fn size_of(&mut self, coll: hir::Expr, span: Span) -> Result<hir::Expr> {
+        if !matches!(coll.ty, Ty::Obj(_))
+            && let Some(size) = self.ck.ext_method(coll.ty, "size")
+        {
+            let call = self.call_values(size, Some(coll), Vec::new(), span)?;
+            return self.coerce(call, Ty::Int, span);
+        }
         if let Ty::Obj(t) = coll.ty {
             let info = self.ck.t.ty(t);
             if info.array_elem.is_some() {
@@ -1811,7 +1866,9 @@ impl<'c, 'a> Cx<'c, 'a> {
                 })?
             }
 
-            A::Slice { .. } => return Err(Diagnostic::new("slices are not available yet", e.span)),
+            A::Slice { obj, start, end, inclusive } => {
+                self.slice_expr(obj, start.as_deref(), end.as_deref(), *inclusive, e.span)?
+            }
 
             A::List(items) => self.list_literal(items, None, e.span)?,
             A::Map(entries) => self.map_literal(entries, None, e.span)?,
