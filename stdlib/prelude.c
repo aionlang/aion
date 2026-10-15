@@ -88,6 +88,83 @@ bool aion_strings_is_int(const char *s) {
     return end != s && *end == '\0' && errno == 0;
 }
 
+bool aion_strings_ends_with(const char *s, const char *suffix) {
+    size_t n = strlen(s), m = strlen(suffix);
+    return m <= n && memcmp(s + n - m, suffix, m) == 0;
+}
+
+int64_t aion_strings_last_index_of(const char *s, const char *needle) {
+    size_t n = strlen(s), m = strlen(needle);
+    if (m > n) return -1;
+    for (size_t i = n - m + 1; i-- > 0;)
+        if (memcmp(s + i, needle, m) == 0) return (int64_t)i;
+    return -1;
+}
+
+const char *aion_strings_trim_start(const char *s) {
+    while (isspace((unsigned char)*s)) s++;
+    return aion_string(s);
+}
+
+const char *aion_strings_trim_end(const char *s) {
+    size_t n = strlen(s);
+    while (n > 0 && isspace((unsigned char)s[n - 1])) n--;
+    return aion_string_n(s, n);
+}
+
+const char *aion_strings_repeat(const char *s, int64_t times) {
+    if (times < 0) aion_panic("repeat needs a non-negative count");
+    size_t n = strlen(s);
+    if (n != 0 && (uint64_t)times > (UINT32_MAX - 1) / n) aion_panic("the repeated text is too large");
+    size_t total = n * (size_t)times;
+    char *buf = malloc(total + 1);
+    if (!buf) aion_panic("out of memory");
+    for (int64_t i = 0; i < times; i++) memcpy(buf + (size_t)i * n, s, n);
+    const char *r = aion_string_n(buf, total);
+    free(buf);
+    return r;
+}
+
+/* Code points in the text: every byte that is not a UTF-8 continuation byte starts one. */
+int64_t aion_strings_char_count(const char *s) {
+    int64_t n = 0;
+    for (; *s; s++) n += ((unsigned char)*s & 0xC0) != 0x80;
+    return n;
+}
+
+/* Pad with copies of `fill` (one character) up to `width` characters. */
+const char *aion_strings_pad(const char *s, int64_t width, const char *fill, bool left) {
+    int64_t have = aion_strings_char_count(s);
+    size_t flen = strlen(fill);
+    if (aion_strings_char_count(fill) != 1) aion_panic("the padding must be exactly one character");
+    if (width <= have) return aion_string(s);
+    int64_t missing = width - have;
+    size_t n = strlen(s);
+    if ((uint64_t)missing > (UINT32_MAX - 1) / flen) aion_panic("the padded text is too large");
+    size_t total = n + (size_t)missing * flen;
+    char *buf = malloc(total + 1);
+    if (!buf) aion_panic("out of memory");
+    char *pad = buf + (left ? 0 : n);
+    for (int64_t i = 0; i < missing; i++) memcpy(pad + (size_t)i * flen, fill, flen);
+    memcpy(left ? buf + (size_t)missing * flen : buf, s, n);
+    const char *r = aion_string_n(buf, total);
+    free(buf);
+    return r;
+}
+
+/* A plain decimal number: digits, a point and an exponent (no hex, no "nan"/"inf", no spaces). */
+bool aion_strings_is_float(const char *s) {
+    if (*s == '\0' || strspn(s, "+-0123456789.eE") != strlen(s)) return false;
+    char *end;
+    errno = 0;
+    (void)strtod(s, &end);
+    return end != s && *end == '\0';
+}
+
+double aion_strings_to_float_or(const char *s, double fallback) {
+    return aion_strings_is_float(s) ? strtod(s, NULL) : fallback;
+}
+
 /* ── Numbers ──────────────────────────────────────────────────── */
 
 int64_t aion_float_to_int(double x) {

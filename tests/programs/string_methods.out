@@ -1,11 +1,14 @@
-[Hello, World] 16 12
-Hello World true
-7 4 -1
-HeLLo, WorLd Hello, there true bbbbbb
-HELLO, WORLD hello, world true true false
-[a, b, , c] 4 true
-[no separators] [, ] [abc]
-a/b/c
-42 -7 -1 -2 5 -4
-[the, quick, brown, fox] 16
-6 HéLLO
+[Hello, World  ] [  Hello, World] [Hello, World]
+true false true false
+3 -1 3 1
+ababab true ----------
+007 ab... long **é |   x|
+6 5 0
+true false true false
+[one, two, three] 0 [] [solo]
+3.5 -1000 -1 0.5 null null
+43 false false false
+255 255 -5 35 null null null null
+true
+alpha... 5
+beta.... 4

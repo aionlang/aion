@@ -1,23 +1,17 @@
-// exit: 1
-// stderr: substring(2, 5) is out of range for length 3
+// More String methods: endsWith, repeat, padding, trims, lines, parsing numbers
 s := "  Hello, World  "
-println("[" + s.trim() + "]", s.length(), s.trim().length())
-t := s.trim()
-println(t.substring(0, 5), t.substring(7, 12), t.substring(3, 3) == "")
-println(t.indexOf("World"), t.indexOf("o"), t.indexOf("xyz"))
-println(t.replace("l", "L"), t.replace("World", "there"), t.replace("", "!") == t, "aaa".replace("a", "bb"))
-println(t.upper(), t.lower(), t.contains("lo, W"), t.startsWith("Hell"), t.startsWith("ell"))
-
-parts := "a,b,,c".split(",")
-println(parts, parts.size(), parts[2] == "")
-println("no separators".split(","), "x".split("x"), "abc".split(""))
-println("a--b--c".split("--").join("/"))
-
-println("42".toIntOr(0), "-7".toIntOr(0), "4x".toIntOr(-1), "".toIntOr(-2), " 5".toIntOr(-3), "99999999999999999999".toIntOr(-4))
-
-// a tiny word-length report, using the pieces together
-line := "  the quick  brown fox "
-words := line.trim().split(" ").filter { it.length() > 0 }
-println(words, words.map { it.length() }.fold(0) { a, b -> a + b })
-println("héllo".length(), "héllo".upper())
-println("abc".substring(2, 5))
+println("[${s.trimStart()}] [${s.trimEnd()}] [${s.trim()}]")
+println("report.txt".endsWith(".txt"), "report.txt".endsWith("t.png"), "a".endsWith(""), "".endsWith("x"))
+println("a-b-c".lastIndexOf("-"), "abc".lastIndexOf("x"), "abc".lastIndexOf(""), "aaa".lastIndexOf("aa"))
+println("ab".repeat(3), "x".repeat(0) == "", "-".repeat(10))
+println("7".padLeft(3, "0"), "ab".padRight(5, "."), "long".padLeft(2), "é".padLeft(3, "*"), "|" + "x".padLeft(4) + "|")
+println("héllo".length(), "héllo".charCount(), "".charCount())
+println("".isEmpty(), " ".isEmpty(), " \t".isBlank(), "a".isBlank())
+println("one\ntwo\r\nthree\n".lines(), "".lines().size(), "\n".lines(), "solo".lines())
+println("3.5".toFloatOr(0.0), "-1e3".toFloatOr(0.0), "abc".toFloatOr(-1.0), ".5".toFloatOrNull(), "1.5x".toFloatOrNull(), "".toFloatOrNull())
+println("42".toFloatOrNull()!! + 1, "nan".isFloat(), "0x10".isFloat(), " 1".isFloat())
+println("ff".parseInt(16), "FF".parseInt(16), "-101".parseInt(2), "z".parseInt(36), "12".parseInt(2), "".parseInt(10), "+".parseInt(10), "-".parseInt(10))
+println(255.toHex().parseInt(16) == 255)
+for line in "alpha\nbeta".lines() {
+    println(line.padRight(8, ".") + line.length().toString().padLeft(2))
+}

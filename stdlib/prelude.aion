@@ -28,6 +28,49 @@ extern fn String.toIntOr(fallback: Int) -> Int = "aion_strings_to_int_or"
 extern fn String.isInt() -> Bool = "aion_strings_is_int"
 fn String.toIntOrNull() -> Int? = if isInt() { toIntOr(0) } else { null }
 
+// The number the text spells, or `fallback` if it is not a decimal number such as "3.5" or "1e-3".
+extern fn String.toFloatOr(fallback: Float) -> Float = "aion_strings_to_float_or"
+extern fn String.isFloat() -> Bool = "aion_strings_is_float"
+fn String.toFloatOrNull() -> Float? = if isFloat() { toFloatOr(0.0) } else { null }
+// The number the text spells in a base from 2 to 36 ("ff".parseInt(16) is 255), or null.
+fn String.parseInt(radix: Int) -> Int? {
+    if radix < 2 || radix > 36 || length() == 0 {
+        return null
+    }
+    negative := startsWith("-")
+    at := if negative || startsWith("+") { 1 } else { 0 }
+    if at == length() {
+        return null
+    }
+    value := 0
+    while at < length() {
+        c := lower().charAt(at)
+        digit := if c >= '0' && c <= '9' { c - '0' } else if c >= 'a' && c <= 'z' { c - 'a' + 10 } else { 99 }
+        if digit >= radix {
+            return null
+        }
+        value = value * radix + digit
+        at += 1
+    }
+    return if negative { -value } else { value }
+}
+
+extern fn String.endsWith(suffix: String) -> Bool = "aion_strings_ends_with"
+// Byte offset of the last `needle`, or -1.
+extern fn String.lastIndexOf(needle: String) -> Int = "aion_strings_last_index_of"
+extern fn String.trimStart() -> String = "aion_strings_trim_start"
+extern fn String.trimEnd() -> String = "aion_strings_trim_end"
+// "ab".repeat(3) is "ababab".
+extern fn String.repeat(times: Int) -> String = "aion_strings_repeat"
+// How many characters (not bytes) the text has.
+extern fn String.charCount() -> Int = "aion_strings_char_count"
+extern fn __pad(text: String, width: Int, fill: String, left: Bool) -> String = "aion_strings_pad"
+// Fill up to `width` characters: "7".padLeft(3, "0") is "007", "ab".padRight(4) is "ab  ".
+fn String.padLeft(width: Int, fill: String = " ") = __pad(this, width, fill, true)
+fn String.padRight(width: Int, fill: String = " ") = __pad(this, width, fill, false)
+fn String.isEmpty() = length() == 0
+fn String.isBlank() = trim().length() == 0
+
 // The character that starts at byte `index`.  s[i] is the same.
 extern fn String.charAt(index: Int) -> Char = "aion_str_char_at"
 fn String.get(index: Int) = charAt(index)
@@ -71,6 +114,9 @@ fn String.split(separator: String) -> List<String> {
 
 // Int and Float convert only where you say so: n.toFloat(), x.toInt().
 fn Int.toFloat() -> Float = this + 0.0
+fn Int.toString() -> String = "$this"
+fn Float.toString() -> String = "$this"
+fn Bool.toString() -> String = "$this"
 // Drops the fraction (towards zero); too-large values stop at the limits of Int, NaN stops the program.
 extern fn Float.toInt() -> Int = "aion_float_to_int"
 // Nearest whole number (halves go away from zero), and the next whole number down / up.
@@ -129,6 +175,18 @@ fn Int.gcd(other: Int) -> Int {
 extern fn Int.toRadix(radix: Int) -> String = "aion_int_to_radix"
 fn Int.toHex() = toRadix(16)
 fn Int.toBinary() = toRadix(2)
+
+// The lines of the text, without their line breaks (\n or \r\n); a final line break adds no empty line.
+fn String.lines() -> List<String> {
+    if length() == 0 {
+        return List<String>()
+    }
+    parts := replace("\r\n", "\n").split("\n")
+    if parts[parts.size() - 1].length() == 0 {
+        parts.pop()
+    }
+    return parts
+}
 
 // ── Characters ──────────────────────────────────────────────────
 //
