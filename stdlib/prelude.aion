@@ -18,8 +18,9 @@ extern fn String.upper() -> String = "aion_strings_upper"
 extern fn String.lower() -> String = "aion_strings_lower"
 // Bytes [start, end); stops the program if the range is invalid.
 extern fn String.substring(start: Int, end: Int) -> String = "aion_strings_substring"
-// Byte offset of the first `needle`, or -1.
-extern fn String.indexOf(needle: String) -> Int = "aion_strings_index_of"
+// Byte offset of the first `needle` at or after byte `from`, or -1.
+extern fn __index_from(s: String, needle: String, from: Int) -> Int = "aion_strings_index_from"
+fn String.indexOf(needle: String, from: Int = 0) = __index_from(this, needle, from)
 extern fn String.trim() -> String = "aion_strings_trim"
 extern fn String.replace(from: String, to: String) -> String = "aion_strings_replace"
 // The number the text spells, or `fallback` if it is not a whole number.

@@ -38,8 +38,11 @@ const char *aion_strings_substring(const char *s, int64_t start, int64_t end) {
     return aion_string_n(s + start, (size_t)(end - start));
 }
 
-int64_t aion_strings_index_of(const char *s, const char *needle) {
-    const char *p = strstr(s, needle);
+int64_t aion_strings_index_from(const char *s, const char *needle, int64_t from) {
+    int64_t n = (int64_t)strlen(s);
+    if (from < 0) from = 0;
+    if (from > n) return -1;
+    const char *p = strstr(s + from, needle);
     return p ? (int64_t)(p - s) : -1;
 }
 
