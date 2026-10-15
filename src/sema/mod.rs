@@ -381,7 +381,12 @@ pub fn analyze(loaded: &Loaded) -> Result<hir::Program> {
         // Types used as an interface that gets printed need their `toString` compiled.
         let pending: Vec<TypeId> = {
             let (ups, shown) = (ck.upcasts.borrow(), ck.stringified.borrow());
-            let pending: Vec<TypeId> = ups.iter().filter(|(_, i)| shown.contains(i)).map(|&(t, _)| t).collect();
+            let count = ck.types_len();
+            let mut pending: Vec<TypeId> = ups.iter().filter(|(_, i)| shown.contains(i)).map(|&(t, _)| t).collect();
+            // a printed open type prints each object as its own kind
+            for &root in shown.iter().filter(|&&r| ck.t.ty(r).iface.is_none()) {
+                pending.extend((0..count).filter(|&s| s == root || ck.is_subtype(s, root)));
+            }
             pending
         };
         for t in pending {
@@ -1179,6 +1184,10 @@ impl<'a> Checker<'a> {
         Ok((params, ret))
     }
 
+    fn types_len(&self) -> usize {
+        self.t.types.borrow().len()
+    }
+
     /// Is `ancestor` a proper parent, grandparent… of `ty`?
     pub fn is_subtype(&self, ty: TypeId, ancestor: TypeId) -> bool {
         let mut cur = self.t.ty(ty).parent;
@@ -1221,6 +1230,10 @@ impl<'a> Checker<'a> {
             for (index, name) in info.vlist.iter().enumerate() {
                 let entries = (0..count).filter(|&s| family(s)).map(|s| (s, self.t.ty(s).methods[name])).collect();
                 tables.push(hir::Dispatch { iface: root, method: index, entries });
+            }
+            if shown.contains(&root) && info.iface.is_none() {
+                let entries = (0..count).filter(|&s| family(s)).map(|s| (s, self.tostring.borrow()[&s])).collect();
+                tables.push(hir::Dispatch { iface: root, method: info.vlist.len(), entries });
             }
         }
         let ifaces: BTreeSet<TypeId> = ups.iter().map(|&(_, i)| i).collect();

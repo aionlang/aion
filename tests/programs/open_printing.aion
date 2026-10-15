@@ -1,0 +1,21 @@
+// An object of an open type prints as its real kind, whatever the variable says
+open type Animal(name: String) {
+    open fn sound() = "..."
+}
+open type Dog(name: String) : Animal(name) {
+    override fn sound() = "Woof"
+    breed: String = "mutt"
+}
+type Cat(name: String) : Animal(name) {
+    lives: Int = 9
+    fn toString() = "Cat<$name>"
+}
+type Puppy(name: String) : Dog(name)
+
+animals: List<Animal> = [Dog("Rex"), Cat("Tom"), Puppy("Bit"), Animal("generic")]
+println(animals)
+println(animals[0], animals[1], animals[2], animals[3])
+d: Dog = Puppy("Pup")
+println(d, "$d")
+none: Animal? = null
+println(none)

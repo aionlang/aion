@@ -1,0 +1,4 @@
+[Dog(name=Rex, breed=mutt), Cat<Tom>, Puppy(name=Bit, breed=mutt), Animal(name=generic)]
+Dog(name=Rex, breed=mutt) Cat<Tom> Puppy(name=Bit, breed=mutt) Animal(name=generic)
+Puppy(name=Pup, breed=mutt) Puppy(name=Pup, breed=mutt)
+null

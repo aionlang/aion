@@ -1823,6 +1823,23 @@ impl<'c, 'a> Cx<'c, 'a> {
                 );
                 Ok(mk(K::Block(vec![hir::Stmt::Let(tmp, Some(e))], Box::new(cond)), Ty::Str))
             }
+            Ty::Obj(ty) if self.ck.t.ty(ty).open => {
+                // an open type's objects may be of a subtype: dispatch to the real type's `toString`
+                self.ck.stringified.borrow_mut().insert(ty);
+                let slot = self.ck.t.ty(ty).vlist.len();
+                let tmp = self.new_local("$obj", e.ty);
+                let is_null = mk(K::IsNull(Box::new(self.local_expr(tmp))), Ty::Bool);
+                let call = mk(K::CallIface { iface: ty, method: slot, args: vec![self.local_expr(tmp)] }, Ty::Str);
+                let cond = mk(
+                    K::Cond {
+                        cond: Box::new(is_null),
+                        then: Box::new(mk(K::Str("null".into()), Ty::Str)),
+                        otherwise: Box::new(call),
+                    },
+                    Ty::Str,
+                );
+                Ok(mk(K::Block(vec![hir::Stmt::Let(tmp, Some(e))], Box::new(cond)), Ty::Str))
+            }
             Ty::Obj(ty) => {
                 let f = self.ck.tostring_fn(ty)?;
                 let tmp = self.new_local("$obj", e.ty);
