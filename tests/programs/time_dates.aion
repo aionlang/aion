@@ -1,0 +1,28 @@
+// time: dates, formatting, arithmetic and clocks
+import time
+from time import DateTime
+
+d := time.of(2024, 2, 29, 13, 5, 9)
+println(d, d.iso(), d.millis)
+println(d.year(), d.month(), d.day(), d.hour(), d.minute(), d.second(), d.weekday(), d.dayOfYear(), d.utcOffset())
+println(d.weekdayName(), d.monthName(), d.format("%d/%m/%y %b %j %F %T"))
+println(d.plusDays(1), d.plusDays(366), d.plusHours(11), d.plusMinutes(-65), d.plusSeconds(51), d.plus(time.day))
+println(d.plusMonths(1), d.plusMonths(12), d.plusYears(-1), time.of(2024, 1, 31).plusMonths(1))
+println(time.of(2023, 14, 35), time.of(1970, 1, 1).millis, time.of(1969, 12, 31, 23, 59, 59).millis, time.of(1969, 12, 31, 23, 59, 59))
+println(d.since(time.of(2024, 2, 28, 13, 5, 9)) == time.day, d.compareTo(d.plusDays(1)), d == time.of(2024, 2, 29, 13, 5, 9), d != d.plus(1))
+
+p := time.parse("2021-07-04 08:30:00")
+println(p, p!!.weekdayName(), time.parse("2021-07-04", "%Y-%m-%d"), time.parse("nonsense"), time.parse("2021-13-01"))
+println(time.parse("04 Jul 2021 10:15", "%d %b %Y %H:%M")!!.iso())
+
+println(time.second, time.minute, time.hour, time.day)
+now := time.millis()
+println(now > 1_700_000_000_000, time.now().year() >= 2024, time.now().millis - now < 5000)
+a := time.nanos()
+b := time.nanos()
+println(b >= a, time.monotonic() >= 0)
+slept := time.measure { sleep(30) }
+println(slept >= 25, slept < 2000)
+m := Map<DateTime, String>()
+m[time.of(2020, 1, 1)] = "new year"
+println(m[time.of(2020, 1, 1)], time.of(2020, 1, 1).year())

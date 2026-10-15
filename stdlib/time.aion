@@ -1,0 +1,100 @@
+// import time
+//
+//   started := time.monotonic()
+//   work()
+//   println("took ${time.monotonic() - started} ms")
+//
+//   now := time.now()                          // a DateTime (UTC)
+//   println(now.format("%Y-%m-%d"), now.year(), now.weekdayName())
+//   deadline := now.plusDays(30)
+//   println(time.of(2024, 2, 29).plusDays(1))  // 2024-03-01 00:00:00
+//
+// Instants are whole milliseconds since 1970-01-01 00:00:00 UTC.  A DateTime is UTC unless
+// built with `utc: false`, which uses the machine's time zone (the TZ variable).
+
+// ── Units, in milliseconds ───────────────────────────────────────
+
+second := 1000
+minute := 60000
+hour := 3600000
+day := 86400000
+
+// ── Clocks ───────────────────────────────────────────────────────
+
+// Wall-clock time in milliseconds since 1970.
+extern fn millis() -> Int = "aion_time_now"
+// A clock that only runs forward, in nanoseconds; differences are exact durations.
+extern fn nanos() -> Int = "aion_time_nanos"
+// The same clock in milliseconds.
+fn monotonic() -> Int = nanos() / 1000000
+
+// Run `action` and return how many milliseconds it took.
+fn measure(action: () -> Unit) -> Int {
+    start := nanos()
+    action()
+    return (nanos() - start) / 1000000
+}
+
+// ── Calendar ─────────────────────────────────────────────────────
+
+extern fn __field(ms: Int, utc: Bool, which: Int) -> Int = "aion_time_field"
+extern fn __format(ms: Int, utc: Bool, pattern: String) -> String = "aion_time_format"
+extern fn __make(year: Int, month: Int, day: Int, hour: Int, minute: Int, second: Int, utc: Bool) -> Int = "aion_time_make"
+extern fn __parse(text: String, pattern: String, utc: Bool) -> Int = "aion_time_parse"
+extern fn __parseFailed() -> Bool = "aion_time_parse_failed"
+
+// A moment, as milliseconds since 1970, viewed in UTC or in the local time zone.
+type DateTime(millis: Int, utc: Bool = true) {
+    fn year() = __field(millis, utc, 0)
+    // 1 to 12
+    fn month() = __field(millis, utc, 1)
+    fn day() = __field(millis, utc, 2)
+    fn hour() = __field(millis, utc, 3)
+    fn minute() = __field(millis, utc, 4)
+    fn second() = __field(millis, utc, 5)
+    // 0 is Sunday, 6 is Saturday.
+    fn weekday() = __field(millis, utc, 6)
+    fn dayOfYear() = __field(millis, utc, 7)
+    // Seconds east of UTC.
+    fn utcOffset() = __field(millis, utc, 8)
+    fn weekdayName() = __format(millis, utc, "%A")
+    fn monthName() = __format(millis, utc, "%B")
+
+    // C's strftime patterns: %Y year, %m month, %d day, %H hour, %M minute, %S second, %A weekday name,
+    // %b short month name, %j day of the year, %z zone offset, %F is %Y-%m-%d and %T is %H:%M:%S.
+    fn format(pattern: String) = __format(millis, utc, pattern)
+    // 2024-03-01T09:30:00Z (with the zone offset instead of Z for local times)
+    fn iso() = if utc { format("%Y-%m-%dT%H:%M:%SZ") } else { format("%Y-%m-%dT%H:%M:%S%z") }
+    fn toString() = format("%Y-%m-%d %H:%M:%S")
+
+    fn plus(ms: Int) = DateTime(millis + ms, utc)
+    fn plusSeconds(n: Int) = plus(n * 1000)
+    fn plusMinutes(n: Int) = plus(n * 60000)
+    fn plusHours(n: Int) = plus(n * 3600000)
+    fn plusDays(n: Int) = plus(n * 86400000)
+    // Months keep the day of the month where they can (Jan 31 + 1 month is Mar 3 or 2, like C's mktime).
+    fn plusMonths(n: Int) = DateTime(__make(year(), month() + n, day(), hour(), minute(), second(), utc), utc)
+    fn plusYears(n: Int) = plusMonths(n * 12)
+    // Milliseconds from `other` to this moment.
+    fn since(other: DateTime) = millis - other.millis
+    // The same moment viewed in another zone.
+    fn toUtc() = DateTime(millis, true)
+    fn toLocal() = DateTime(millis, false)
+    fn compareTo(other: DateTime) = if millis < other.millis { -1 } else if millis > other.millis { 1 } else { 0 }
+    fn equals(other: DateTime) = millis == other.millis
+    fn hashCode() = millis % 2147483647
+}
+
+// The current moment.
+fn now() = DateTime(millis())
+fn nowLocal() = DateTime(millis(), false)
+
+// A date and time of day; fields that are out of range carry over (month 13 is January of the next year).
+fn of(year: Int, month: Int, day: Int, hour: Int = 0, minute: Int = 0, second: Int = 0, utc: Bool = true) -> DateTime =
+    DateTime(__make(year, month, day, hour, minute, second, utc), utc)
+
+// Read a date from text with a strptime pattern ("%Y-%m-%d %H:%M"); null if it doesn't match.
+fn parse(text: String, pattern: String = "%Y-%m-%d %H:%M:%S", utc: Bool = true) -> DateTime? {
+    ms := __parse(text, pattern, utc)
+    return if __parseFailed() { null } else { DateTime(ms, utc) }
+}
