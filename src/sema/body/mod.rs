@@ -1718,6 +1718,35 @@ impl<'c, 'a> Cx<'c, 'a> {
         }
     }
 
+    /// `super.method(args)`: the parent type's version of a method, called directly.
+    fn super_call(
+        &mut self,
+        member: &ast::Ident,
+        type_args: &[ast::TypeRef],
+        args: &[ast::Arg],
+        span: Span,
+    ) -> Result<hir::Expr> {
+        let Some(this) = self.this else {
+            return Err(Diagnostic::new("`super` can only be used inside a method", member.span));
+        };
+        let own = self.ck.t.ty(this);
+        let Some(parent) = own.parent else {
+            return Err(Diagnostic::new(format!("`{}` does not extend another type, so it has no `super`", own.name), member.span));
+        };
+        let p = self.ck.t.ty(parent);
+        let Some(&id) = p.methods.get(&member.name) else {
+            return Err(Diagnostic::new(format!("`{}` has no method `{}`", p.name, member.name), member.span));
+        };
+        if !type_args.is_empty() {
+            return Err(Diagnostic::new(
+                format!("`{}` is not generic, so it takes no type arguments", member.name),
+                member.span,
+            ));
+        }
+        let recv = self.this_expr();
+        self.call_fn(id, recv, args, span)
+    }
+
     /// The constructor of `ty`; interfaces have none.
     fn ctor_of(&self, ty: TypeId, span: Span) -> Result<FnId> {
         let info = self.ck.t.ty(ty);
@@ -2411,6 +2440,10 @@ impl<'c, 'a> Cx<'c, 'a> {
                     None if n == "print" || n == "println" => self.print(n == "println", args, span),
                     None => Err(Diagnostic::new(format!("undefined function `{n}`"), callee.span)),
                 }
+            }
+
+            A::Field(obj, member) if matches!(&obj.kind, A::Name(n) if n == "super") && self.find_local("super").is_none() => {
+                self.super_call(member, type_args, args, span)
             }
 
             A::Field(obj, member) => {

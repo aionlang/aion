@@ -1,0 +1,3 @@
+// error: has no `super`
+type A {}
+fn A.x() = super.y()

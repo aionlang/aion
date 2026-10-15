@@ -1,0 +1,19 @@
+// super.method() runs the parent type's version of a method
+open type Animal(name: String) {
+    open fn sound() = "..."
+    open fn speak() = "$name says ${sound()}"
+}
+open type Dog(name: String) : Animal(name) {
+    override fn sound() = "Woof"
+}
+type Puppy(name: String) : Dog(name) {
+    override fn sound() = "Yip (" + super.sound() + ")"
+}
+type Cat(name: String) : Animal(name) {
+    override fn speak() = super.speak() + "!"
+    override fn sound() = "Meow"
+}
+println(Puppy("Bit").speak())
+println(Cat("Tom").speak())
+a: Animal = Cat("Zed")
+println(a.speak())

@@ -1,0 +1,4 @@
+// error: `A` has no method `nope`
+open type A { open fn f() = 1 }
+type B : A { override fn f() = super.nope() }
+B().f()
