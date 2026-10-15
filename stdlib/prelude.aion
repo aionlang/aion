@@ -254,9 +254,68 @@ fn bytesOf(values: List<Int>) -> Bytes {
     return out
 }
 
+// bytes[at..at+count] = src[from..from+count]; the ranges must lie inside both.
+extern fn Bytes.copyFrom(at: Int, src: Bytes, from: Int, count: Int) = "aion_bytes_copy"
+// Write the UTF-8 bytes of the text into the Bytes, starting at `at`.
+extern fn Bytes.putText(at: Int, text: String) = "aion_bytes_put"
+extern fn __bytes_text(b: Bytes, from: Int, to: Int) -> String = "aion_bytes_text"
+
 extern fn __bytes_equals(a: Bytes, b: Bytes) -> Bool = "aion_bytes_equals"
 extern fn __bytes_hash(b: Bytes) -> Int = "aion_bytes_hash"
 fn __bytes_str(b: Bytes) -> String = "Bytes(${b.toHex()})"
+
+// ── StringBuilder ───────────────────────────────────────────────
+
+// Builds text piece by piece, without copying everything built so far for each piece
+// (which `text += piece` in a loop does).
+//
+//   sb := StringBuilder()
+//   for i in 0..1000 { sb.append("line ").append("$i").appendLine() }
+//   println(sb.length(), sb.toString().lines().size())
+type StringBuilder {
+    data: Bytes = Bytes(32)
+    used: Int
+
+    // How many bytes have been added.
+    fn length() = used
+    fn isEmpty() = used == 0
+
+    fn reserve(extra: Int) {
+        need := used + extra
+        if need > data.size() {
+            capacity := data.size() * 2
+            if capacity < need {
+                capacity = need
+            }
+            bigger := Bytes(capacity)
+            bigger.copyFrom(0, data, 0, used)
+            data = bigger
+        }
+    }
+
+    fn append(text: String) -> StringBuilder {
+        reserve(text.length())
+        data.putText(used, text)
+        used += text.length()
+        return this
+    }
+    fn appendChar(c: Char) -> StringBuilder = append(c.toString())
+    fn appendLine(text: String = "") -> StringBuilder {
+        append(text)
+        return append("\n")
+    }
+
+    // Forget everything; or keep only the first `length` bytes.
+    fn clear() { used = 0 }
+    fn truncate(length: Int) {
+        if length < 0 || length > used {
+            panic("truncate(${length}) is out of range for length $used")
+        }
+        used = length
+    }
+
+    fn toString() = __bytes_text(data, 0, used)
+}
 
 // ── Ordering ────────────────────────────────────────────────────
 
@@ -502,12 +561,12 @@ type List<T> {
     }
 
     fn join(separator: String = ", ") -> String {
-        out := ""
+        out := StringBuilder()
         for i in 0..count {
-            if i > 0 { out += separator }
-            out += "${items[i]}"
+            if i > 0 { out.append(separator) }
+            out.append("${items[i]}")
         }
-        return out
+        return out.toString()
     }
     fn toString() = "[" + join() + "]"
 }

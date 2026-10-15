@@ -405,6 +405,33 @@ int64_t aion_bytes_index_of(const void *b, int64_t value, int64_t from) {
     return -1;
 }
 
+static void check_range(const char *what, int64_t at, int64_t count, int64_t size) {
+    if (at < 0 || count < 0 || at > size || count > size - at) {
+        char msg[128];
+        snprintf(msg, sizeof msg, "%s [%lld, +%lld) is out of range for size %lld", what, (long long)at,
+                 (long long)count, (long long)size);
+        aion_panic(msg);
+    }
+}
+
+void aion_bytes_copy(void *dst, int64_t at, const void *src, int64_t from, int64_t count) {
+    check_range("destination", at, count, aion_bytes_size(dst));
+    check_range("source", from, count, aion_bytes_size(src));
+    memmove((uint8_t *)dst + at, (const uint8_t *)src + from, (size_t)count);
+}
+
+void aion_bytes_put(void *dst, int64_t at, const char *text) {
+    size_t n = strlen(text);
+    check_range("destination", at, (int64_t)n, aion_bytes_size(dst));
+    memcpy((uint8_t *)dst + at, text, n);
+}
+
+/* Bytes [from, to) as text. */
+const char *aion_bytes_text(const void *b, int64_t from, int64_t to) {
+    check_range("text", from, to - from, aion_bytes_size(b));
+    return aion_string_n((const char *)b + from, (size_t)(to - from));
+}
+
 /* The bytes of a String (without its NUL). */
 void *aion_str_to_bytes(const char *s) {
     size_t n = strlen(s);

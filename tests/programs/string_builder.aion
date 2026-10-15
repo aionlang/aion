@@ -1,0 +1,25 @@
+// StringBuilder: building text without quadratic copying
+sb := StringBuilder()
+println(sb.length(), sb.isEmpty(), "[" + sb.toString() + "]")
+sb.append("Hello").append(", ").append("World").appendChar('!')
+println(sb, sb.length())
+sb.appendLine().appendLine("second line").append("é")
+println(sb.toString().lines(), sb.length())
+sb.truncate(5)
+println(sb)
+sb.clear()
+println(sb.isEmpty(), sb.append("again"))
+
+big := StringBuilder()
+for i in 0..20000 {
+    big.append("line ").append("$i").appendLine()
+}
+text := big.toString()
+println(big.length(), text.length(), text.lines().size(), text.lines()[19999], text.startsWith("line 0\nline 1\n"))
+
+println(["a", "b", "c"].join("-"), [1, 2, 3].join(), List<String>().join() == "")
+
+b := Bytes(6)
+b.putText(1, "hey")
+b.copyFrom(4, b, 1, 2)
+println(b, b.toText().length())

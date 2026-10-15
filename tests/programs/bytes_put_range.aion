@@ -1,0 +1,7 @@
+// exit: 1
+// stderr: destination [1, +3) is out of range for size 2
+b := Bytes(2)
+b.putText(0, "ab")
+println(b)
+b.putText(1, "abc")
+println("not reached")
