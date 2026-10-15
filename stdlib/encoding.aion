@@ -1,0 +1,42 @@
+// import encoding
+//
+//   encoding.base64("hello")                       // aGVsbG8=
+//   encoding.base64Decode("aGVsbG8=")?.toText()    // hello
+//   encoding.urlEncode("a b&c")                    // a%20b%26c
+//   encoding.uuid()                                // 3f0c1a52-9b7e-4d6a-8f21-5c0e7a1b9d34
+//
+// Text encodings.  Hex lives on Bytes itself: `bytes.toHex()` and `"ff00".fromHex()`.
+
+import random
+
+extern fn __b64(data: Bytes, url: Bool, pad: Bool) -> String = "aion_enc_base64_encode"
+extern fn base64DecodeBytes(text: String) -> Bytes? = "aion_enc_base64_decode"
+extern fn __urlEncode(text: String, keepSlash: Bool) -> String = "aion_enc_url_encode"
+extern fn __urlDecode(text: String, plusIsSpace: Bool) -> String? = "aion_enc_url_decode"
+
+// Base64 of Bytes (or of a text's UTF-8 bytes), with = padding.
+fn base64Bytes(data: Bytes) -> String = __b64(data, false, true)
+fn base64(text: String) -> String = __b64(text.toBytes(), false, true)
+
+// The URL-safe alphabet (- and _ instead of + and /), without padding: for tokens and file names.
+fn base64UrlBytes(data: Bytes) -> String = __b64(data, true, false)
+fn base64Url(text: String) -> String = __b64(text.toBytes(), true, false)
+
+// Decode either alphabet, with or without padding; null if the text is not Base64.
+fn base64Decode(text: String) -> Bytes? = base64DecodeBytes(text)
+
+// Percent-encoding for a URL part: everything but letters, digits and - . _ ~ becomes %XX.
+fn urlEncode(text: String) -> String = __urlEncode(text, false)
+// The same, but "/" stays: for a path.
+fn urlEncodePath(text: String) -> String = __urlEncode(text, true)
+// Undo percent-encoding; null for a broken %XX.  `plusIsSpace` is for form data ("a+b" is "a b").
+fn urlDecode(text: String, plusIsSpace: Bool = false) -> String? = __urlDecode(text, plusIsSpace)
+
+// A random version-4 UUID such as 3f0c1a52-9b7e-4d6a-8f21-5c0e7a1b9d34, from the secure source.
+fn uuid() -> String {
+    b := random.secureBytes(16)
+    b[6] = b[6].and(15).or(64)
+    b[8] = b[8].and(63).or(128)
+    h := b.toHex()
+    return h.substring(0, 8) + "-" + h.substring(8, 12) + "-" + h.substring(12, 16) + "-" + h.substring(16, 20) + "-" + h.substring(20, 32)
+}

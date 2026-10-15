@@ -1,0 +1,23 @@
+// encoding: Base64, percent-encoding and UUIDs
+import encoding
+
+for text in ["", "f", "fo", "foo", "foob", "fooba", "foobar"] {
+    println("[${encoding.base64(text)}] [${encoding.base64Url(text)}]")
+}
+println(encoding.base64("Many hands make light work."))
+println(encoding.base64Bytes(bytesOf([251, 255, 254, 0, 1])), encoding.base64UrlBytes(bytesOf([251, 255, 254, 0, 1])))
+println(encoding.base64Decode("Zm9vYmFy")?.toText(), encoding.base64Decode("Zm9vYg==")?.toText(), encoding.base64Decode("Zm9vYg")?.toText())
+println(encoding.base64Decode("-_8")?.toHex(), encoding.base64Decode("+/8=")?.toHex(), encoding.base64Decode("Zm9v\nYmFy ")?.toText())
+println(encoding.base64Decode("Zm9vY"), encoding.base64Decode("Zm9v!"), encoding.base64Decode("Zg=a"), encoding.base64Decode("Zh=="), encoding.base64Decode("Z"), encoding.base64Decode("")?.size())
+big := Bytes(1000)
+for i in 0..1000 {
+    big[i] = i % 256
+}
+println(encoding.base64Decode(encoding.base64Bytes(big)) == big, encoding.base64Decode(encoding.base64UrlBytes(big)) == big)
+
+println(encoding.urlEncode("a b&c=d/é~-._"), encoding.urlEncodePath("/dir name/é.txt"))
+println(encoding.urlDecode("a%20b%26c%3Dd%2F%C3%A9"), encoding.urlDecode("a+b"), encoding.urlDecode("a+b", true), encoding.urlDecode("100%"), encoding.urlDecode("%zz"), encoding.urlDecode("%4"), encoding.urlDecode("%00"))
+println(encoding.urlDecode(encoding.urlEncode("héllo wörld/?&=#")) == "héllo wörld/?&=#")
+
+u := encoding.uuid()
+println(u.length(), u.charAt(8), u.charAt(13), u.charAt(18), u.charAt(23), u.charAt(14), "89ab".contains(u.charAt(19).toString()), u != encoding.uuid())
