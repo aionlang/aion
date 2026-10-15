@@ -1,0 +1,460 @@
+// import json
+//
+//   doc := json.parse("{\"name\": \"Ann\", \"tags\": [\"a\", \"b\"], \"age\": 31}")
+//   if doc == null { println(json.lastError()) } else {
+//       println(doc.getString("name"), doc.get("tags")?.at(1)?.asString(), doc.getInt("age"))
+//   }
+//
+//   out := json.object()
+//   out["ok"] = json.bool(true)
+//   out["items"] = json.array().add(json.int(1)).add(json.string("two"))
+//   println(out.compact())                    // {"ok":true,"items":[1,"two"]}
+//   println(out.pretty())
+//
+// JSON values are a family of types extending `Json`: JsonNull, JsonBool, JsonNumber,
+// JsonString, JsonArray and JsonObject.  Every Json has the same accessors, so
+// navigating needs no casts: `get(key)` on something that is not an object, or `at(i)` on
+// something that is not an array, gives null, as do `asString()` and friends on the wrong kind.
+
+lastErr := ""
+
+// Why the most recent `parse` returned null, e.g. "line 1, column 8: expected ':'".
+fn lastError() -> String = lastErr
+
+// ── The value types ──────────────────────────────────────────────
+
+open type Json {
+    // "null", "bool", "number", "string", "array" or "object"
+    open fn kind() -> String = "null"
+    open fn asString() -> String? = null
+    // A number with no fraction as an Int; a number with a fraction is null (use asFloat).
+    open fn asInt() -> Int? = null
+    open fn asFloat() -> Float? = null
+    open fn asBool() -> Bool? = null
+    // Elements of an array, fields of an object, characters of a string... 0 for the rest.
+    open fn size() -> Int = 0
+    // A field of an object, or null.
+    open fn get(key: String) -> Json? = null
+    // An element of an array, or null when out of range.
+    open fn at(index: Int) -> Json? = null
+    // The field names of an object, in order.
+    open fn keys() -> List<String> = List<String>()
+    // The elements of an array, or the field values of an object.
+    open fn items() -> List<Json> = List<Json>()
+    open fn write(out: StringBuilder, indent: Int, depth: Int) { out.append("null") }
+
+    fn isNull() = kind() == "null"
+    fn getString(key: String, fallback: String = "") = get(key)?.asString() ?: fallback
+    fn getInt(key: String, fallback: Int = 0) = get(key)?.asInt() ?: fallback
+    fn getFloat(key: String, fallback: Float = 0.0) = get(key)?.asFloat() ?: fallback
+    fn getBool(key: String, fallback: Bool = false) = get(key)?.asBool() ?: fallback
+
+    // Text without any extra white space.
+    fn compact() -> String {
+        out := StringBuilder()
+        write(out, -1, 0)
+        return out.toString()
+    }
+    // Indented over several lines.
+    fn pretty(indent: Int = 2) -> String {
+        out := StringBuilder()
+        write(out, indent, 0)
+        return out.toString()
+    }
+    fn toString() = compact()
+}
+
+type JsonNull : Json() {
+}
+
+type JsonBool(value: Bool) : Json() {
+    override fn kind() = "bool"
+    override fn asBool() -> Bool? = value
+    override fn write(out: StringBuilder, indent: Int, depth: Int) { out.append(if value { "true" } else { "false" }) }
+}
+
+// A whole number is kept exactly as an Int; anything else is a Float.
+type JsonNumber(whole: Bool, intValue: Int, floatValue: Float) : Json() {
+    override fn kind() = "number"
+    override fn asInt() -> Int? = if whole { intValue } else { null }
+    override fn asFloat() -> Float? = floatValue
+    override fn write(out: StringBuilder, indent: Int, depth: Int) {
+        if whole {
+            out.append("$intValue")
+        } else if floatValue.isNaN() || floatValue.isInfinite() {
+            out.append("null")
+        } else {
+            out.append("$floatValue")
+        }
+    }
+}
+
+type JsonString(value: String) : Json() {
+    override fn kind() = "string"
+    override fn asString() -> String? = value
+    override fn size() = value.charCount()
+    override fn write(out: StringBuilder, indent: Int, depth: Int) { writeQuoted(out, value) }
+}
+
+type JsonArray(elements: List<Json>) : Json() {
+    override fn kind() = "array"
+    override fn size() = elements.size()
+    override fn at(index: Int) -> Json? = elements.getOrNull(index)
+    override fn items() -> List<Json> = elements
+    // Append an element; returns the array so calls can be chained.
+    fn add(value: Json) -> JsonArray {
+        elements.add(value)
+        return this
+    }
+    override fn write(out: StringBuilder, indent: Int, depth: Int) {
+        if elements.size() == 0 {
+            out.append("[]")
+            return
+        }
+        out.append("[")
+        for i in 0..elements.size() {
+            if i > 0 { out.append(",") }
+            newline(out, indent, depth + 1)
+            elements[i].write(out, indent, depth + 1)
+        }
+        newline(out, indent, depth)
+        out.append("]")
+    }
+}
+
+type JsonObject(fields: Map<String, Json>) : Json() {
+    override fn kind() = "object"
+    override fn size() = fields.size()
+    override fn get(key: String) -> Json? = fields.getOrNull(key)
+    override fn keys() -> List<String> = fields.keys()
+    override fn items() -> List<Json> = fields.values()
+    // Add or replace a field; `obj["key"] = value` does the same.
+    fn set(key: String, value: Json) { fields[key] = value }
+    fn put(key: String, value: Json) -> JsonObject {
+        fields[key] = value
+        return this
+    }
+    fn remove(key: String) { fields.remove(key) }
+    override fn write(out: StringBuilder, indent: Int, depth: Int) {
+        if fields.size() == 0 {
+            out.append("{}")
+            return
+        }
+        out.append("{")
+        first := true
+        for entry in fields {
+            if !first { out.append(",") }
+            first = false
+            newline(out, indent, depth + 1)
+            writeQuoted(out, entry.key)
+            out.append(if indent < 0 { ":" } else { ": " })
+            entry.value.write(out, indent, depth + 1)
+        }
+        newline(out, indent, depth)
+        out.append("}")
+    }
+}
+
+// ── Building values ──────────────────────────────────────────────
+
+fn nil() -> Json = JsonNull()
+fn bool(value: Bool) -> Json = JsonBool(value)
+fn int(value: Int) -> Json = JsonNumber(true, value, value.toFloat())
+fn number(value: Float) -> Json = JsonNumber(false, 0, value)
+fn string(value: String) -> Json = JsonString(value)
+fn array() -> JsonArray = JsonArray(List<Json>())
+fn object() -> JsonObject = JsonObject(Map<String, Json>())
+
+// ── Writing ──────────────────────────────────────────────────────
+
+fn newline(out: StringBuilder, indent: Int, depth: Int) {
+    if indent >= 0 {
+        out.append("\n").append(" ".repeat(indent * depth))
+    }
+}
+
+fn writeQuoted(out: StringBuilder, s: String) {
+    out.append("\"")
+    start := 0
+    at := 0
+    n := s.length()
+    while at < n {
+        c := s.charAt(at)
+        code := c.code()
+        if c == '"' || c == '\\' || code < 32 {
+            out.append(s.substring(start, at))
+            if c == '"' {
+                out.append("\\\"")
+            } else if c == '\\' {
+                out.append("\\\\")
+            } else if c == '\n' {
+                out.append("\\n")
+            } else if c == '\r' {
+                out.append("\\r")
+            } else if c == '\t' {
+                out.append("\\t")
+            } else {
+                out.append("\\u00").append(code.toHex().padLeft(2, "0"))
+            }
+            at += 1
+            start = at
+        } else {
+            at += c.byteLength()
+        }
+    }
+    out.append(s.substring(start, n))
+    out.append("\"")
+}
+
+// ── Reading ──────────────────────────────────────────────────────
+
+// Read a document.  Returns null if the text is not valid JSON (see `lastError()`).
+fn parse(text: String) -> Json? {
+    lastErr = ""
+    p := Parser(text)
+    value := p.document()
+    if value == null {
+        lastErr = p.message
+    }
+    return value
+}
+
+type Parser(text: String) {
+    at: Int = 0
+    depth: Int = 0
+    message: String = ""
+
+    // Record the first problem, with where it is.
+    fn fail(what: String) -> Json? {
+        if message == "" {
+            line := 1
+            column := 1
+            for i in 0..at.min(text.length()) {
+                if text.charAt(i) == '\n' {
+                    line += 1
+                    column = 1
+                } else {
+                    column += 1
+                }
+            }
+            message = "line $line, column $column: $what"
+        }
+        return null
+    }
+
+    fn document() -> Json? {
+        value := parseValue()
+        if value == null { return null }
+        skip()
+        if at < text.length() { return fail("unexpected text after the value") }
+        return value
+    }
+
+    fn skip() {
+        n := text.length()
+        while at < n {
+            c := text.charAt(at)
+            if c == ' ' || c == '\n' || c == '\r' || c == '\t' {
+                at += 1
+            } else {
+                return
+            }
+        }
+    }
+
+    fn hasWord(word: String) = at + word.length() <= text.length() && text.substring(at, at + word.length()) == word
+
+    fn parseValue() -> Json? {
+        skip()
+        if at >= text.length() { return fail("unexpected end of input") }
+        c := text.charAt(at)
+        if c == '{' { return parseObject() }
+        if c == '[' { return parseArray() }
+        if c == '"' {
+            s := parseString()
+            if s == null { return null }
+            return JsonString(s)
+        }
+        if c == '-' || c.isDigit() { return parseNumber() }
+        if hasWord("true") {
+            at += 4
+            return JsonBool(true)
+        }
+        if hasWord("false") {
+            at += 5
+            return JsonBool(false)
+        }
+        if hasWord("null") {
+            at += 4
+            return JsonNull()
+        }
+        return fail("unexpected character '$c'")
+    }
+
+    fn parseNumber() -> Json? {
+        start := at
+        n := text.length()
+        if text.charAt(at) == '-' { at += 1 }
+        whole := true
+        while at < n {
+            c := text.charAt(at)
+            if c.isDigit() {
+                at += 1
+            } else if c == '.' || c == 'e' || c == 'E' || c == '+' || c == '-' {
+                whole = false
+                at += 1
+            } else {
+                break
+            }
+        }
+        s := text.substring(start, at)
+        if whole {
+            i := s.toIntOrNull()
+            if i != null { return JsonNumber(true, i, i.toFloat()) }
+        }
+        f := s.toFloatOrNull()
+        if f == null {
+            at = start
+            return fail("invalid number")
+        }
+        return JsonNumber(false, 0, f)
+    }
+
+    // Four hex digits after \u, as a code unit; -1 if they are not.
+    fn unit(from: Int) -> Int {
+        if from + 4 > text.length() { return -1 }
+        return text.substring(from, from + 4).parseInt(16) ?: -1
+    }
+
+    fn parseString() -> String? {
+        at += 1
+        out := StringBuilder()
+        n := text.length()
+        start := at
+        while at < n {
+            c := text.charAt(at)
+            if c == '"' {
+                out.append(text.substring(start, at))
+                at += 1
+                return out.toString()
+            }
+            if c == '\\' {
+                out.append(text.substring(start, at))
+                at += 1
+                if at >= n { break }
+                e := text.charAt(at)
+                if e == 'n' {
+                    out.append("\n")
+                } else if e == 't' {
+                    out.append("\t")
+                } else if e == 'r' {
+                    out.append("\r")
+                } else if e == 'b' {
+                    out.append("\u{8}")
+                } else if e == 'f' {
+                    out.append("\u{c}")
+                } else if e == '"' || e == '\\' || e == '/' {
+                    out.appendChar(e)
+                } else if e == 'u' {
+                    code := unit(at + 1)
+                    if code < 0 {
+                        fail("invalid \\u escape")
+                        return null
+                    }
+                    at += 4
+                    if code >= 55296 && code < 56320 && at + 6 < n + 0 && text.charAt(at + 1) == '\\' && text.charAt(at + 2) == 'u' {
+                        low := unit(at + 3)
+                        if low >= 56320 && low < 57344 {
+                            code = 65536 + (code - 55296) * 1024 + (low - 56320)
+                            at += 6
+                        }
+                    }
+                    if code == 0 {
+                        fail("a string cannot contain \\u0000")
+                        return null
+                    }
+                    out.appendChar(code.toChar())
+                } else {
+                    fail("invalid escape '\\$e'")
+                    return null
+                }
+                at += 1
+                start = at
+            } else {
+                at += c.byteLength()
+            }
+        }
+        fail("unterminated string")
+        return null
+    }
+
+    fn parseArray() -> Json? {
+        depth += 1
+        if depth > 512 { return fail("nested too deeply") }
+        at += 1
+        list := List<Json>()
+        skip()
+        if at < text.length() && text.charAt(at) == ']' {
+            at += 1
+            depth -= 1
+            return JsonArray(list)
+        }
+        while true {
+            value := parseValue()
+            if value == null { return null }
+            list.add(value)
+            skip()
+            if at >= text.length() { return fail("unterminated array") }
+            c := text.charAt(at)
+            at += 1
+            if c == ']' {
+                depth -= 1
+                return JsonArray(list)
+            }
+            if c != ',' {
+                at -= 1
+                return fail("expected ',' or ']'")
+            }
+        }
+        return null
+    }
+
+    fn parseObject() -> Json? {
+        depth += 1
+        if depth > 512 { return fail("nested too deeply") }
+        at += 1
+        fields := Map<String, Json>()
+        skip()
+        if at < text.length() && text.charAt(at) == '}' {
+            at += 1
+            depth -= 1
+            return JsonObject(fields)
+        }
+        while true {
+            skip()
+            if at >= text.length() { return fail("unterminated object") }
+            if text.charAt(at) != '"' { return fail("expected a string key") }
+            key := parseString()
+            if key == null { return null }
+            skip()
+            if at >= text.length() || text.charAt(at) != ':' { return fail("expected ':'") }
+            at += 1
+            value := parseValue()
+            if value == null { return null }
+            fields[key] = value
+            skip()
+            if at >= text.length() { return fail("unterminated object") }
+            c := text.charAt(at)
+            at += 1
+            if c == '}' {
+                depth -= 1
+                return JsonObject(fields)
+            }
+            if c != ',' {
+                at -= 1
+                return fail("expected ',' or '}'")
+            }
+        }
+        return null
+    }
+}

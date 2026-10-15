@@ -1,0 +1,71 @@
+null
+true
+false
+0
+-12
+3.25
+1000
+-0.005
+1.2345678901234567e+19
+"hi"
+[]
+{}
+[1,[2,[3,[]]],{}]
+{"a":{"b":[true,null]},"c":"d"}
+{"dup":2}
+"tab\t quote\" slash\\ solidus/ nl\n"
+"é中 😀 A"
+"héllo wörld 中文"
+"\u0001 \u001f"
+ERROR line 1, column 1: unexpected end of input
+ERROR line 1, column 4: unexpected end of input
+ERROR line 1, column 6: unterminated array
+ERROR line 1, column 4: expected ',' or ']'
+ERROR line 1, column 6: expected ':'
+ERROR line 1, column 9: expected a string key
+ERROR line 1, column 2: expected a string key
+ERROR line 1, column 5: unexpected character ']'
+ERROR line 1, column 1: unexpected character 't'
+ERROR line 1, column 1: unexpected character 'n'
+ERROR line 1, column 5: unterminated string
+ERROR line 1, column 7: invalid escape '\q'
+ERROR line 1, column 3: invalid \u escape
+ERROR line 1, column 7: a string cannot contain \u0000
+ERROR line 1, column 1: invalid number
+ERROR line 1, column 3: unexpected text after the value
+ERROR line 1, column 4: unexpected text after the value
+ERROR line 3, column 8: unexpected character 'o'
+ERROR line 1, column 513: nested too deeply
+object 6 [name, age, score, admin, tags, address] false
+Ann ? 31 -1 4.5 31 false true
+3 "z" null null Oslo true
+null "Ann" "Oslo"
+number number string array null bool
+null null 31 null false ["x", "y", "z"] ["Oslo", null]
+3 3 5
+{"name":"Bob \"the builder\"\n","age":42,"ratio":0.30000000000000004,"nan":null,"tags":["a",2,null,true],"empty":[],"none":{},"inner":{"deep":[[1]]}}
+{
+  "name": "Bob \"the builder\"\n",
+  "age": 42,
+  "ratio": 0.30000000000000004,
+  "nan": null,
+  "tags": [
+    "a",
+    2,
+    null,
+    true
+  ],
+  "empty": [],
+  "none": {},
+  "inner": {
+    "deep": [
+      [
+        1
+      ]
+    ]
+  }
+}
+21 8 [name, age, ratio, nan, tags, empty, none, inner]
+[name, age, ratio, tags, empty, none, inner] 43
+true true true
+300 44850 item #299 1.5

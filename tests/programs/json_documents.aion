@@ -1,0 +1,104 @@
+// json: parsing, navigating, building and printing documents
+import json
+
+fn show(text: String) {
+    v := json.parse(text)
+    println(if v == null { "ERROR " + json.lastError() } else { v.compact() })
+}
+
+// scalars and structure
+show("null")
+show("  true ")
+show("false")
+show("0")
+show("-12")
+show("3.25")
+show("1e3")
+show("-0.5E-2")
+show("12345678901234567890")
+show("\"hi\"")
+show("[]")
+show("{}")
+show("[1, [2, [3, []]], {}]")
+show("{\"a\": {\"b\": [true, null]}, \"c\": \"d\"}")
+show("{\"dup\": 1, \"dup\": 2}")
+
+// string escapes
+show("\"tab\\t quote\\\" slash\\\\ solidus\\/ nl\\n\"")
+show("\"\\u00e9\\u4e2d \\ud83d\\ude00 \\u0041\"")
+show("\"héllo wörld 中文\"")
+show("\"\\u0001 \\u001f\"")
+
+// errors
+show("")
+show("   ")
+show("[1, 2")
+show("[1 2]")
+show("{\"a\" 1}")
+show("{\"a\": 1,}")
+show("{a: 1}")
+show("[1, ]")
+show("tru")
+show("nul")
+show("\"abc")
+show("\"bad \\q escape\"")
+show("\"\\u12\"")
+show("\"\\u0000\"")
+show("-")
+show("1 2")
+show("[1]]")
+show("{\n  \"a\": 1,\n  \"b\": oops\n}")
+show("[" + "[".repeat(600) + "]".repeat(600) + "]")
+
+// navigating
+doc := json.parse(r"""{"name": "Ann", "age": 31, "score": 4.5, "admin": false, "tags": ["x", "y", "z"], "address": {"city": "Oslo", "zip": null}}""")!!
+println(doc.kind(), doc.size(), doc.keys(), doc.isNull())
+println(doc.getString("name"), doc.getString("nope", "?"), doc.getInt("age"), doc.getInt("score", -1), doc.getFloat("score"), doc.getFloat("age"), doc.getBool("admin", true), doc.getBool("name", true))
+println(doc.get("tags")?.size(), doc.get("tags")?.at(2), doc.get("tags")?.at(3), doc.get("tags")?.at(-1), doc.get("address")?.get("city")?.asString(), doc.get("address")?.get("zip")?.isNull())
+println(doc.get("missing")?.get("x"), doc["name"], doc["address"]?.get("city"))
+println(doc.get("age")?.kind(), doc.get("score")?.kind(), doc.get("name")?.kind(), doc.get("tags")?.kind(), doc.get("address")?.get("zip")?.kind(), doc.get("admin")?.kind())
+println(doc.get("name")?.asInt(), doc.get("age")?.asString(), doc.get("age")?.asFloat(), doc.get("score")?.asInt(), doc.get("admin")?.asBool(), doc.get("tags")?.items(), doc.get("address")?.items())
+total := 0
+for item in doc.get("tags")!!.items() {
+    total += item.asString()!!.length()
+}
+println(total, doc.get("name")?.size(), json.parse("\"héllo\"")!!.size())
+
+// building
+out := json.object()
+out["name"] = json.string("Bob \"the builder\"\n")
+out["age"] = json.int(42)
+out["ratio"] = json.number(0.1 + 0.2)
+out["nan"] = json.number(0.0 / 0.0)
+out["tags"] = json.array().add(json.string("a")).add(json.int(2)).add(json.nil()).add(json.bool(true))
+out.put("empty", json.array()).put("none", json.object())
+inner := json.object()
+inner.put("deep", json.array().add(json.array().add(json.int(1))))
+out["inner"] = inner
+println(out.compact())
+println(out.pretty())
+println(out.pretty(4).lines().size(), out.size(), out.keys())
+out.remove("nan")
+out["age"] = json.int(43)
+println(out.keys(), out.getInt("age"))
+
+// round trip
+text := out.pretty()
+again := json.parse(text)!!
+println(again.compact() == out.compact(), again.pretty() == text, "$again" == out.compact())
+
+// a larger document
+list := json.array()
+for i in 0..300 {
+    row := json.object()
+    row["id"] = json.int(i)
+    row["label"] = json.string("item #$i")
+    row["half"] = json.number(i.toFloat() / 2)
+    list.add(row)
+}
+big := json.parse(list.compact())!!
+sum := 0
+for row in big.items() {
+    sum += row.getInt("id")
+}
+println(big.size(), sum, big.at(299)?.getString("label"), big.at(3)?.getFloat("half"))
