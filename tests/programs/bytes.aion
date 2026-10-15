@@ -31,6 +31,9 @@ type Packet(data: Bytes) {
 p := Packet(bytesOf([9, 8]))
 println(p.first(), p.describe(), p)
 
+unset: Bytes
+println(unset.size(), unset == Bytes(0))
+
 // Many allocations under the collector.
 keep := List<Bytes>()
 for i in 0..200 {
