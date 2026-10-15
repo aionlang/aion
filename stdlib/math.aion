@@ -9,6 +9,10 @@
 // where a Float is expected.
 
 pi := 3.141592653589793
+tau := 6.283185307179586      // 2π
+e := 2.718281828459045
+inf := 1.0 / 0.0              // infinity; -inf is negative infinity
+nan := 0.0 / 0.0              // not a number: nan != nan, use x.isNaN()
 
 extern fn sqrt(x: Float) -> Float
 extern fn pow(base: Float, exp: Float) -> Float
@@ -16,6 +20,26 @@ extern fn sin(x: Float) -> Float
 extern fn cos(x: Float) -> Float
 extern fn floor(x: Float) -> Float
 extern fn ceil(x: Float) -> Float
+extern fn round(x: Float) -> Float       // halves go away from zero
+extern fn trunc(x: Float) -> Float       // drop the fraction
+extern fn tan(x: Float) -> Float
+extern fn asin(x: Float) -> Float
+extern fn acos(x: Float) -> Float
+extern fn atan(x: Float) -> Float
+extern fn atan2(y: Float, x: Float) -> Float   // the angle of the point (x, y)
+extern fn sinh(x: Float) -> Float
+extern fn cosh(x: Float) -> Float
+extern fn tanh(x: Float) -> Float
+extern fn exp(x: Float) -> Float         // e to the power x
+extern fn log(x: Float) -> Float         // natural logarithm
+extern fn log2(x: Float) -> Float
+extern fn log10(x: Float) -> Float
+extern fn hypot(x: Float, y: Float) -> Float   // sqrt(x*x + y*y) without overflow
+extern fn cbrt(x: Float) -> Float        // cube root
+extern fn fmod(x: Float, y: Float) -> Float    // remainder with the sign of x
+
+fn toRadians(degrees: Float) -> Float = degrees * pi / 180.0
+fn toDegrees(radians: Float) -> Float = radians * 180.0 / pi
 
 // Absolute value of a Float (libm calls this `fabs`).
 extern fn abs(x: Float) -> Float = "fabs"
