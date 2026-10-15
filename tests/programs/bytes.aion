@@ -61,3 +61,10 @@ bb.dropFirst(298)
 println(bb.toBytes().toHex(), bb.isEmpty())
 bb.clear()
 println(bb.size(), bb.toBytes() == Bytes(0))
+
+// consuming from the front, as a protocol parser does
+stream := BytesBuilder()
+stream.addText("line one\r\nline two\r\n\r\nrest")
+eol := "\r\n".toBytes()
+println(stream.find(eol), stream.find(eol, 9), stream.find("rest".toBytes()), stream.find("nope".toBytes()))
+println(stream.take(stream.find(eol)).toText(), stream.take(2).size(), stream.size(), stream.find(eol))

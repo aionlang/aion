@@ -368,6 +368,20 @@ type BytesBuilder {
     fn clear() { used = 0 }
     // Everything collected so far, as a Bytes of its own.
     fn toBytes() = data.slice(0, used)
+    // Position of the first `needle` at or after `from` among the bytes collected, or -1.
+    fn find(needle: Bytes, from: Int = 0) -> Int {
+        at := data.find(needle, from)
+        return if at >= 0 && at + needle.size() <= used { at } else { -1 }
+    }
+    // Remove and return the first `count` bytes.
+    fn take(count: Int) -> Bytes {
+        if count < 0 || count > used {
+            panic("take(${count}) is out of range for size $used")
+        }
+        out := data.slice(0, count)
+        dropFirst(count)
+        return out
+    }
     // The first `count` bytes are gone (they were used up); the rest stays.
     fn dropFirst(count: Int) {
         if count < 0 || count > used {
