@@ -1,0 +1,29 @@
+// equals + hashCode make a type usable as a Map key or in a Set
+type Point(x: Int, y: Int) {
+    fn equals(other: Point) = x == other.x && y == other.y
+    fn hashCode() = x * 31 + y
+}
+type Key(name: String) {
+    fn equals(other: Key) = name == other.name
+    fn hashCode() = hashOf(name)
+}
+
+seen := Map<Point, String>()
+seen[Point(1, 2)] = "a"
+seen[Point(3, 4)] = "b"
+seen[Point(1, 2)] = "c"          // the same key as the first
+println(seen.size(), seen[Point(1, 2)], seen[Point(3, 4)], Point(9, 9) in seen)
+
+visited := Set<Point>()
+println(visited.add(Point(0, 0)), visited.add(Point(0, 0)), visited.add(Point(0, 1)), visited.size())
+
+ages := {Key("ann"): 31, Key("bob"): 25}
+println(ages[Key("bob")], ages.getOr(Key("zed"), -1))
+println(hashOf(Point(1, 2)) == hashOf(Point(1, 2)), hashOf(Point(1, 2)) == hashOf(Point(2, 1)))
+
+negative := Point(-1000000, -3)       // a negative hashCode still works as a map key
+big := Map<Point, Int>()
+big[negative] = 7
+println(big[Point(-1000000, -3)], hashOf(negative) >= 0)
+n: Point? = null
+println(hashOf(n), hashOf(Point(1, 2)))

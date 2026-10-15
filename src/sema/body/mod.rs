@@ -1390,7 +1390,53 @@ impl<'c, 'a> Cx<'c, 'a> {
         if matches!(v.ty, Ty::Fn(_)) {
             return Err(Diagnostic::new("a function has no hash", arg.value.span));
         }
+        if let Some(hash) = self.custom_hash(&v) {
+            return Ok(self.object_hash(hash, v));
+        }
         Ok(mk(K::Hash(Box::new(v)), Ty::Int))
+    }
+
+    /// The `hashCode() -> Int` method of an object (or optional object) type, if it has one.
+    fn custom_hash(&self, v: &hir::Expr) -> Option<FnId> {
+        let ty = match v.ty {
+            Ty::Opt(o) => self.ck.t.opt_inner(o),
+            other => other,
+        };
+        let Ty::Obj(t) = ty else { return None };
+        let info = self.ck.t.ty(t);
+        if info.iface.is_some() || info.array_elem.is_some() {
+            return None;
+        }
+        let &f = info.methods.get("hashCode")?;
+        let fits = self.ck.func(f).params.len() == 1;
+        (fits && self.ck.ret_of(f, Span::default()).ok()? == Ty::Int).then_some(f)
+    }
+
+    /// `v.hashCode()` made non-negative (a map uses it as an index); null hashes to 0.
+    fn object_hash(&mut self, hash: FnId, v: hir::Expr) -> hir::Expr {
+        const MODULUS: i64 = 2_147_483_647;
+        let ty = v.ty;
+        let tmp = self.new_local("$obj", ty);
+        let raw = self.new_local("$hash", Ty::Int);
+        let int = |n: i64| mk(K::Int(n), Ty::Int);
+        let object = match ty {
+            Ty::Opt(o) => mk(K::Unwrap(Box::new(self.local_expr(tmp))), self.ck.t.opt_inner(o)),
+            _ => self.local_expr(tmp),
+        };
+        let call = mk(K::Call { func: hash, args: vec![object] }, Ty::Int);
+        let reduced = |cx: &Self| {
+            mk(K::Binary(hir::BinOp::Rem, Box::new(cx.local_expr(raw)), Box::new(int(MODULUS))), Ty::Int)
+        };
+        let shifted = mk(K::Binary(hir::BinOp::Add, Box::new(reduced(self)), Box::new(int(MODULUS))), Ty::Int);
+        let negative = mk(K::Binary(hir::BinOp::Lt, Box::new(self.local_expr(raw)), Box::new(int(0))), Ty::Bool);
+        let nonneg = mk(K::Cond { cond: Box::new(negative), then: Box::new(shifted), otherwise: Box::new(reduced(self)) }, Ty::Int);
+        let is_null = mk(K::IsNull(Box::new(self.local_expr(tmp))), Ty::Bool);
+        let body = mk(
+            K::Block(vec![hir::Stmt::Let(raw, Some(call))], Box::new(nonneg)),
+            Ty::Int,
+        );
+        let result = mk(K::Cond { cond: Box::new(is_null), then: Box::new(int(0)), otherwise: Box::new(body) }, Ty::Int);
+        mk(K::Block(vec![hir::Stmt::Let(tmp, Some(v))], Box::new(result)), Ty::Int)
     }
 
     // ── collection literals ─────────────────────────────────────
