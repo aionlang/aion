@@ -86,3 +86,49 @@ bool aion_strings_is_int(const char *s) {
     (void)strtoll(s, &end, 10);
     return end != s && *end == '\0' && errno == 0;
 }
+
+/* ── Standard input ───────────────────────────────────────────── */
+
+static char *grow(char *buf, size_t *cap) {
+    *cap *= 2;
+    buf = realloc(buf, *cap);
+    if (!buf) aion_panic("out of memory");
+    return buf;
+}
+
+/* One line without its line break, or NULL at the end of the input. */
+const char *aion_read_line(void) {
+    fflush(stdout); /* so a prompt printed with print() is visible */
+    size_t cap = 128, len = 0;
+    char *buf = malloc(cap);
+    if (!buf) aion_panic("out of memory");
+    int c;
+    while ((c = getchar()) != EOF && c != '\n') {
+        if (len + 1 >= cap) buf = grow(buf, &cap);
+        buf[len++] = (char)c;
+    }
+    if (c == EOF && len == 0) {
+        free(buf);
+        return NULL;
+    }
+    if (len > 0 && buf[len - 1] == '\r') len--;
+    const char *line = aion_string_n(buf, len);
+    free(buf);
+    return line;
+}
+
+/* Everything left on standard input. */
+const char *aion_read_text(void) {
+    fflush(stdout);
+    size_t cap = 1024, len = 0;
+    char *buf = malloc(cap);
+    if (!buf) aion_panic("out of memory");
+    int c;
+    while ((c = getchar()) != EOF) {
+        if (len + 1 >= cap) buf = grow(buf, &cap);
+        buf[len++] = (char)c;
+    }
+    const char *text = aion_string_n(buf, len);
+    free(buf);
+    return text;
+}
