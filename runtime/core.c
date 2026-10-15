@@ -72,6 +72,23 @@ typedef struct TryContext {
 } TryContext;
 
 static TryContext *try_top = NULL;
+
+/* Switching tasks swaps these (see tasks.c). */
+void aion_task_save(AionTaskState *s) {
+    s->frame = aion_frame_top;
+    s->try_top = try_top;
+    s->defers = defer_stack;
+    s->defer_len = defer_len;
+    s->defer_cap = defer_cap;
+}
+
+void aion_task_load(const AionTaskState *s) {
+    aion_frame_top = s->frame;
+    try_top = s->try_top;
+    defer_stack = s->defers;
+    defer_len = s->defer_len;
+    defer_cap = s->defer_cap;
+}
 static char panic_message[512];
 static int fatal_panic = 0;
 
@@ -197,6 +214,7 @@ void aion_gc_collect(void) {
     for (AionFrame *f = aion_frame_top; f; f = f->prev)
         for (uint64_t i = 0; i < f->n; i++) mark(f->slots[i]);
     for (size_t i = 0; i < defer_len; i++) mark(defer_stack[i]);
+    aion_tasks_mark(mark);
     drain();
 
     size_t live = 0;

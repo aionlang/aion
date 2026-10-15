@@ -56,4 +56,20 @@ typedef struct AionFrame {
 
 extern AionFrame *aion_frame_top;
 
+/* ── Per-task state (see tasks.c) ─────────────────────────────── */
+
+/* What belongs to one task and is swapped when the scheduler switches: the shadow
+ * stack, the innermost `try`, and the `defer` stack. */
+typedef struct AionTaskState {
+    AionFrame *frame;
+    void *try_top;
+    void **defers;
+    size_t defer_len, defer_cap;
+} AionTaskState;
+
+void aion_task_save(AionTaskState *into);
+void aion_task_load(const AionTaskState *from);
+/* Mark everything the suspended tasks keep alive. */
+void aion_tasks_mark(void (*mark)(void *));
+
 #endif
