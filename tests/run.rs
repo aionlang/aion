@@ -454,3 +454,64 @@ fn code_in_the_documentation_works() {
     assert!(checked > 10, "expected to find documentation examples, found {checked}");
     assert!(failures.is_empty(), "\n{}", failures.join("\n---\n"));
 }
+
+/// The https client talks TLS to a real server (`openssl s_server`), checking certificates unless told not to.
+#[test]
+fn https_requests_verify_the_servers_certificate() {
+    let have = |program: &str| Command::new(program).arg("version").output().is_ok_and(|o| o.status.success());
+    if !have("openssl") {
+        eprintln!("skipped: the openssl command is not installed");
+        return;
+    }
+    let dir = scratch("https");
+    let (cert, key) = (dir.join("cert.pem"), dir.join("key.pem"));
+    let made = Command::new("openssl")
+        .args(["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=localhost"])
+        .args(["-addext", "subjectAltName=DNS:localhost"])
+        .arg("-keyout")
+        .arg(&key)
+        .arg("-out")
+        .arg(&cert)
+        .output()
+        .unwrap();
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let mut server = Command::new("openssl")
+        .args(["s_server", "-quiet", "-www", "-accept", &port.to_string()])
+        .arg("-cert")
+        .arg(&cert)
+        .arg("-key")
+        .arg(&key)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    let program = format!(
+        r#"import http
+trusted := http.get("https://localhost:{port}/", null, http.Options(caFile: "{cert}"))
+println(trusted != null, trusted?.status)
+untrusted := http.get("https://localhost:{port}/", null, http.Options(useProxy: false))
+println(untrusted, http.lastError().contains("certificate"))
+unchecked := http.get("https://localhost:{port}/", null, http.Options(verify: false))
+println(unchecked?.status, unchecked?.text()?.contains("s_server"))
+wrong := http.get("https://127.0.0.1:{port}/", null, http.Options(caFile: "{cert}"))
+println(wrong, http.lastError().contains("certificate"))
+"#,
+        cert = cert.display()
+    );
+    write(&dir.join("main.aion"), &program);
+    let out = aion_in(&dir, &["main.aion"]);
+    let _ = server.kill();
+    let _ = server.wait();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        "true 200\nnull true\n200 true\nnull true\n",
+        "stderr: {}",
+        stderr(&out)
+    );
+}
