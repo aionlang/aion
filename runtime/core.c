@@ -301,6 +301,37 @@ const char *aion_int_to_str(int64_t n) {
     return aion_string(buf);
 }
 
+/* Encode a code point as UTF-8 (invalid ones become U+FFFD).  Returns the length. */
+static size_t utf8_encode(int64_t c, char out[4]) {
+    if (c < 0 || c > 0x10FFFF || (c >= 0xD800 && c <= 0xDFFF)) c = 0xFFFD;
+    if (c < 0x80) {
+        out[0] = (char)c;
+        return 1;
+    }
+    if (c < 0x800) {
+        out[0] = (char)(0xC0 | (c >> 6));
+        out[1] = (char)(0x80 | (c & 0x3F));
+        return 2;
+    }
+    if (c < 0x10000) {
+        out[0] = (char)(0xE0 | (c >> 12));
+        out[1] = (char)(0x80 | ((c >> 6) & 0x3F));
+        out[2] = (char)(0x80 | (c & 0x3F));
+        return 3;
+    }
+    out[0] = (char)(0xF0 | (c >> 18));
+    out[1] = (char)(0x80 | ((c >> 12) & 0x3F));
+    out[2] = (char)(0x80 | ((c >> 6) & 0x3F));
+    out[3] = (char)(0x80 | (c & 0x3F));
+    return 4;
+}
+
+const char *aion_char_to_str(int64_t c) {
+    char buf[4];
+    size_t n = utf8_encode(c, buf);
+    return aion_string_n(buf, n);
+}
+
 const char *aion_float_to_str(double f) {
     char buf[64];
     snprintf(buf, sizeof buf, "%g", f);
@@ -333,6 +364,11 @@ static void end_line(int64_t newline) {
 }
 
 void aion_print_str(const char *s, int64_t nl) { fputs(s, stdout); end_line(nl); }
+void aion_print_char(int64_t c, int64_t nl) {
+    char buf[4];
+    fwrite(buf, 1, utf8_encode(c, buf), stdout);
+    end_line(nl);
+}
 void aion_print_int(int64_t n, int64_t nl) { printf("%" PRId64, n); end_line(nl); }
 void aion_print_float(double f, int64_t nl) { printf("%g", f); end_line(nl); }
 void aion_print_bool(int64_t b, int64_t nl) { fputs(b ? "true" : "false", stdout); end_line(nl); }
