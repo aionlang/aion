@@ -1,0 +1,128 @@
+// regex: results of ~100 patterns; all but five (empty-match and exotic-syntax corners) agree with Python re
+import regex
+
+cases: List<List<String>> = [
+    ["abc", "", "xxabcxx"],
+    ["a.c", "", "abc a\nc axc"],
+    ["a.c", "s", "a\nc"],
+    ["^abc", "", "abcabc"],
+    ["abc\$", "", "abcabc"],
+    ["^abc\$", "", "abc"],
+    ["^b", "m", "a\nb\nb"],
+    ["a\$", "m", "a\na\nb"],
+    ["\\Aa", "m", "a\na"],
+    ["a\\z", "m", "a\na"],
+    ["a*", "", "baac"],
+    ["a+", "", "baac"],
+    ["a?", "", "ba"],
+    ["a{2}", "", "aaaaa"],
+    ["a{2,}", "", "caaaaa"],
+    ["a{1,3}", "", "aaaaa"],
+    ["a{0,2}b", "", "aaab"],
+    ["a*?", "", "aaa"],
+    ["a+?", "", "aaa"],
+    ["a??b", "", "ab"],
+    ["a{2,3}?", "", "aaaa"],
+    ["(a)(b)?", "", "ac a ab"],
+    ["(a)|(b)", "", "b"],
+    ["(a|ab)(c|bcd)(d*)", "", "abcd"],
+    ["(a+)(b+)", "", "xaabbb"],
+    ["(?:ab)+", "", "ababab!"],
+    ["(ab)+", "", "ababab!"],
+    ["((a)|(b))+", "", "ab"],
+    ["(a*)*", "", "b"],
+    ["(a*)+", "", "b"],
+    ["(a|b)*c", "", "abbac"],
+    ["x*", "", ""],
+    ["", "", "abc"],
+    ["|a", "", "a"],
+    ["a|", "", "a"],
+    ["(|a)+", "", "aaa"],
+    ["[abc]+", "", "xxabcabcxx"],
+    ["[^abc]+", "", "abcxyzabc"],
+    ["[a-c]+", "", "xxabcabcxx"],
+    ["[a-cx-z]+", "", "ayzbx"],
+    ["[]a]+", "", "x]a]"],
+    ["[a\\]]+", "", "a]]a"],
+    ["[a-]+", "", "a-a-b"],
+    ["[-a]+", "", "-a-b"],
+    ["[\\d]+", "", "ab123cd"],
+    ["[\\w.]+", "", "!!foo.bar!!"],
+    ["[^\\s]+", "", "  hi there"],
+    ["\\d+", "", "ab123cd45"],
+    ["\\D+", "", "123abc456"],
+    ["\\w+", "", "  hello_World9 !"],
+    ["\\W+", "", "ab, cd"],
+    ["\\s+", "", "a \t\n b"],
+    ["\\S+", "", "  ab cd"],
+    ["\\bfoo\\b", "", "a foo b"],
+    ["\\bfoo\\b", "", "afoo foob foo"],
+    ["\\Bfoo", "", "afoo foo"],
+    ["\\b", "", "ab cd"],
+    ["\\B", "", "ab"],
+    ["(\\d+)-(\\d+)", "", "tel 555-1234 or 666-9999"],
+    ["(\\w+)@(\\w+)\\.com", "", "mail bob@example.com now"],
+    ["(?<year>\\d{4})-(?<month>\\d\\d)", "", "date 2024-03-15"],
+    ["(?:a|b)c", "", "bc ac"],
+    ["HeLLo", "i", "say hello"],
+    ["[a-z]+", "i", "ABC def"],
+    ["[^a-z]+", "i", "abcXYZ123"],
+    ["é", "i", "É"],
+    ["straße", "i", "STRASSE straße"],
+    ["\\x41\\x42", "", "AB"],
+    ["\\n\\t", "", "a\n\tb"],
+    ["\\.", "", "a.b"],
+    ["\\\\", "", "a\\b"],
+    ["\\(\\)", "", "f()"],
+    ["a\\+b", "", "a+b"],
+    ["\\\$", "", "cost \$5"],
+    ["\\{", "", "a{b"],
+    ["a{", "", "a{"],
+    ["a{,3}", "", "a{,3}"],
+    ["a{2", "", "a{2"],
+    [".+", "", "héllo wörld"],
+    ["h.l", "", "héllo"],
+    ["[é]+", "", "caféé"],
+    ["\\w+", "", "héllo wörld"],
+    ["..", "", "日本語"],
+    ["(a+)+b", "", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaac"],
+    ["(x+x+)+y", "", "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"],
+    ["^(\\w+)\\s+(\\w+)\$", "", "hello world"],
+    ["^\\s*\$", "", "   "],
+    ["^\\s*\$", "", "  x "],
+    ["(?i)abc", "", "xABC"],
+    ["(?s).+", "", "a\nb"],
+    ["(?m)^a\$", "", "b\na\nc"],
+    ["(?:(?:a)*)*b", "", "aab"],
+    ["(a)(?:b)(c)", "", "abc"],
+    ["<.+?>", "", "<a><b>"],
+    ["<.+>", "", "<a><b>"],
+    ["\\d{3}-\\d{4}", "", "555-1234"],
+    ["[0-9a-fA-F]+", "", "zz 1fA9 zz"],
+    ["(\\d+)(?:px|em)", "", "12em 5px"],
+    ["colou?r", "", "color colour"],
+    ["^\$", "", ""],
+    ["\$", "", "ab"],
+    ["^", "", "ab"],
+]
+
+for c in cases {
+    r := regex.compile(c[0], c[1])
+    if r == null {
+        println("ERROR " + regex.lastError())
+        continue
+    }
+    text := c[2]
+    m := r.find(text)
+    first := "none"
+    if m != null {
+        parts := List<String>()
+        for i in 0..m.groupCount() + 1 {
+            parts.add(m.group(i) ?: "-")
+        }
+        first = "${m.start()}:${m.end()}:${parts.join("|")}"
+    }
+    found := r.findAll(text).map { it.value() }.join(",")
+    replaced := r.replaceWith(text) { "<" + it.value() + ">" }
+    println(first + "\t" + found + "\t" + replaced.replace("\n", "\\n"))
+}

@@ -1,0 +1,8 @@
+// stress: skip
+// regex: long texts and pathological patterns stay fast (the matcher never backtracks)
+import regex
+
+long := "ab".repeat(50000)
+println(regex.compile(r"(ab)+c")!!.test(long), regex.compile(r"(?:a|b)*$")!!.find(long)!!.end(), regex.compile(r"b(a)")!!.count(long))
+nested := regex.compile(r"((((a*)*)*)*)*b")!!
+println(nested.test("a".repeat(5000)), nested.test("a".repeat(5000) + "b"))

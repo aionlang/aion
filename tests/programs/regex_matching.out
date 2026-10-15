@@ -1,0 +1,110 @@
+2:5:abc	abc	xx<abc>xx
+0:3:abc	abc,axc	<abc> a\nc <axc>
+0:3:a
+c	a
+c	<a\nc>
+0:3:abc	abc	<abc>abc
+3:6:abc	abc	abc<abc>
+0:3:abc	abc	<abc>
+2:3:b	b,b	a\n<b>\n<b>
+0:1:a	a,a	<a>\n<a>\nb
+0:1:a	a	<a>\na
+2:3:a	a	a\n<a>
+0:0:	,aa,,	<>b<aa><>c<>
+1:3:aa	aa	b<aa>c
+0:0:	,a,	<>b<a><>
+0:2:aa	aa,aa	<aa><aa>a
+1:6:aaaaa	aaaaa	c<aaaaa>
+0:3:aaa	aaa,aa	<aaa><aa>
+1:4:aab	aab	a<aab>
+0:0:	,,,	<>a<>a<>a<>
+0:1:a	a,a,a	<a><a><a>
+0:2:ab	ab	<ab>
+0:2:aa	aa,aa	<aa><aa>
+0:1:a|a|-	a,a,ab	<a>c <a> <ab>
+0:1:b|-|b	b	<b>
+0:4:abcd|a|bcd|	abcd	<abcd>
+1:6:aabbb|aa|bbb	aabbb	x<aabbb>
+0:6:ababab	ababab	<ababab>!
+0:6:ababab|ab	ababab	<ababab>!
+0:2:ab|b|a|b	ab	<ab>
+0:0:|-	,	<>b<>
+0:0:|	,	<>b<>
+0:5:abbac|a	abbac	<abbac>
+0:0:		<>
+0:0:	,,,	<>a<>b<>c<>
+0:0:	,	<>a<>
+0:1:a	a,	<a><>
+0:0:|	,,,	<>a<>a<>a<>
+2:8:abcabc	abcabc	xx<abcabc>xx
+3:6:xyz	xyz	abc<xyz>abc
+2:8:abcabc	abcabc	xx<abcabc>xx
+0:5:ayzbx	ayzbx	<ayzbx>
+1:4:]a]	]a]	x<]a]>
+0:4:a]]a	a]]a	<a]]a>
+0:4:a-a-	a-a-	<a-a->b
+0:3:-a-	-a-	<-a->b
+2:5:123	123	ab<123>cd
+2:9:foo.bar	foo.bar	!!<foo.bar>!!
+2:4:hi	hi,there	  <hi> <there>
+2:5:123	123,45	ab<123>cd<45>
+3:6:abc	abc	123<abc>456
+2:14:hello_World9	hello_World9	  <hello_World9> !
+2:4:, 	, 	ab<, >cd
+1:5: 	
+ 	 	
+ 	a< 	\n >b
+2:4:ab	ab,cd	  <ab> <cd>
+2:5:foo	foo	a <foo> b
+10:13:foo	foo	afoo foob <foo>
+1:4:foo	foo	a<foo> foo
+0:0:	,,,	<>ab<> <>cd<>
+1:1:		a<>b
+4:12:555-1234|555|1234	555-1234,666-9999	tel <555-1234> or <666-9999>
+5:20:bob@example.com|bob|example	bob@example.com	mail <bob@example.com> now
+5:12:2024-03|2024|03	2024-03	date <2024-03>-15
+0:2:bc	bc,ac	<bc> <ac>
+4:9:hello	hello	say <hello>
+0:3:ABC	ABC,def	<ABC> <def>
+6:9:123	123	abcXYZ<123>
+0:2:É	É	<É>
+8:15:straße	straße	STRASSE <straße>
+0:2:AB	AB	<AB>
+1:3:
+		
+		a<\n	>b
+1:2:.	.	a<.>b
+1:2:\	\	a<\>b
+1:3:()	()	f<()>
+0:3:a+b	a+b	<a+b>
+5:6:$	$	cost <$>5
+1:2:{	{	a<{>b
+0:2:a{	a{	<a{>
+0:5:a{,3}	a{,3}	<a{,3}>
+0:3:a{2	a{2	<a{2>
+0:13:héllo wörld	héllo wörld	<héllo wörld>
+0:4:hél	hél	<hél>lo
+3:7:éé	éé	caf<éé>
+0:6:héllo	héllo,wörld	<héllo> <wörld>
+0:6:日本	日本	<日本>語
+none		aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaac
+none		xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+0:11:hello world|hello|world	hello world	<hello world>
+0:3:   	   	<   >
+none		  x 
+1:4:ABC	ABC	x<ABC>
+0:3:a
+b	a
+b	<a\nb>
+2:3:a	a	b\n<a>\nc
+0:3:aab	aab	<aab>
+0:3:abc|a|c	abc	<abc>
+0:3:<a>	<a>,<b>	<<a>><<b>>
+0:6:<a><b>	<a><b>	<<a><b>>
+0:8:555-1234	555-1234	<555-1234>
+3:7:1fA9	1fA9	zz <1fA9> zz
+0:4:12em|12	12em,5px	<12em> <5px>
+0:5:color	color,colour	<color> <colour>
+0:0:		<>
+2:2:		ab<>
+0:0:		<>ab

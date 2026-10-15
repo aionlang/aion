@@ -1,0 +1,35 @@
+2024-03-15 3 13 3 2024-03-15 2024 15 null null
+03 null [2024, 03, 15] 8 10 -1
+[2024, 2025, 1999] 0 false true
+2025-12-01 null null
+example:bob, test:ann <bob@example.com>, ann@test.com
+y/x/$//$ $ no match
+15.03.2024 $ {day}
+a2b44c666
+[a|b] [a|]
+k-j-a a2
+[a, b, c, d] [a, b, , c, ] [abc] [abc]
+[]
+true true false false true false
+true false true false
+Hello 3 true false
+2
+1\+1=2\? \(yes\) \[a\|b\] \{x\} \^\$ \\ \. 1
+15 [café, au, lait]
+357
+( null unclosed group at position 1
+a) null unmatched ) at position 1
+[a null unclosed character class at position 2
+*a null nothing to repeat at position 0
+a** Regex(a**) 
+(?=a) null lookaround is not supported at position 2
+\1 null backreferences are not supported at position 2
+a{3,1} null invalid repetition count at position 6
+(?<n null invalid group name at position 4
+[z-a] null invalid range in character class at position 4
+a{1001} null repetition count too large at position 7
+a\ null dangling backslash at position 2
+(?q) null unknown group syntax at position 2
+(?<=a)b null lookaround is not supported at position 3
+null unknown flag 'x' (use i, m or s)
+true []

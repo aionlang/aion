@@ -1,0 +1,39 @@
+// regex: the API around the matcher -- groups, names, replacement templates, splitting, flags and errors
+import regex
+
+r := regex.compile(r"(?<year>\d{4})-(?<month>\d\d)-(?<day>\d\d)")!!
+m := r.find("on 2024-03-15 and 2025-12-01")!!
+println(m, m.start(), m.end(), m.groupCount(), m.group(0), m.group(1), m.group(3), m.group(4), m.group(-1))
+println(m.named("month"), m.named("nope"), m.groups(), m.groupStart(2), m.groupEnd(2), m.groupStart(9))
+println(r.findAll("2024-03-15 x 2025-12-01 y 1999-01-01").map { it.named("year") }, r.count("no dates"), r.test("1-1-1"), r.test("2020-02-02"))
+println(r.find("2024-03-15 2025-12-01", 3)!!.value(), r.find("abc", 99), r.find("abc", -1))
+
+p := regex.compile(r"(\w+)@(\w+)\.com")!!
+println(p.replaceAll("bob@example.com, ann@test.com", "$2:$1"), p.replace("bob@example.com, ann@test.com", "<$0>"))
+println(p.replaceAll("x@y.com", r"${2}/${1}/$$/$3/$"), p.replaceAll("x@y.com", "$"), p.replaceAll("no match", "X"))
+println(r.replaceAll("2024-03-15", r"${day}.${month}.${year}"), r.replaceAll("2024-03-15", r"$ {day}"))
+println(regex.compile(r"\d+")!!.replaceWith("a1b22c333") { (it.value().toIntOr(0) * 2).toString() })
+println(regex.compile(r"(a)(b)?")!!.replaceAll("ab a", "[$1|$2]"))
+big := regex.compile(r"(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)")!!
+println(big.replaceAll("abcdefghijk", "$11-$10-$1"), big.replaceAll("abcdefghijk", "$12"))
+
+println(regex.compile(r"\s*,\s*")!!.split("a , b,c ,  d"), regex.compile(r",")!!.split("a,b,,c,"), regex.compile(r"x")!!.split("abc"), regex.compile(r"")!!.split("abc"))
+println(regex.compile(r"[,;]")!!.split(""))
+
+w := regex.compile(r"a|ab")!!
+println(w.matches("ab"), w.matches("a"), w.matches("abc"), w.matches(""), regex.compile(r"\d+")!!.matches("123"), regex.compile(r"\d+")!!.matches("123 "))
+println(regex.test(r"^\d+$", "12345"), regex.test(r"^\d+$", "123a5"), regex.matches(r"[a-z]+", "hello"), regex.matches(r"[a-z]+", "hello1"))
+
+println(regex.compile("HELLO", "i")!!.find("say Hello")!!.value(), regex.compile(r"^\w+$", "m")!!.findAll("one\ntwo\n\nthree").size(), regex.compile("a.b", "s")!!.test("a\nb"), regex.compile("a.b")!!.test("a\nb"))
+println(regex.compile(r"^b", "im")!!.findAll("a\nB\nb").size())
+
+println(regex.escape("1+1=2? (yes) [a|b] {x} ^$ \\ ."), regex.compile(regex.escape("a.b*c"))!!.findAll("a.b*c axbbc").size())
+
+println(regex.compile(r"日本")!!.find("こんにちは日本語")!!.start(), regex.compile(r"\w+")!!.findAll("café au lait").map { it.value() })
+println(regex.compile(r"(\d+)")!!.findAll("x 12 y 345").map { it.group(1)!!.toIntOr(0) }.fold(0) { a, b -> a + b })
+
+for bad in ["(", "a)", "[a", "*a", "a**", "(?=a)", r"\1", "a{3,1}", "(?<n", "[z-a]", "a{1001}", r"a\", "(?q)", "(?<=a)b"] {
+    println(bad, regex.compile(bad), regex.lastError())
+}
+println(regex.compile("a", "x"), regex.lastError())
+println(regex.compile("ok") != null, "[" + regex.lastError() + "]")

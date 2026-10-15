@@ -1,0 +1,236 @@
+// import regex
+//
+//   r := regex.compile(r"(\d+)-(\d+)")!!
+//   m := r.find("call 555-1234 now")!!
+//   println(m.value(), m.group(1), m.group(2), m.start())      // 555-1234 555 1234 5
+//   println(regex.compile(r"\s+")!!.replaceAll("a   b  c", " "))   // a b c
+//   for word in regex.compile(r"[a-z]+")!!.findAll("ab cd") { println(word) }
+//
+// Regular expressions without any external library.  Write patterns as raw strings (r"…") so
+// backslashes need no doubling.  Positions are byte offsets, like the rest of String.
+//
+// Syntax: literals, `.`, classes `[a-z\d_]` and `[^…]`, `\d \D \w \W \s \S`, anchors `^ $ \b \B \A \z`,
+// groups `(…)`, `(?:…)`, `(?<name>…)`, alternation `|`, and the quantifiers `* + ? {n} {n,} {n,m}`
+// (add `?` for the lazy form).  Flags (the second argument): "i" ignore case, "m" `^`/`$` match at every
+// line, "s" `.` matches line breaks too.  Backreferences and lookaround are not supported; in return the
+// matching time is always proportional to pattern size times text length.
+
+extern fn __compile(pattern: String, flags: String) -> Bytes? = "aion_regex_compile"
+extern fn __error() -> String = "aion_regex_error"
+extern fn __groups(prog: Bytes) -> Int = "aion_regex_groups"
+extern fn __names(prog: Bytes) -> String = "aion_regex_names"
+extern fn __search(prog: Bytes, text: String, start: Int, anchored: Bool) -> Bool = "aion_regex_search"
+extern fn __cap(index: Int) -> Int = "aion_regex_cap"
+
+lastErr := ""
+
+// Why the most recent `compile` returned null.
+fn lastError() -> String = lastErr
+
+// One match: where it is and what the groups captured.
+type Match(text: String, spans: List<Int>, names: List<String>) {
+    // Byte offsets of the whole match: text[start()..end()] is `value()`.
+    fn start() = spans[0]
+    fn end() = spans[1]
+    fn value() = text.substring(spans[0], spans[1])
+    // How many groups the pattern has (not counting the whole match).
+    fn groupCount() = spans.size() / 2 - 1
+    // What group `i` (1 and up; 0 is the whole match) matched; null if it took no part in the match.
+    fn group(i: Int) -> String? {
+        if i < 0 || i > groupCount() || spans[2 * i] < 0 {
+            return null
+        }
+        return text.substring(spans[2 * i], spans[2 * i + 1])
+    }
+    fn groupStart(i: Int) = if i < 0 || i > groupCount() { -1 } else { spans[2 * i] }
+    fn groupEnd(i: Int) = if i < 0 || i > groupCount() { -1 } else { spans[2 * i + 1] }
+    // A named group `(?<name>…)`.
+    fn named(name: String) -> String? {
+        i := names.indexOf(name)
+        return if i < 0 { null } else { group(i + 1) }
+    }
+    // All the groups, 1 and up.
+    fn groups() -> List<String?> {
+        out := List<String?>()
+        for i in 1..groupCount() + 1 {
+            out.add(group(i))
+        }
+        return out
+    }
+    fn toString() = value()
+}
+
+type Regex(pattern: String, flags: String, prog: Bytes) {
+    names: List<String> = List<String>()
+    whole: Bytes? = null
+
+    fn groupCount() = __groups(prog)
+
+    // The first match at or after byte offset `from`, or null.
+    fn find(text: String, from: Int = 0) -> Match? {
+        if !__search(prog, text, from, false) {
+            return null
+        }
+        return collect(text)
+    }
+
+    fn collect(text: String) -> Match {
+        if names.size() == 0 && groupCount() > 0 {
+            names = __names(prog).split("\n")
+        }
+        spans := List<Int>()
+        for i in 0..2 * (groupCount() + 1) {
+            spans.add(__cap(i))
+        }
+        return Match(text, spans, names)
+    }
+
+    // Is there a match anywhere in the text?
+    fn test(text: String) = __search(prog, text, 0, false)
+
+    // Does the pattern match the whole text?
+    fn matches(text: String) -> Bool {
+        if whole == null {
+            whole = __compile("\\A(?:" + pattern + ")\\z", flags)
+        }
+        return __search(whole!!, text, 0, true)
+    }
+
+    // Every non-overlapping match, left to right.
+    fn findAll(text: String) -> List<Match> {
+        out := List<Match>()
+        at := 0
+        while at <= text.length() {
+            m := find(text, at)
+            if m == null { break }
+            out.add(m)
+            at = if m.end() > m.start() { m.end() } else { m.end() + (if m.end() < text.length() { text.charAt(m.end()).byteLength() } else { 1 }) }
+        }
+        return out
+    }
+
+    fn count(text: String) = findAll(text).size()
+
+    // Replace every match with the result of `make(match)`.
+    fn replaceWith(text: String, make: (Match) -> String) -> String {
+        out := StringBuilder()
+        last := 0
+        for m in findAll(text) {
+            out.append(text.substring(last, m.start()))
+            out.append(make(m))
+            last = m.end()
+        }
+        out.append(text.substring(last, text.length()))
+        return out.toString()
+    }
+
+    // Replace every match; the replacement can use $1, ${name} and $0 for the whole match ($$ is a dollar).
+    fn replaceAll(text: String, replacement: String) -> String = replaceWith(text) { expand(replacement, it) }
+
+    // Replace only the first match.
+    fn replace(text: String, replacement: String) -> String {
+        m := find(text)
+        if m == null {
+            return text
+        }
+        return text.substring(0, m.start()) + expand(replacement, m) + text.substring(m.end(), text.length())
+    }
+
+    // The pieces of the text between the matches (an empty match splits nothing).
+    fn split(text: String) -> List<String> {
+        out := List<String>()
+        last := 0
+        for m in findAll(text) {
+            if m.end() > m.start() {
+                out.add(text.substring(last, m.start()))
+                last = m.end()
+            }
+        }
+        out.add(text.substring(last, text.length()))
+        return out
+    }
+
+    fn toString() = "Regex($pattern)"
+}
+
+// Fill in $0, $1.., ${name} and $$ in a replacement.
+fn expand(template: String, m: Match) -> String {
+    if !template.contains("$") {
+        return template
+    }
+    out := StringBuilder()
+    at := 0
+    n := template.length()
+    while at < n {
+        c := template.charAt(at)
+        if c != '$' || at + 1 >= n {
+            out.appendChar(c)
+            at += c.byteLength()
+            continue
+        }
+        d := template.charAt(at + 1)
+        if d == '$' {
+            out.append("$")
+            at += 2
+        } else if d == '{' {
+            close := template.indexOf("}", at)
+            if close < 0 {
+                out.append("$")
+                at += 1
+                continue
+            }
+            key := template.substring(at + 2, close)
+            number := key.toIntOrNull()
+            out.append((if number != null { m.group(number) } else { m.named(key) }) ?: "")
+            at = close + 1
+        } else if d.isDigit() {
+            number := d - '0'
+            at += 2
+            if at < n && template.charAt(at).isDigit() && number * 10 + (template.charAt(at) - '0') <= m.groupCount() {
+                number = number * 10 + (template.charAt(at) - '0')
+                at += 1
+            }
+            out.append(m.group(number) ?: "")
+        } else {
+            out.append("$")
+            at += 1
+        }
+    }
+    return out.toString()
+}
+
+// Compile a pattern (with optional flags "i", "m", "s"); null if the pattern is invalid (see `lastError()`).
+fn compile(pattern: String, flags: String = "") -> Regex? {
+    lastErr = ""
+    prog := __compile(pattern, flags)
+    if prog == null {
+        lastErr = __error()
+        return null
+    }
+    return Regex(pattern, flags, prog)
+}
+
+// Like `compile`, but stops the program with the error message when the pattern is invalid.
+fn regex(pattern: String, flags: String = "") -> Regex {
+    r := compile(pattern, flags)
+    if r == null {
+        panic("invalid regex /$pattern/: $lastErr")
+    }
+    return r
+}
+
+// Does the pattern match anywhere in the text?  And: does it match all of it?
+fn test(pattern: String, text: String) -> Bool = regex(pattern).test(text)
+fn matches(pattern: String, text: String) -> Bool = regex(pattern).matches(text)
+
+// The text with every character that has a meaning in patterns escaped, to match it literally.
+fn escape(text: String) -> String {
+    out := StringBuilder()
+    for c in text {
+        if "\\^$.|?*+()[]{}-/".contains(c.toString()) {
+            out.append("\\")
+        }
+        out.appendChar(c)
+    }
+    return out.toString()
+}
