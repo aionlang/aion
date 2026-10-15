@@ -320,6 +320,7 @@ impl Tables {
             Ty::Bool => "Bool".into(),
             Ty::Char => "Char".into(),
             Ty::Str => "String".into(),
+            Ty::Bytes => "Bytes".into(),
             Ty::Obj(id) => self.ty(id).name.clone(),
             Ty::Fn(id) => {
                 let sig = self.fn_sig(id);
@@ -749,7 +750,7 @@ impl<'a> Checker<'a> {
             // Function values may be passed to C (as an opaque closure pointer), never returned.
             // A `String?` is the same `const char *`, with NULL for null.
             let plain = |ty: Ty| match ty {
-                Ty::Opt(o) => self.t.opt_inner(o) == Ty::Str,
+                Ty::Opt(o) => matches!(self.t.opt_inner(o), Ty::Str | Ty::Bytes),
                 Ty::Obj(_) | Ty::Null => false,
                 _ => true,
             };
@@ -1388,6 +1389,7 @@ fn builtin_type(name: &str) -> Option<Ty> {
         "Bool" => Ty::Bool,
         "Char" => Ty::Char,
         "String" => Ty::Str,
+        "Bytes" => Ty::Bytes,
         _ => return None,
     })
 }
@@ -1399,6 +1401,7 @@ fn builtin_key(ty: Ty) -> u8 {
         Ty::Bool => 2,
         Ty::Str => 3,
         Ty::Char => 4,
+        Ty::Bytes => 5,
         _ => u8::MAX,
     }
 }

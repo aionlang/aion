@@ -19,6 +19,8 @@ pub enum Ty {
     /// A Unicode code point, held like an `Int`.
     Char,
     Str,
+    /// A run of raw bytes, held like a `String` but never null and not NUL-terminated.
+    Bytes,
     /// A reference to an instance of a user-defined `type`.
     Obj(TypeId),
     /// A function value (a closure), identified by its interned signature.
@@ -35,7 +37,7 @@ pub enum Ty {
 impl Ty {
     /// Values of this type live on the garbage-collected heap.
     pub fn is_gc(self) -> bool {
-        matches!(self, Ty::Str | Ty::Obj(_) | Ty::Fn(_) | Ty::Opt(_))
+        matches!(self, Ty::Str | Ty::Bytes | Ty::Obj(_) | Ty::Fn(_) | Ty::Opt(_))
     }
 }
 
@@ -191,6 +193,8 @@ pub enum ExprKind {
     Float(f64),
     Bool(bool),
     Str(String),
+    /// The zero-length `Bytes` value (the default of a `Bytes` variable).
+    EmptyBytes,
     Local(LocalId),
     Global(GlobalId),
     /// The null reference.

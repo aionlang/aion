@@ -1270,6 +1270,13 @@ impl<'c, 'a> Cx<'c, 'a> {
                 return Ok(value.ty);
             }
         }
+        // `bytes[i] = v`: a `set` method added to a built-in type
+        if !matches!(obj.ty, Ty::Obj(_))
+            && let Some(set) = self.ck.ext_method(obj.ty, "set")
+            && let [_, _, value] = self.ck.func(set).params.as_slice()
+        {
+            return Ok(value.ty);
+        }
         Err(Diagnostic::new(format!("cannot assign to an element of a {}", self.name(obj.ty)), span)
             .hint("indexing assignment needs a `set(index, value)` method"))
     }
@@ -1298,6 +1305,12 @@ impl<'c, 'a> Cx<'c, 'a> {
 
     /// `obj[index] = value`
     fn set_element(&mut self, obj: hir::Expr, index: hir::Expr, value: hir::Expr, span: Span) -> Result<hir::Stmt> {
+        if !matches!(obj.ty, Ty::Obj(_))
+            && let Some(set) = self.ck.ext_method(obj.ty, "set")
+        {
+            let call = self.call_values(set, Some(obj), vec![(index, span), (value, span)], span)?;
+            return Ok(hir::Stmt::Expr(call));
+        }
         if let Ty::Obj(t) = obj.ty {
             let info = self.ck.t.ty(t);
             if let Some(elem) = info.array_elem {
@@ -1438,6 +1451,9 @@ impl<'c, 'a> Cx<'c, 'a> {
         let v = self.value(&arg.value)?;
         if matches!(v.ty, Ty::Fn(_)) {
             return Err(Diagnostic::new("a function has no hash", arg.value.span));
+        }
+        if v.ty == Ty::Bytes {
+            return self.prelude_call("__bytes_hash", vec![v], span);
         }
         if let Some(hash) = self.custom_hash(&v) {
             return Ok(self.object_hash(hash, v));
@@ -1865,6 +1881,7 @@ impl<'c, 'a> Cx<'c, 'a> {
         match e.ty {
             Ty::Str => Ok(e),
             Ty::Int | Ty::Float | Ty::Bool | Ty::Char => Ok(mk(K::ToStr(Box::new(e)), Ty::Str)),
+            Ty::Bytes => self.prelude_call("__bytes_str", vec![e], span),
             Ty::Obj(ty) if self.ck.t.ty(ty).array_elem.is_some() => {
                 Err(Diagnostic::new(format!("a {} has no text form", self.name(e.ty)), span)
                     .hint("an Array is a building block; a List can be printed"))
@@ -2281,6 +2298,20 @@ impl<'c, 'a> Cx<'c, 'a> {
             } else {
                 e
             });
+        }
+
+        // Bytes are equal when they hold the same bytes.
+        if l.ty == Ty::Bytes && matches!(op, B::Eq | B::Ne) {
+            let same = self.prelude_call("__bytes_equals", vec![l, r], span)?;
+            return Ok(if op == B::Eq { same } else { mk(K::Not(Box::new(same)), Ty::Bool) });
+        }
+
+        // `a + b` on Bytes joins them.
+        if l.ty == Ty::Bytes
+            && op == B::Add
+            && let Some(concat) = self.ck.ext_method(Ty::Bytes, "concat")
+        {
+            return self.call_values(concat, Some(l), vec![(r, span)], span);
         }
 
         let (hop, result) = match op {
@@ -2912,7 +2943,7 @@ impl<'c, 'a> Cx<'c, 'a> {
             // `println(null)` is fine: it prints "null".
             let v = if matches!(a.value.kind, A::Null) { mk(K::Null, Ty::Null) } else { self.value(&a.value)? };
             out.push(match v.ty {
-                Ty::Obj(_) | Ty::Opt(_) | Ty::Null => self.stringify(v, a.value.span)?,
+                Ty::Obj(_) | Ty::Opt(_) | Ty::Null | Ty::Bytes => self.stringify(v, a.value.span)?,
                 Ty::Fn(_) => return Err(Diagnostic::new("cannot print a function", a.value.span)),
                 _ => v,
             });
@@ -2927,6 +2958,7 @@ fn default_expr(ty: Ty) -> hir::Expr {
         Ty::Float => mk(K::Float(0.0), Ty::Float),
         Ty::Bool => mk(K::Bool(false), Ty::Bool),
         Ty::Str => mk(K::Str(String::new()), Ty::Str),
+        Ty::Bytes => mk(K::EmptyBytes, Ty::Bytes),
         Ty::Obj(_) | Ty::Fn(_) | Ty::Opt(_) | Ty::Null => mk(K::Null, ty),
         Ty::Void => unit(),
     }

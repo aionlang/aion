@@ -35,6 +35,7 @@ impl<'a> Checker<'a> {
                     "Bool" => Some(Ty::Bool),
                     "Char" => Some(Ty::Char),
                     "String" => Some(Ty::Str),
+                    "Bytes" => Some(Ty::Bytes),
                     "Unit" => Some(Ty::Void),
                     _ => None,
                 };

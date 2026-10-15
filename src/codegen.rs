@@ -107,6 +107,7 @@ pub fn emit(p: &Program) -> String {
 
     // `is` / `as`: for each target, which type ids pass; and the header a null reference reads.
     out.push_str("@aion_null_object = internal constant [32 x i8] zeroinitializer\n");
+    out.push_str(EMPTY_BYTES_DEFINITION);
     for check in &p.instance_checks {
         let n = p.types.len() + 1;
         let mut slots = vec!["i8 0"; n];
@@ -123,6 +124,7 @@ pub fn emit(p: &Program) -> String {
             Ty::Float => "0.0".to_string(),
             Ty::Bool => "false".to_string(),
             Ty::Str => pool.operand(""),
+            Ty::Bytes => EMPTY_BYTES.to_string(),
             _ => "null".to_string(),
         };
         let _ = writeln!(out, "@\"{}\" = internal global {} {init} ; {}", g.symbol, ir(g.ty), g.name);
@@ -162,7 +164,7 @@ fn ir(ty: Ty) -> &'static str {
         Ty::Int | Ty::Char => "i64",
         Ty::Float => "double",
         Ty::Bool => "i1",
-        Ty::Str | Ty::Obj(_) | Ty::Fn(_) | Ty::Opt(_) | Ty::Null => "ptr",
+        Ty::Str | Ty::Bytes | Ty::Obj(_) | Ty::Fn(_) | Ty::Opt(_) | Ty::Null => "ptr",
         Ty::Void => "void",
     }
 }
@@ -171,6 +173,12 @@ fn ir(ty: Ty) -> &'static str {
 fn zext(ty: Ty) -> &'static str {
     if ty == Ty::Bool { " zeroext " } else if ty == Ty::Void { "" } else { " " }
 }
+
+/// The one static zero-length `Bytes` (static: the collector never frees it).
+const EMPTY_BYTES: &str =
+    "getelementptr inbounds ({ i64, i32, i32, i64, [8 x i8] }, ptr @aion_empty_bytes, i32 0, i32 4)";
+const EMPTY_BYTES_DEFINITION: &str = "@aion_empty_bytes = internal constant { i64, i32, i32, i64, [8 x i8] } \
+     { i64 0, i32 0, i32 2, i64 0, [8 x i8] zeroinitializer }, align 8\n";
 
 // ── string literal pool ─────────────────────────────────────────────
 
@@ -534,6 +542,7 @@ impl<'a> FnGen<'a> {
                 let v = match init {
                     Some(e) => self.expr(e),
                     None if ty == Ty::Str => self.pool.operand(""),
+                    None if ty == Ty::Bytes => EMPTY_BYTES.to_string(),
                     None => Self::default_value(ty).to_string(),
                 };
                 self.init_local(*id, &v);
@@ -680,6 +689,7 @@ impl<'a> FnGen<'a> {
             ExprKind::Float(v) => format!("0x{:016X}", v.to_bits()),
             ExprKind::Bool(v) => v.to_string(),
             ExprKind::Str(s) => self.pool.operand(s),
+            ExprKind::EmptyBytes => EMPTY_BYTES.to_string(),
             ExprKind::Local(id) => self.load_local(*id),
 
             ExprKind::Field { obj, index } => {
@@ -924,8 +934,8 @@ impl<'a> FnGen<'a> {
                 let o = self.call_value("ptr", &format!("@aion_new_object(i64 {}, i64 {}, i64 {})", def.fields.len(), mask as i64, *ty + 1));
                 self.root(&o);
                 for (i, f) in def.fields.iter().enumerate() {
-                    if f.ty == Ty::Str {
-                        let empty = self.pool.operand("");
+                    if matches!(f.ty, Ty::Str | Ty::Bytes) {
+                        let empty = if f.ty == Ty::Str { self.pool.operand("") } else { EMPTY_BYTES.to_string() };
                         let addr = self.field_addr(&o, i);
                         self.line(format!("store ptr {empty}, ptr {addr}"));
                     }
