@@ -1,0 +1,5 @@
+// error: `g` overrides nothing
+open type A { fn f() = 1 }
+type B : A {
+  override fn g() = 2
+}

@@ -1698,6 +1698,26 @@ impl<'c, 'a> Cx<'c, 'a> {
         }
     }
 
+    /// A call to a method that subtypes may replace goes through the object's real type.
+    fn virtual_if_open(&self, call: hir::Expr, virtuals: &HashMap<String, (TypeId, usize)>, name: &str) -> hir::Expr {
+        match virtuals.get(name) {
+            Some(&(root, index)) => self.virtualize(call, root, index),
+            None => call,
+        }
+    }
+
+    /// Turn a direct call into a call looked up through the receiver's real type.
+    fn virtualize(&self, e: hir::Expr, root: TypeId, index: usize) -> hir::Expr {
+        match e.kind {
+            K::Call { args, .. } => hir::Expr { kind: K::CallIface { iface: root, method: index, args }, ty: e.ty },
+            K::Block(stmts, tail) => {
+                let ty = e.ty;
+                hir::Expr { kind: K::Block(stmts, Box::new(self.virtualize(*tail, root, index))), ty }
+            }
+            _ => e,
+        }
+    }
+
     /// The constructor of `ty`; interfaces have none.
     fn ctor_of(&self, ty: TypeId, span: Span) -> Result<FnId> {
         let info = self.ck.t.ty(ty);
@@ -2347,7 +2367,8 @@ impl<'c, 'a> Cx<'c, 'a> {
                             return Err(not_generic(n));
                         }
                         let recv = self.this_expr();
-                        return self.call_fn(m, recv, args, span);
+                        let call = self.call_fn(m, recv, args, span)?;
+                        return Ok(self.virtual_if_open(call, &info.virtuals, n));
                     }
                     if let Some(&g) = info.generic_methods.get(n) {
                         let recv = self.this_expr();
@@ -2492,7 +2513,8 @@ impl<'c, 'a> Cx<'c, 'a> {
             if !type_args.is_empty() {
                 return Err(not_generic(&member.name));
             }
-            return self.call_fn(id, Some(recv), args, span);
+            let call = self.call_fn(id, Some(recv), args, span)?;
+            return Ok(self.virtual_if_open(call, &info.virtuals, &member.name));
         }
         if let Some(&g) = info.generic_methods.get(&member.name) {
             return self.call_generic_fn(g, Some(recv), type_args, args, span, expected);

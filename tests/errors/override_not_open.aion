@@ -1,0 +1,5 @@
+// error: `A.f` is not `open`, so `B` cannot replace it
+open type A { fn f() = 1 }
+type B : A {
+  override fn f() = 2
+}

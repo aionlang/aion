@@ -1,0 +1,5 @@
+// error: `B.f` replaces a method of `A`
+open type A { open fn f() = 1 }
+type B : A {
+  fn f() = 2
+}

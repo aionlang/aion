@@ -1,0 +1,5 @@
+// error: but the method it overrides takes () and returns Int
+open type A { open fn f() = 1 }
+type B : A {
+  override fn f() = "two"
+}

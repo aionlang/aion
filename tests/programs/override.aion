@@ -1,0 +1,27 @@
+// open / override: a call is looked up on the real object, not the declared type
+open type Animal(name: String) {
+    open fn sound() = "..."
+    open fn speak() = "$name says ${sound()}"        // sound() is looked up on the real object
+    fn loud() = speak().upper()                       // not open: always Animal's
+}
+open type Dog(name: String) : Animal(name) {
+    override fn sound() = "Woof"
+    fn fetch() = "$name fetches"
+}
+type Puppy(name: String) : Dog(name) {
+    override fn sound() = "Yip"
+}
+type Cat(name: String) : Animal(name) {
+    override fn sound() = "Meow"
+    override fn speak() = "$name purrs"
+}
+type Fish(name: String) : Animal(name)               // keeps the defaults
+
+animals: List<Animal> = [Dog("Rex"), Cat("Tom"), Puppy("Bit"), Fish("Nemo"), Animal("generic")]
+for a in animals { println(a.speak()) }
+println(animals[2].loud(), animals[1].loud())
+
+d: Dog = Puppy("Pup")
+println(d.sound(), d.fetch())
+p: Animal = Puppy("Pup")
+println(p.sound(), p == d)

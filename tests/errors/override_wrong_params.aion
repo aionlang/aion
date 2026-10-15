@@ -1,0 +1,5 @@
+// error: takes (String) and returns Int, but the method it overrides takes (Int)
+open type A { open fn f(x: Int) = 1 }
+type B : A {
+  override fn f(x: String) = 2
+}

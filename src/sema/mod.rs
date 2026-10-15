@@ -47,6 +47,11 @@ pub struct TypeInfo {
     pub init: Option<FnId>,
     /// Methods taken over from the parent and not replaced.
     pub inherited: HashSet<String>,
+    /// Methods that subtypes may replace: name → (the type that first declared it `open`,
+    /// its position in that type's `vlist`).  Calls to them look the real type up at run time.
+    pub virtuals: HashMap<String, (TypeId, usize)>,
+    /// The methods this type declared `open`, in order.
+    pub vlist: Vec<String>,
 }
 
 impl TypeInfo {
@@ -64,6 +69,8 @@ impl TypeInfo {
             open: false,
             init: None,
             inherited: HashSet::new(),
+            virtuals: HashMap::new(),
+            vlist: Vec::new(),
         }
     }
 }
@@ -240,6 +247,8 @@ pub struct Checker<'a> {
     /// Names of module variables that functions, lambdas or other modules assign:
     /// these are never narrowed by null checks.
     unstable_globals: HashSet<String>,
+    /// `override fn`s with the method each replaces, to check that the signatures agree.
+    overrides: RefCell<Vec<(FnId, FnId, Span)>>,
     /// (concrete type, interface) pairs where a value of the first is used as the second.
     upcasts: RefCell<BTreeSet<(TypeId, TypeId)>>,
     /// Interfaces whose values are turned into text (they then dispatch `toString` too).
@@ -372,7 +381,8 @@ pub fn analyze(loaded: &Loaded) -> Result<hir::Program> {
         // Types used as an interface that gets printed need their `toString` compiled.
         let pending: Vec<TypeId> = {
             let (ups, shown) = (ck.upcasts.borrow(), ck.stringified.borrow());
-            ups.iter().filter(|(_, i)| shown.contains(i)).map(|&(t, _)| t).collect()
+            let pending: Vec<TypeId> = ups.iter().filter(|(_, i)| shown.contains(i)).map(|&(t, _)| t).collect();
+            pending
         };
         for t in pending {
             if !ck.tostring.borrow().contains_key(&t) {
@@ -384,6 +394,7 @@ pub fn analyze(loaded: &Loaded) -> Result<hir::Program> {
             break;
         }
     }
+    ck.check_overrides()?;
     ck.finish(loaded.modules.len() - 1)
 }
 
@@ -405,6 +416,7 @@ impl<'a> Checker<'a> {
             depth: Cell::new(0),
             ext_methods: RefCell::new(HashMap::new()),
             unstable_globals: unstable_globals(loaded),
+            overrides: RefCell::new(Vec::new()),
             upcasts: RefCell::new(BTreeSet::new()),
             stringified: RefCell::new(BTreeSet::new()),
         };
@@ -782,6 +794,9 @@ impl<'a> Checker<'a> {
             for (name, &g) in &p.generic_methods {
                 ti.generic_methods.entry(name.clone()).or_insert(g);
             }
+            for (name, &v) in &p.virtuals {
+                ti.virtuals.entry(name.clone()).or_insert(v);
+            }
         });
     }
 
@@ -799,10 +814,38 @@ impl<'a> Checker<'a> {
         }
         let owner = self.t.ty(ty).name.clone();
         let existing = self.t.ty(ty);
-        if decl.modifier != ast::Modifier::None || existing.inherited.contains(&decl.name.name) {
-            return Err(Diagnostic::new("overriding methods is not available yet", decl.name.span));
+        let name = &decl.name.name;
+        let inherited = existing.inherited.contains(name);
+        let parent_name = existing.parent.map(|p| self.t.ty(p).name.clone()).unwrap_or_default();
+        match (decl.modifier, inherited) {
+            (ast::Modifier::None, false) => {}
+            (ast::Modifier::Override, false) => {
+                return Err(Diagnostic::new(format!("`{name}` overrides nothing: `{owner}` inherits no such method"), decl.name.span));
+            }
+            (ast::Modifier::Open, false) if !existing.open => {
+                return Err(Diagnostic::new(format!("`open fn` needs an `open type`; `{owner}` is not open"), decl.name.span));
+            }
+            (ast::Modifier::Open, false) => {}
+            (modifier, true) => {
+                if !existing.virtuals.contains_key(name) {
+                    return Err(Diagnostic::new(format!("`{parent_name}.{name}` is not `open`, so `{owner}` cannot replace it"), decl.name.span)
+                        .hint(format!("declare it `open fn {name}` in `{parent_name}`")));
+                }
+                if modifier != ast::Modifier::Override {
+                    return Err(Diagnostic::new(format!("`{owner}.{name}` replaces a method of `{parent_name}`"), decl.name.span)
+                        .hint(format!("write `override fn {name}`")));
+                }
+                if !decl.type_params.is_empty() {
+                    return Err(Diagnostic::new("a generic method cannot be overridden", decl.name.span));
+                }
+            }
         }
-        if existing.methods.contains_key(&decl.name.name) || existing.generic_methods.contains_key(&decl.name.name) {
+        if decl.modifier != ast::Modifier::None && !decl.type_params.is_empty() {
+            return Err(Diagnostic::new("a generic method cannot be `open`", decl.name.span));
+        }
+        if !inherited
+            && (existing.methods.contains_key(name) || existing.generic_methods.contains_key(name))
+        {
             return Err(Diagnostic::new(
                 format!("`{owner}` already has a method `{}`", decl.name.name),
                 decl.name.span,
@@ -826,9 +869,18 @@ impl<'a> Checker<'a> {
         let symbol = method_symbol(module_name, &owner, ty, &decl.name.name);
         let info = self.signature(mi, decl, FuncKind::Method, Some(Ty::Obj(ty)), symbol, subst)?;
         let id = self.declare_fn(info, Work::Method { decl, subst: subst.clone() });
+        let replaced = self.t.ty(ty).methods.get(name).copied();
         self.t.update_type(ty, |ti| {
-            ti.methods.insert(decl.name.name.clone(), id);
+            ti.methods.insert(name.clone(), id);
+            ti.inherited.remove(name);
+            if decl.modifier == ast::Modifier::Open {
+                ti.virtuals.insert(name.clone(), (ty, ti.vlist.len()));
+                ti.vlist.push(name.clone());
+            }
         });
+        if let (ast::Modifier::Override, Some(parent_fn)) = (decl.modifier, replaced) {
+            self.overrides.borrow_mut().push((id, parent_fn, decl.name.span));
+        }
         Ok(())
     }
 
@@ -1025,6 +1077,34 @@ impl<'a> Checker<'a> {
         Ok(g.ty.get().expect("checking the initialiser fixes global types"))
     }
 
+    /// An `override fn` must take and return exactly what the method it replaces does.
+    fn check_overrides(&self) -> Result<()> {
+        for (child, parent, span) in self.overrides.borrow().clone() {
+            let shape = |f: FnId| -> Result<(Vec<Ty>, Ty)> {
+                let params = self.func(f).params[1..].iter().map(|p| p.ty).collect();
+                Ok((params, self.ret_of(f, span)?))
+            };
+            let ((cp, cr), (pp, pr)) = (shape(child)?, shape(parent)?);
+            if (cp.clone(), cr) != (pp.clone(), pr) {
+                let show = |ps: &[Ty], r: Ty| {
+                    let ps: Vec<String> = ps.iter().map(|&p| self.t.ty_name(p)).collect();
+                    let r = if r == Ty::Void { "nothing".to_string() } else { self.t.ty_name(r) };
+                    format!("takes ({}) and returns {r}", ps.join(", "))
+                };
+                return Err(Diagnostic::new(
+                    format!(
+                        "`{}` {}, but the method it overrides {}",
+                        self.func(child).name,
+                        show(&cp, cr),
+                        show(&pp, pr)
+                    ),
+                    span,
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Why a value of type `ty` cannot be used as interface `iface`, if it can't.
     pub fn conforms(&self, ty: TypeId, iface: TypeId) -> std::result::Result<(), String> {
         self.satisfies(Ty::Obj(ty), iface)
@@ -1133,6 +1213,16 @@ impl<'a> Checker<'a> {
         let ups = self.upcasts.borrow();
         let shown = self.stringified.borrow();
         let mut tables = Vec::new();
+        // Methods that subtypes may replace: one table per method of the type that opened it.
+        let count = self.t.types.borrow().len();
+        for root in 0..count {
+            let info = self.t.ty(root);
+            let family = |s: TypeId| s == root || self.is_subtype(s, root);
+            for (index, name) in info.vlist.iter().enumerate() {
+                let entries = (0..count).filter(|&s| family(s)).map(|s| (s, self.t.ty(s).methods[name])).collect();
+                tables.push(hir::Dispatch { iface: root, method: index, entries });
+            }
+        }
         let ifaces: BTreeSet<TypeId> = ups.iter().map(|&(_, i)| i).collect();
         for iface in ifaces {
             let info = self.t.ty(iface);

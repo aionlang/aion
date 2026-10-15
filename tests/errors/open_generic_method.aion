@@ -1,0 +1,2 @@
+// error: a generic method cannot be `open`
+open type A { open fn m<T>(x: T) = x }

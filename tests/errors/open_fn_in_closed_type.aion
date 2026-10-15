@@ -1,0 +1,2 @@
+// error: `open fn` needs an `open type`
+type A { open fn f() = 1 }
