@@ -1,0 +1,71 @@
+// random: seeded generation is repeatable; ranges, shuffles and samples stay in bounds
+import random
+
+random.seed(42)
+first := List<Int>()
+for i in 0..5 {
+    first.add(random.int(1000))
+}
+random.seed(42)
+second := List<Int>()
+for i in 0..5 {
+    second.add(random.int(1000))
+}
+println(first.join(",") == second.join(","), first.size())
+random.seed(43)
+third := List<Int>()
+for i in 0..5 {
+    third.add(random.int(1000))
+}
+println(first.join(",") != third.join(","))
+
+ok := true
+seen := Set<Int>()
+for i in 0..2000 {
+    n := random.range(-3, 3)
+    seen.add(n)
+    if n < -3 || n > 3 {
+        ok = false
+    }
+    f := random.float()
+    if f < 0.0 || f >= 1.0 {
+        ok = false
+    }
+    g := random.between(10.0, 20.0)
+    if g < 10.0 || g >= 20.0 {
+        ok = false
+    }
+    if random.int(7) >= 7 {
+        ok = false
+    }
+}
+println(ok, seen.size(), random.range(5, 5), random.int(1))
+
+heads := 0
+for i in 0..4000 {
+    if random.bool() {
+        heads += 1
+    }
+}
+println(heads > 1700 && heads < 2300, random.chance(0.0), random.chance(1.0))
+
+deck := List<Int>()
+for i in 0..20 {
+    deck.add(i)
+}
+random.shuffle(deck)
+total := 0
+for c in deck {
+    total += c
+}
+inOrder := List<Int>()
+for i in 0..20 {
+    inOrder.add(i)
+}
+println(deck.size(), total, deck.join(",") != inOrder.join(","), deck.sorted().join(",") == inOrder.join(","))
+picked := random.sample(deck, 5)
+println(picked.size(), setOf(picked).size(), random.sample(deck, 0).size(), random.sample(deck, 20).size())
+println(random.choice(["only"]), ["a", "b", "c"].contains(random.choice(["a", "b", "c"])))
+
+println(random.secureBytes(8).size(), random.token().length(), random.token(4).length(), random.token() != random.token(), random.secureBytes(0).size())
+println(random.any() != random.any())

@@ -1,0 +1,76 @@
+// import random
+//
+//   random.int(6)                   // 0 to 5
+//   random.range(1, 6)              // 1 to 6
+//   random.choice(["a", "b", "c"])
+//   random.shuffle(deck)            // in place
+//   random.seed(42)                 // the same numbers on every run
+//
+// A fast generator, seeded from the operating system unless you call `seed`.  It is
+// not suitable for secrets: use `secureBytes` for keys and tokens.
+
+extern fn seed(value: Int) = "aion_random_seed"
+extern fn __below(bound: Int) -> Int = "aion_random_below"
+extern fn float() -> Float = "aion_random_float"
+extern fn any() -> Int = "aion_random_int"
+// Bytes from the operating system's secure source.
+extern fn secureBytes(count: Int) -> Bytes = "aion_random_secure_bytes"
+
+// A number from 0 up to but not including `bound`.
+fn int(bound: Int) -> Int = __below(bound)
+
+// A number from `low` to `high`, both included.
+fn range(low: Int, high: Int) -> Int {
+    if high < low {
+        panic("range needs low <= high")
+    }
+    return low + __below(high - low + 1)
+}
+
+// A float from `low` up to but not including `high`.
+fn between(low: Float, high: Float) -> Float = low + float() * (high - low)
+
+fn bool() -> Bool = __below(2) == 1
+
+// True with the given probability (0.0 to 1.0).
+fn chance(probability: Float) -> Bool = float() < probability
+
+// One element of a non-empty list.
+fn choice<T>(items: List<T>) -> T {
+    if items.size() == 0 {
+        panic("choice needs a non-empty list")
+    }
+    return items[__below(items.size())]
+}
+
+// Reorder a list at random, in place.
+fn shuffle<T>(items: List<T>) {
+    i := items.size() - 1
+    while i > 0 {
+        j := __below(i + 1)
+        tmp := items[i]
+        items[i] = items[j]
+        items[j] = tmp
+        i -= 1
+    }
+}
+
+// `count` different elements of the list, in random order.
+fn sample<T>(items: List<T>, count: Int) -> List<T> {
+    if count < 0 || count > items.size() {
+        panic("sample needs 0 <= count <= the size of the list")
+    }
+    copy := List<T>()
+    for item in items {
+        copy.add(item)
+    }
+    shuffle(copy)
+    out := List<T>()
+    for i in 0..count {
+        out.add(copy[i])
+    }
+    return out
+}
+
+// A random lower-case hexadecimal text of `bytes` random bytes, from the secure source.
+fn token(bytes: Int = 16) -> String = secureBytes(bytes).toHex()
