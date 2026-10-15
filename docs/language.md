@@ -778,6 +778,72 @@ blocks run as closures, `return`, `break` and `continue` cannot leave them; assi
 to a variable, or use the value of the `try`.  An uncaught panic runs the
 remaining `defer`s, prints `[aion] panic: message` and exits with status 1.
 
+## Tasks and channels
+
+A **task** is a block of code that runs alongside the rest of the program.  Tasks are
+cooperative: only one runs at a time, and the switch happens when a task waits for
+something (`join`, `await`, a channel, `sleep`) or calls `yield()`.  So tasks can share
+variables without locks, and nothing is interrupted halfway through a statement.
+
+```aion
+a := launch { for i in 0..3 { println("a", i); yield() } }     // a Job
+b := launch { for i in 0..3 { println("b", i); yield() } }
+a.join()
+b.join()                                                         // a0 b0 a1 b1 a2 b2
+
+squares := List<Task<Int>>()
+for i in 1..=4 { squares.add(async { i * i }) }                  // a Task<Int>: a result to come
+total := 0
+for t in squares { total += t.await() }
+println(total)                                                   // 30
+
+log := List<String>()
+launch { sleep(60); log.add("slow") }
+launch { sleep(10); log.add("fast") }
+waitAll()                                                        // until every task has finished
+println(log)                                                     // [fast, slow]
+```
+
+`launch { … }` runs a block and gives a `Job` (`join()`, `isDone()`); `async { value }`
+runs a block and gives a `Task<T>` (`await()`, `isDone()`); `sleep(ms)` pauses only the
+current task; `waitAll()` waits for all of them.  When the main code finishes the program
+ends, even if tasks are still running.  A panic in a task that does not `try` it ends
+the whole program.
+
+A **channel** passes values between tasks.  `Channel<T>()` hands a value over when a
+receiver takes it; `Channel<T>(n)` buffers up to `n` values.  `receive()` waits for the
+next value and gives `null` once the channel has been closed and emptied.
+
+```aion
+jobs := Channel<Int>(10)
+results := Channel<Int>(10)
+workers := List<Job>()
+for w in 1..=3 {
+    workers.add(launch {
+        jobs.forEach { n -> results.send(n * n) }                // until `jobs` is closed
+    })
+}
+for n in 1..=6 { jobs.send(n) }
+jobs.close()
+for w in workers { w.join() }
+results.close()
+println(results.drain().sorted())                                // [1, 4, 9, 16, 25, 36]
+
+ch := Channel<String>()
+launch { ch.send("ping"); ch.close() }
+word := ch.receive()
+while word != null {                                             // null: closed and empty
+    println(word)
+    word = ch.receive()
+}
+```
+
+Also `send(v)`, `tryReceive()` (never waits), `close()`, `forEach(action)` and `drain()`.
+Sending on a closed channel stops the program.  If every task is waiting for something
+that can no longer happen, the program stops with `deadlock: every task is waiting and
+none can continue` instead of hanging.  Each task has its own 256 KiB stack, so very
+deep recursion belongs in the main code.  Tasks are not available on Windows yet.
+
 ## Line breaks
 
 A line break ends a statement, with these exceptions:
@@ -869,5 +935,7 @@ memory, and `panic(...)` — unless a [`try`](#cleanup-and-errors) catches it.
 
 ## Not (yet) in the language
 
-Concurrency.  (Plain object types are not checked against
-being unset; use `T?` where a value may be missing.)
+Preemptive threads (tasks take turns), a `select` over several channels, inheritance
+from generic types, `Byte`/`Int32` types and bitwise operators, binary data, and
+a way to link system libraries.  (Plain object types are not checked against being
+unset; use `T?` where a value may be missing.)

@@ -156,6 +156,19 @@ dispatches `toString` through another slot of the same table.  `is` and `as` use
 constant per-target byte table indexed by type id (`instance_checks`), and a test
 on a variable narrows it like a null check does (`narrow.rs`).
 
+### Tasks (`runtime/tasks.c`)
+
+A task is a closure with its own `mmap`'ed C stack, switched with `swapcontext`.  Everything
+that is per-task lives in `AionTaskState` — the shadow stack of GC roots, the innermost
+`try` and the `defer` stack — and core.c swaps it on every switch, so a task is
+unaware of the others.  The collector reaches suspended tasks through
+`aion_tasks_mark`.  Scheduling is round-robin over a list, with sleepers woken
+earliest deadline first.  Waiting is `aion_park` (sleep until some `aion_notify`, which
+wakes every parked task to re-check its condition); if nothing is runnable and
+nothing sleeps, that is a deadlock and the program panics.  `Job`, `Task<T>` and
+`Channel<T>` are ordinary Aion types in the prelude built on `__spawn`, `__park` and
+`__notify`.
+
 ### `defer` and `try` (`body/mod.rs`, `runtime/core.c`)
 
 Both are built from closures and a few runtime functions declared in the prelude

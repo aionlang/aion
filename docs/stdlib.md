@@ -143,6 +143,14 @@ Always in scope.
 * `hashOf(value) -> Int` — a non-negative hash of an Int, Float, Bool, String
   (by content) or object (by identity); what `Map` and `Set` use.
 
+#### Tasks
+
+`launch(body) -> Job` (`join()`, `isDone()`), `async(body) -> Task<T>` (`await()`,
+`isDone()`), `sleep(ms)`, `yield()`, `waitAll()`, and `Channel<T>(capacity = 0)` with
+`send`, `receive() -> T?`, `tryReceive() -> T?`, `close()`, `isClosed()`, `size()`,
+`forEach(action)` and `drain() -> List<T>`.  See the
+[language guide](language.md#tasks-and-channels).
+
 #### Ordering
 
 `interface Comparable<T> { fn compareTo(other: T) -> Int }` (negative, zero or
