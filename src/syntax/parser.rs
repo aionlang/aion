@@ -1181,12 +1181,27 @@ impl<'a> Parser<'a> {
             match bytes[i] {
                 b'\\' => {
                     let esc = raw[i + 1..].chars().next().expect("lexer guarantees an escaped char");
+                    let mut width = 1 + esc.len_utf8();
                     lit.push(match esc {
                         'n' => '\n',
                         't' => '\t',
                         'r' => '\r',
                         '0' => '\0',
                         '\\' | '"' | '$' => esc,
+                        'u' => {
+                            // `\u{1F600}`
+                            let at = raw_off + i;
+                            let bad = |what: &str, len: usize| {
+                                Diagnostic::new(what.to_string(), Span::new(self.file, at, at + len))
+                            };
+                            let Some(close) = raw[i + 2..].strip_prefix('{').and_then(|r| r.find('}')) else {
+                                return Err(bad("expected `\\u{...}` with the code point in hex", 2));
+                            };
+                            width = 2 + 1 + close + 1;
+                            let code = u32::from_str_radix(&raw[i + 3..i + 3 + close], 16)
+                                .map_err(|_| bad("invalid unicode escape", width))?;
+                            char::from_u32(code).ok_or_else(|| bad("not a valid unicode code point", width))?
+                        }
                         other => {
                             let at = raw_off + i;
                             return Err(Diagnostic::new(
@@ -1195,7 +1210,7 @@ impl<'a> Parser<'a> {
                             ));
                         }
                     });
-                    i += 1 + esc.len_utf8();
+                    i += width;
                 }
                 b'$' if bytes.get(i + 1) == Some(&b'{') => {
                     let end = interpolation_end(bytes, i + 2).expect("lexer guarantees a closed ${}");
@@ -1396,6 +1411,16 @@ mod tests {
         let e = parse_expr(r#""a\tb\n\"q\" \\ \$""#);
         let ExprKind::Str(s) = e.kind else { panic!() };
         assert_eq!(s, "a\tb\n\"q\" \\ $");
+    }
+
+    #[test]
+    fn unicode_escapes_in_strings() {
+        let ExprKind::Str(s) = parse_expr(r#""a\u{1F}b\u{e9}\u{1F600}""#).kind else { panic!() };
+        assert_eq!(s, "a\u{1f}b\u{e9}\u{1F600}");
+        let err = |src: &str| Parser::new(0, src, 0).and_then(|mut p| p.expr()).unwrap_err().message;
+        assert!(err(r#""\u41""#).contains("expected"));
+        assert!(err(r#""\u{zz}""#).contains("invalid unicode escape"));
+        assert!(err(r#""\u{110000}""#).contains("not a valid unicode code point"));
     }
 
     #[test]
