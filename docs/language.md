@@ -238,7 +238,7 @@ println(c.show())                            // hits=1
   the program with a `null reference` panic.  Declare such a field `Type?` to say
   it may be null (see [Nullability](#nullability)); a plain `Type` is still not
   checked against being unset.
-* Inheritance is not supported.
+* A type can extend an `open` type; see [Inheritance](#inheritance).
 
 ## Characters
 
@@ -593,6 +593,65 @@ and cannot be generic or take named arguments, and interfaces cannot be
 instantiated or inherit from each other.  Only object types (declared with `type`)
 become interface values; use a wrapper type for an `Int` or `String`.
 
+## Inheritance
+
+A type that is declared `open` can be extended.  The subtype lists the parent after a
+colon, with the arguments for the parent's constructor; methods the parent marks
+`open` can be replaced with `override`.
+
+```aion
+open type Animal(name: String) {
+    open fn sound() = "..."
+    open fn speak() = "$name says ${sound()}"      // sound() is looked up on the real object
+    fn loud() = speak().upper()                     // not open: the same for every kind
+}
+open type Dog(name: String) : Animal(name) {
+    breed: String = "mutt"
+    override fn sound() = "Woof"
+    fn fetch() = "$name fetches"
+}
+type Puppy(name: String) : Dog(name) {
+    override fn sound() = "Yip (" + super.sound() + ")"    // the parent's version
+}
+type Cat(name: String) : Animal(name) {
+    override fn speak() = super.speak() + "!"
+    override fn sound() = "Meow"
+}
+
+animals: List<Animal> = [Dog("Rex"), Cat("Tom"), Puppy("Bit"), Animal("generic")]
+for a in animals { println(a.speak()) }     // Rex says Woof / Tom says Meow! / Bit says Yip (Woof) / generic says ...
+println(animals)                            // each prints as its own kind: [Dog(name=Rex, breed=mutt), …]
+```
+
+* A subtype has its parent's fields first, then its own, and inherits the parent's
+  methods.  A constructor parameter with the same name as an inherited field just
+  hands its value to the parent (`Dog(name: String) : Animal(name)`).
+* Construction runs the parent's initialiser first (its fields, `init` blocks and
+  constructor body), then the subtype's.
+* A `Dog` is accepted wherever an `Animal` is expected, and `if`/`else` branches of
+  sibling types have their closest common parent as type.
+* `open fn` makes a method replaceable, `override fn` replaces it and must take and
+  return exactly what the original does; replacing a method that is not `open`, or
+  forgetting `override`, is an error.  Calls to an open method, including bare calls
+  inside the type, look the real type up at run time.
+* Types can also be tested and converted: `x is Dog`, `x !is Dog`, `x as Dog` (stops
+  with `cannot cast to Dog` if it is not one) and `x as? Dog` (a `Dog?`).  After a
+  test the variable has the tested type, under the usual [smart-cast rules](#nullability):
+
+```aion
+open type Animal(name: String)
+type Dog(name: String) : Animal(name) { fn fetch() = "$name fetches" }
+type Cat(name: String) : Animal(name) { fn purr() = "$name purrs" }
+
+fn act(a: Animal) = if a is Dog { a.fetch() } else if a is Cat { a.purr() } else { "${a.name} sits" }
+println(act(Dog("Rex")), act(Cat("Tom")), act(Animal("Rock")))
+pets: List<Animal> = [Dog("a"), Cat("b")]
+println((pets[0] as Dog).fetch(), (pets[1] as? Dog)?.name)    // a fetches null
+```
+
+Types with type parameters cannot take part in inheritance, and a type has one
+parent; use [interfaces](#interfaces) for what several unrelated types have in common.
+
 ## Constraints on type parameters
 
 `<T: Shape>` says what a type parameter must be able to do.  The check happens
@@ -810,5 +869,5 @@ memory, and `panic(...)` — unless a [`try`](#cleanup-and-errors) catches it.
 
 ## Not (yet) in the language
 
-Concurrency and inheritance.  (Plain object types are not checked against
+Concurrency.  (Plain object types are not checked against
 being unset; use `T?` where a value may be missing.)

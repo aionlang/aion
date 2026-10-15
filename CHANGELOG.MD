@@ -52,6 +52,9 @@ migration notes at the end of this section.
   enclosing block is left (end, `return`, `break`, `continue`, panic); `try { … }
   catch e { … }` is an expression that catches `panic(...)` and runtime errors
   (the message is a String, or `it` without a name).
+- **Inheritance.** `open type`, `type Dog(…) : Animal(args)`, `open fn` / `override
+  fn` with dynamic dispatch, `super.method()`, subtype conversion, `x is T`, `x !is T`,
+  `x as T`, `x as? T`, smart casts after `is`, and polymorphic printing.
 - **Generic interfaces and ordering.** `interface Container<T>`, bounds that mention
   the parameter (`T: Comparable<T>`), the standard `Comparable<T>`, `sorted()`,
   `sortedBy`, `maxOrNull`, `minOrNull`; `sortedWith` is now a stable merge sort.

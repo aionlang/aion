@@ -135,6 +135,27 @@ value is ever printed).  The call loads the id, indexes the table and calls
 through the pointer.  Bounds (`<T: Shape>`) reuse `satisfies` when a generic is
 instantiated.
 
+### Inheritance
+
+`TypeInfo` records `parent`, `open`, an `init` function, the methods it `inherited`,
+and `virtuals`.  A subtype's field list is the parent's followed by its own (a
+constructor parameter named like an inherited field only forwards), and its method
+table starts as a copy of the parent's, so inherited methods are ordinary calls
+whose receiver is retyped (`Upcast`, free at run time).  Constructors of open types
+and subtypes are split: `Type.init(this, params…)` runs the parent's `init` with the
+arguments after the colon, then the type's own field initialisers, `init` blocks
+and constructor body; `Type.new` allocates and calls it.
+
+`open fn` makes a method *virtual*: the type that first declares it owns a
+dispatch table (`Program.dispatch`, the same structure interfaces use) with an
+entry for itself and each descendant, indexed by the type id in the object header.
+Calls to a virtual method, including bare calls on `this`, become `CallIface`;
+`super.m()` stays a direct call.  Overrides are validated after type checking
+(`check_overrides`), when inferred return types are known.  A printed open type
+dispatches `toString` through another slot of the same table.  `is` and `as` use a
+constant per-target byte table indexed by type id (`instance_checks`), and a test
+on a variable narrows it like a null check does (`narrow.rs`).
+
 ### `defer` and `try` (`body/mod.rs`, `runtime/core.c`)
 
 Both are built from closures and a few runtime functions declared in the prelude
