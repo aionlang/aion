@@ -638,11 +638,16 @@ impl<'a> Checker<'a> {
         };
         if matches!(decl.body, ast::FnBody::Extern { .. }) {
             // Function values may be passed to C (as an opaque closure pointer), never returned.
-            let plain = |ty: Ty| !matches!(ty, Ty::Obj(_) | Ty::Opt(_) | Ty::Null);
+            // A `String?` is the same `const char *`, with NULL for null.
+            let plain = |ty: Ty| match ty {
+                Ty::Opt(o) => self.t.opt_inner(o) == Ty::Str,
+                Ty::Obj(_) | Ty::Null => false,
+                _ => true,
+            };
             let ok = params.iter().all(|p| plain(p.ty)) && ret.is_none_or(|r| plain(r) && !matches!(r, Ty::Fn(_)));
             if !ok {
                 return Err(Diagnostic::new(
-                    "`extern fn` can only use Int, Float, Bool and String (and take function values)",
+                    "`extern fn` can only use Int, Float, Bool, String and String? (and take function values)",
                     decl.span,
                 ));
             }

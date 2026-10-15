@@ -1,4 +1,4 @@
-// error: `extern fn` can only use Int, Float, Bool and String
+// error: `extern fn` can only use Int, Float, Bool, String and String?
 type P(x: Int) {
 }
 extern fn f(p: P)
