@@ -52,6 +52,9 @@ migration notes at the end of this section.
   enclosing block is left (end, `return`, `break`, `continue`, panic); `try { … }
   catch e { … }` is an expression that catches `panic(...)` and runtime errors
   (the message is a String, or `it` without a name).
+- **Value equality and hashing.** A type with `equals(other)` is compared by value
+  by `==`, `contains` and friends; with `hashCode()` too it can be a `Map` key or
+  `Set` member.
 - **Slices.** `xs[a..b]`, `xs[a..]`, `xs[..b]`, `xs[a..=b]` and `xs[..]` on lists and
   strings (and any type with `slice(from, to)`), with checked bounds.
 - **Characters.** The `Char` type: `'a'` literals with escapes and `\u{…}`,

@@ -442,8 +442,25 @@ println(Squares(10)[7])
 ```
 
 Equality (`==`, `contains`, map keys) is the language's `==`: values for Int,
-Float, Bool and String, identity for objects.  Map keys are hashed with the
-built-in `hashOf(value)`.  Indexing past the end stops the program with
+Float, Bool, Char and String, identity for objects.  Map keys are hashed with the
+built-in `hashOf(value)`.  To compare your own objects by value, give the type an
+`equals` method, and a `hashCode` so that it can be a map key or set member:
+
+```aion
+type Point(x: Int, y: Int) {
+    fn equals(other: Point) = x == other.x && y == other.y
+    fn hashCode() = x * 31 + y            // equal points must have equal hash codes
+}
+println(Point(1, 2) == Point(1, 2), Point(1, 2) != Point(2, 1))
+
+visited := Set<Point>()
+println(visited.add(Point(0, 0)), visited.add(Point(0, 0)))   // true false
+distance := {Point(0, 0): 0, Point(1, 0): 1}
+println(distance[Point(1, 0)], Point(5, 5) in distance)       // 1 false
+```
+
+`==` uses `equals` when both sides are that type (null is only equal to null);
+`hashOf(p)` uses `hashCode` (combine fields with `hashOf(field)` and arithmetic).  Indexing past the end stops the program with
 `index 5 is out of bounds for size 3`; a missing map key with `no such key: …`.
 
 ## Nullability
@@ -770,6 +787,5 @@ memory, and `panic(...)` — unless a [`try`](#cleanup-and-errors) catches it.
 
 ## Not (yet) in the language
 
-Concurrency, inheritance, generic interfaces, and user-defined hashing for map
-keys.  (Plain object types are not checked against
+Concurrency, inheritance and generic interfaces.  (Plain object types are not checked against
 being unset; use `T?` where a value may be missing.)
