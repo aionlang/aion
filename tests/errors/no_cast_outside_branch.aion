@@ -1,0 +1,7 @@
+// error: `Animal` has no method `fetch`
+open type Animal(name: String)
+type Dog(name: String) : Animal(name) { fn fetch() = 1 }
+fn f(a: Animal) {
+    if a is Dog { println(1) }
+    println(a.fetch())
+}

@@ -36,7 +36,7 @@ pub(super) enum Key {
 pub(super) struct Narrow {
     pub key: Key,
     pub name: String,
-    /// The type without the `?`.
+    /// What the variable is known to be: its type without the `?`, or the subtype it was tested for.
     pub plain: Ty,
 }
 
@@ -179,20 +179,45 @@ impl Cx<'_, '_> {
         match self.resolve(name)? {
             super::Named::Local(id) => {
                 let Ty::Opt(o) = self.locals[id].ty else { return None };
-                if self.lambda_assigned.contains(name) {
+                let key = Key::Var(self.locals[id].var);
+                if self.lambda_assigned.contains(name) || self.narrowing(key).is_some() {
                     return None;
                 }
-                Some(Narrow { key: Key::Var(self.locals[id].var), name: name.to_string(), plain: self.ck.t.opt_inner(o) })
+                Some(Narrow { key, name: name.to_string(), plain: self.ck.t.opt_inner(o) })
             }
             super::Named::Global(g) => {
                 let Some(Ty::Opt(o)) = self.ck.t.globals[g].ty.get() else { return None };
-                if self.ck.unstable_globals.contains(name) {
+                if self.ck.unstable_globals.contains(name) || self.narrowing(Key::Global(g)).is_some() {
                     return None;
                 }
                 Some(Narrow { key: Key::Global(g), name: name.to_string(), plain: self.ck.t.opt_inner(o) })
             }
             _ => None,
         }
+    }
+
+    /// The variable `name`, if it holds an object that `x is T` could narrow to `target`.
+    fn narrow_to_class(&mut self, name: &str, target: Ty) -> Option<Narrow> {
+        let Ty::Obj(want) = target else { return None };
+        let (key, declared) = match self.resolve(name)? {
+            super::Named::Local(id) if !self.lambda_assigned.contains(name) => {
+                (Key::Var(self.locals[id].var), self.locals[id].ty)
+            }
+            super::Named::Global(g) if !self.ck.unstable_globals.contains(name) => {
+                (Key::Global(g), self.ck.t.globals[g].ty.get()?)
+            }
+            _ => return None,
+        };
+        // what it is known to be now: an earlier narrowing, else its declared type
+        let current = self.narrowing(key).unwrap_or(declared);
+        let current = match current {
+            Ty::Opt(o) => self.ck.t.opt_inner(o),
+            other => other,
+        };
+        let Ty::Obj(from) = current else { return None };
+        // only ever narrow to a proper subtype (or to a class from an interface)
+        let narrower = self.ck.is_subtype(want, from) || self.ck.t.ty(from).iface.is_some();
+        (narrower && from != want).then(|| Narrow { key, name: name.to_string(), plain: target })
     }
 
     /// What a condition tells us when it comes out `when_true`.
@@ -220,6 +245,12 @@ impl Cx<'_, '_> {
                 facts
             }
             A::Unary(ast::UnOp::Not, inner) => self.facts(inner, !when_true),
+            // `x is Dog` is true / `x !is Dog` is false  ⇒  x is a Dog
+            A::Is { value, ty, negated } if *negated != when_true => {
+                let A::Name(name) = &value.kind else { return Vec::new() };
+                let Ok(target) = self.ck.resolve_type(self.module, ty, &self.subst) else { return Vec::new() };
+                self.narrow_to_class(name, target).into_iter().collect()
+            }
             _ => Vec::new(),
         }
     }
@@ -238,19 +269,32 @@ impl Cx<'_, '_> {
         self.narrowed.iter().rev().find(|n| n.key == key).map(|n| n.plain)
     }
 
-    /// A variable's value, as its plain type if it is narrowed.
+    /// A variable's value, as the narrower type it is known to have.
     pub(super) fn narrowed_var(&self, e: hir::Expr, var: usize) -> hir::Expr {
         match self.narrowing(Key::Var(var)) {
-            Some(plain) => mk(K::Unwrap(Box::new(e)), plain),
+            Some(plain) => self.as_narrowed(e, plain),
             None => e,
         }
     }
 
     pub(super) fn narrowed_global(&self, e: hir::Expr, g: GlobalId) -> hir::Expr {
         match self.narrowing(Key::Global(g)) {
-            Some(plain) => mk(K::Unwrap(Box::new(e)), plain),
+            Some(plain) => self.as_narrowed(e, plain),
             None => e,
         }
+    }
+
+    /// `e` seen as `plain`: unwrapped if it was an optional, retyped if it was tested for a subtype.
+    fn as_narrowed(&self, e: hir::Expr, plain: Ty) -> hir::Expr {
+        let mut value = e;
+        if let Ty::Opt(o) = value.ty {
+            let inner = self.ck.t.opt_inner(o);
+            value = mk(K::Unwrap(Box::new(value)), inner);
+        }
+        if value.ty != plain {
+            value = mk(K::Upcast(Box::new(value)), plain);
+        }
+        value
     }
 
     /// Forget narrowings of the names `s` might assign.  A plain `x = e` still sees

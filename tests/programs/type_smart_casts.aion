@@ -1,0 +1,22 @@
+// Smart casts after is: inside the branch the variable has the tested type
+open type Animal(name: String)
+open type Dog(name: String) : Animal(name) { fn fetch() = "$name fetches" }
+type Cat(name: String) : Animal(name) { fn purr() = "$name purrs" }
+
+fn act(a: Animal) = if a is Dog { a.fetch() } else if a is Cat { a.purr() } else { "${a.name} just sits" }
+println(act(Dog("Rex")), act(Cat("Tom")), act(Animal("Rock")))
+
+fn onlyDogs(a: Animal) -> String {
+    if a !is Dog { return "not a dog" }
+    return a.fetch()
+}
+println(onlyDogs(Dog("Rex")), onlyDogs(Cat("Tom")))
+
+fn both(a: Animal) = a is Dog && a.fetch().length() > 3
+println(both(Dog("Rex")), both(Cat("Tom")))
+
+fn maybe(a: Animal?) = if a is Dog { a.fetch() } else if a != null { "other: ${a.name}" } else { "nothing" }
+println(maybe(Dog("D")), maybe(Cat("C")), maybe(null))
+
+x: Animal = Dog("Z")
+if x is Dog { println(x.fetch()) }
