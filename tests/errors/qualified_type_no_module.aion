@@ -1,0 +1,2 @@
+// error: unknown type `nothing.Thing`
+x: nothing.Thing = 1

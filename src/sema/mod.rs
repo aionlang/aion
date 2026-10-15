@@ -263,6 +263,11 @@ impl Tables {
     /// Resolve a bare name as seen from `module`: own items, imports, prelude.
     pub fn lookup(&self, module: usize, name: &str) -> Option<Sym> {
         let s = &self.scopes[module];
+        // `alias.Name`: an item of an imported module
+        if let Some((alias, item)) = name.split_once('.') {
+            let &m = s.modules.get(alias)?;
+            return self.scopes[m].items.get(item).copied();
+        }
         s.items
             .get(name)
             .or_else(|| s.imported.get(name))

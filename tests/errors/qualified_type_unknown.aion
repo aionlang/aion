@@ -1,0 +1,3 @@
+// error: unknown type `time.Nope`
+import time
+x: time.Nope = 1

@@ -1,0 +1,13 @@
+// A module's types can be written as module.Type, without importing them by name
+import time
+import json
+
+fn describe(d: time.DateTime) -> String = "year ${d.year()}"
+fn first(items: List<time.DateTime>) -> time.DateTime? = items.firstOrNull()
+fn kinds(values: List<json.Json>) -> List<String> = values.map { it.kind() }
+
+d: time.DateTime = time.of(2020, 5, 17)
+println(describe(d), first([d])?.month(), first(List<time.DateTime>()))
+println(kinds([json.int(1), json.string("x"), json.array()]))
+maybe: json.Json? = json.parse("[1]")
+println(maybe?.size(), maybe is json.JsonArray)

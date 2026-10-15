@@ -127,6 +127,15 @@ impl<'a> Parser<'a> {
         }
         let id = self.ident()?;
         let mut span = id.span;
+        // `module.Type`
+        let mut name = id.name;
+        while self.peek() == Some(Token::Dot) && self.peek_at(1) == Some(Token::Ident) && !self.nl() {
+            self.bump();
+            let part = self.ident()?;
+            name.push('.');
+            name.push_str(&part.name);
+            span = span.to(part.span);
+        }
         let mut args = Vec::new();
         if self.peek() == Some(Token::Lt) && !self.nl() {
             self.bump();
@@ -138,7 +147,7 @@ impl<'a> Parser<'a> {
             }
             span = span.to(self.expect(Token::Gt)?.span);
         }
-        let named = TypeRef { kind: TypeKind::Named { name: id.name, args }, span };
+        let named = TypeRef { kind: TypeKind::Named { name, args }, span };
         if self.peek() == Some(Token::Question) {
             let q = self.bump().span;
             let span = named.span.to(q);
