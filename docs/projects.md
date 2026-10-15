@@ -15,6 +15,7 @@ name = "myapp"
 version = "0.1.0"
 entry = "main.aion"           # optional; this is the default
 lib = "src/lib.aion"          # optional: what `import myapp` loads in a dependent project
+link = ["sqlite3"]            # optional: system libraries the package's C code needs (-lsqlite3)
 
 [dependencies]
 utils = { path = "../utils" }
@@ -22,6 +23,10 @@ http  = { git = "https://github.com/someone/http", tag = "v1.2" }
 ```
 
 `aion new myapp` creates this layout.
+
+`link` lists system libraries (`-l<name>`) that are added to the link step of any program
+that uses the package, so a package with its own `extern fn` bindings can call into
+`libsqlite3`, `libz` and the like.  The library and its development files must be installed.
 
 ## Commands
 
