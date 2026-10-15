@@ -693,10 +693,31 @@ impl<'a> Parser<'a> {
                 }
                 Some(Token::LBracket) if !self.nl() => {
                     self.bump();
-                    let index = self.scoped(true, false, |p| p.expr())?;
+                    // `[i]`, or a slice `[a..b]` / `[a..]` / `[..b]` / `[..]`
+                    let (start, range) = self.scoped(true, false, |p| {
+                        let start = if matches!(p.peek(), Some(Token::DotDot | Token::DotDotEq)) {
+                            None
+                        } else {
+                            Some(Box::new(p.binary(1)?))
+                        };
+                        if !matches!(p.peek(), Some(Token::DotDot | Token::DotDotEq)) {
+                            return Ok((start, None));
+                        }
+                        let inclusive = p.bump().kind == Token::DotDotEq;
+                        let end = if p.peek() == Some(Token::RBracket) { None } else { Some(Box::new(p.binary(1)?)) };
+                        Ok((start, Some((end, inclusive))))
+                    })?;
                     let close = self.expect(Token::RBracket)?;
                     let span = e.span.to(close.span);
-                    e = Expr { kind: ExprKind::Index { obj: Box::new(e), index: Box::new(index) }, span };
+                    e = match range {
+                        None => {
+                            let index = start.expect("a plain index has an expression");
+                            Expr { kind: ExprKind::Index { obj: Box::new(e), index }, span }
+                        }
+                        Some((end, inclusive)) => {
+                            Expr { kind: ExprKind::Slice { obj: Box::new(e), start, end, inclusive }, span }
+                        }
+                    };
                 }
                 // `List<Int>(…)`, `identity<Int>(3)`; otherwise `<` is a comparison.
                 Some(Token::Lt) if !self.nl() && matches!(e.kind, ExprKind::Name(_) | ExprKind::Field(..)) => {
@@ -1466,6 +1487,26 @@ mod tests {
         // two characters, or none, are not a character literal
         assert!(Parser::new(0, "'ab'", 0).is_err() || Parser::new(0, "'ab'", 0).and_then(|mut p| p.expr()).is_err());
         assert!(Parser::new(0, "''", 0).is_err() || Parser::new(0, "''", 0).and_then(|mut p| p.expr()).is_err());
+    }
+
+    #[test]
+    fn slices_and_indexing() {
+        assert!(matches!(parse_expr("xs[1]").kind, ExprKind::Index { .. }));
+        assert!(matches!(parse_expr("xs[i + 1]").kind, ExprKind::Index { .. }));
+        let slice = |src: &str| match parse_expr(src).kind {
+            ExprKind::Slice { start, end, inclusive, .. } => (start.is_some(), end.is_some(), inclusive),
+            other => panic!("expected a slice, got {other:?}"),
+        };
+        assert_eq!(slice("xs[1..3]"), (true, true, false));
+        assert_eq!(slice("xs[1..=3]"), (true, true, true));
+        assert_eq!(slice("xs[2..]"), (true, false, false));
+        assert_eq!(slice("xs[..4]"), (false, true, false));
+        assert_eq!(slice("xs[..=4]"), (false, true, true));
+        assert_eq!(slice("xs[..]"), (false, false, false));
+        assert_eq!(slice("xs[n - 2..n]"), (true, true, false));
+        // slices chain with other postfix operators
+        assert!(matches!(parse_expr("xs[1..3][0]").kind, ExprKind::Index { .. }));
+        assert!(matches!(parse_expr("xs[1..3].size()").kind, ExprKind::Call { .. }));
     }
 
     #[test]

@@ -201,6 +201,8 @@ pub enum ExprKind {
     Call { callee: Box<Expr>, type_args: Vec<TypeRef>, args: Vec<Arg> },
     /// `xs[i]`
     Index { obj: Box<Expr>, index: Box<Expr> },
+    /// `xs[1..3]`, `xs[2..]`, `xs[..=4]`, `xs[..]`: a slice, either end optional.
+    Slice { obj: Box<Expr>, start: Option<Box<Expr>>, end: Option<Box<Expr>>, inclusive: bool },
     /// `[1, 2, 3]`
     List(Vec<Expr>),
     /// `{"a": 1, "b": 2}`

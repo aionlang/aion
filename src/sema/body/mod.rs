@@ -1811,6 +1811,8 @@ impl<'c, 'a> Cx<'c, 'a> {
                 })?
             }
 
+            A::Slice { .. } => return Err(Diagnostic::new("slices are not available yet", e.span)),
+
             A::List(items) => self.list_literal(items, None, e.span)?,
             A::Map(entries) => self.map_literal(entries, None, e.span)?,
 

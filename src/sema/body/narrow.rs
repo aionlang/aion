@@ -116,6 +116,12 @@ fn walk_expr_kind<'a>(kind: &'a A, lambda: bool, f: &mut dyn FnMut(Assign<'a>)) 
             walk_expr(start, lambda, f);
             walk_expr(end, lambda, f);
         }
+        A::Slice { obj, start, end, .. } => {
+            walk_expr(obj, lambda, f);
+            for e in [start, end].into_iter().flatten() {
+                walk_expr(e, lambda, f);
+            }
+        }
         A::Call { callee, args, .. } => {
             walk_expr(callee, lambda, f);
             for a in args {
