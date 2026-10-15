@@ -261,6 +261,11 @@ extern fn Bytes.copyFrom(at: Int, src: Bytes, from: Int, count: Int) = "aion_byt
 extern fn Bytes.putText(at: Int, text: String) = "aion_bytes_put"
 extern fn __bytes_text(b: Bytes, from: Int, to: Int) -> String = "aion_bytes_text"
 
+// Position of the first occurrence of `needle` at or after `from`, or -1.
+extern fn __bytes_find(b: Bytes, needle: Bytes, from: Int) -> Int = "aion_bytes_find"
+fn Bytes.find(needle: Bytes, from: Int = 0) = __bytes_find(this, needle, from)
+fn Bytes.startsWith(prefix: Bytes) = prefix.size() <= size() && slice(0, prefix.size()) == prefix
+
 extern fn __bytes_equals(a: Bytes, b: Bytes) -> Bool = "aion_bytes_equals"
 extern fn __bytes_hash(b: Bytes) -> Int = "aion_bytes_hash"
 fn __bytes_str(b: Bytes) -> String = "Bytes(${b.toHex()})"
@@ -316,6 +321,62 @@ type StringBuilder {
     }
 
     fn toString() = __bytes_text(data, 0, used)
+}
+
+// ── BytesBuilder ────────────────────────────────────────────────
+
+// Collects bytes piece by piece, like StringBuilder does for text.
+type BytesBuilder {
+    data: Bytes = Bytes(64)
+    used: Int
+
+    fn size() = used
+    fn isEmpty() = used == 0
+
+    fn reserve(extra: Int) {
+        need := used + extra
+        if need > data.size() {
+            capacity := data.size() * 2
+            if capacity < need {
+                capacity = need
+            }
+            bigger := Bytes(capacity)
+            bigger.copyFrom(0, data, 0, used)
+            data = bigger
+        }
+    }
+
+    fn add(bytes: Bytes) -> BytesBuilder {
+        reserve(bytes.size())
+        data.copyFrom(used, bytes, 0, bytes.size())
+        used += bytes.size()
+        return this
+    }
+    fn addText(text: String) -> BytesBuilder {
+        reserve(text.length())
+        data.putText(used, text)
+        used += text.length()
+        return this
+    }
+    fn addByte(value: Int) -> BytesBuilder {
+        reserve(1)
+        data[used] = value
+        used += 1
+        return this
+    }
+
+    fn clear() { used = 0 }
+    // Everything collected so far, as a Bytes of its own.
+    fn toBytes() = data.slice(0, used)
+    // The first `count` bytes are gone (they were used up); the rest stays.
+    fn dropFirst(count: Int) {
+        if count < 0 || count > used {
+            panic("dropFirst(${count}) is out of range for size $used")
+        }
+        data.copyFrom(0, data, count, used - count)
+        used -= count
+    }
+    fn toString() = "BytesBuilder($used bytes)"
 }
 
 // ── Ordering ────────────────────────────────────────────────────

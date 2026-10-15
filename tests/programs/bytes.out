@@ -9,3 +9,8 @@ Bytes(6869) hi
 9 packet of 2 Packet(data=Bytes(0908))
 0 true
 21674
+28 -1 21 3 -1 -1
+true false false body
+306 306 2a2b616263646566 BytesBuilder(306 bytes)
+2a2b616263646566 false
+0 true

@@ -44,3 +44,20 @@ for k in keep {
     sum += k[0] + k.size()
 }
 println(sum)
+
+// searching and collecting
+hay := "GET /index HTTP/1.1\r\nHost: x\r\n\r\nbody".toBytes()
+sep := "\r\n\r\n".toBytes()
+at := hay.find(sep)
+println(at, hay.find(sep, at + 1), hay.find("Host".toBytes()), hay.find(Bytes(0), 3), hay.find(Bytes(0), 999), hay.find("zzz".toBytes()))
+println(hay.startsWith("GET".toBytes()), hay.startsWith("POST".toBytes()), Bytes(2).startsWith(Bytes(3)), hay.slice(at + 4, hay.size()).toText())
+bb := BytesBuilder()
+for i in 0..300 {
+    bb.addByte(i % 256)
+}
+bb.add("abc".toBytes()).addText("def")
+println(bb.size(), bb.toBytes().size(), bb.toBytes().slice(298, 306).toHex(), bb)
+bb.dropFirst(298)
+println(bb.toBytes().toHex(), bb.isEmpty())
+bb.clear()
+println(bb.size(), bb.toBytes() == Bytes(0))

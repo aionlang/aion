@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include "aion.h"
 
 #include <ctype.h>
@@ -433,6 +434,16 @@ void aion_bytes_put(void *dst, int64_t at, const char *text) {
 const char *aion_bytes_text(const void *b, int64_t from, int64_t to) {
     check_range("text", from, to - from, aion_bytes_size(b));
     return aion_string_n((const char *)b + from, (size_t)(to - from));
+}
+
+/* First position of `needle` in `b` at or after `from`, or -1. */
+int64_t aion_bytes_find(const void *b, const void *needle, int64_t from) {
+    int64_t n = aion_bytes_size(b), m = aion_bytes_size(needle);
+    if (from < 0) from = 0;
+    if (m == 0) return from <= n ? from : -1;
+    if (from > n - m) return -1;
+    const void *p = memmem((const uint8_t *)b + from, (size_t)(n - from), needle, (size_t)m);
+    return p ? (int64_t)((const uint8_t *)p - (const uint8_t *)b) : -1;
 }
 
 /* The bytes of a String (without its NUL). */
