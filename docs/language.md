@@ -27,6 +27,7 @@ a statement (see [Line breaks](#line-breaks)).
 | `Bool`        | `true` / `false`                              | `false` |
 | `Char`        | one Unicode code point, `'a'`                 | `'\0'`  |
 | `String`      | immutable UTF-8 text                          | `""`    |
+| `Bytes`       | raw bytes, 0–255 each (see [Bytes](#bytes))   | empty   |
 | `Point`       | an instance of a user-defined `type Point`    | null    |
 | `(Int) -> Int`| a function value; `Unit` means "no value"    | null    |
 
@@ -80,6 +81,12 @@ From loosest to tightest binding:
 
 `&&` and `||` short-circuit.  Mixing `Int` and `Float` computes in `Float`.
 Integer division by zero stops the program with a panic.
+
+Integers can be written in decimal, `0xFF` hex, `0b1010` binary or `0o17` octal, with
+`_` between digits (`1_000_000`), and floats take an exponent (`1.5e-3`).  Bit
+operations are methods on `Int`: `a.and(b)`, `a.or(b)`, `a.xor(b)`, `a.inv()`,
+`a.shl(n)`, `a.shr(n)` (keeps the sign) and `a.ushr(n)` (fills with zeros); the shift
+amount counts modulo 64.
 
 ```aion
 println(3 in 1..5, 5 in 1..5, 5 in 1..=5)   // true false true
@@ -268,6 +275,35 @@ println(text[0], text.charAt(1))                   // h é   (offsets are bytes)
 Greek and Cyrillic and a rule of thumb for other scripts.  `s[i]` and `charAt(i)`
 take a **byte** offset (the character that starts there), so use `chars()` or a
 `for` loop to walk text with non-ASCII letters.
+
+## Bytes
+
+`Bytes` holds raw binary data: what a file, a socket or a hash function produces.
+Unlike a `String` it may contain any byte, zero included.  Elements are the numbers
+0 to 255.
+
+```aion
+b := Bytes(4)                    // four zero bytes; Bytes(4, 255) fills them with 255
+b[0] = 255
+b[3] = 0x10
+println(b, b.size())             // Bytes(ff000010) 4
+println(b[1..3], b + b)          // slices and joins make copies
+println(b == bytesOf([255, 0, 0, 16]))   // equal when the bytes are equal
+
+data := "héllo".toBytes()        // the UTF-8 bytes of a String
+println(data.size(), data.toText(), data.toHex())   // 6 héllo 68c3a96c6c6f
+println("6869".fromHex()?.toText(), "xyz".fromHex())   // hi null
+for x in bytesOf([1, 2, 3]) { print(x, "") }
+println()
+println(data.indexOf(0x6c), 3 in bytesOf([1, 2, 3]))
+```
+
+`b.toText()` reads up to the first zero byte.  Values `0..255` only: writing anything
+else stops the program, as does an index or slice outside the data.  A `Bytes` works as
+a `Map` key and with `hashOf`; the zero value of an unset `Bytes` variable is empty.
+Methods: `size() get(i) set(i, v) slice(from, to) concat(other) indexOf(v, from = 0)
+contains(v) toHex() toText() toList()`, plus `String.toBytes()`, `String.fromHex()` and
+`bytesOf(list)`.
 
 ## Function values and lambdas
 
@@ -927,6 +963,10 @@ extern fn llabs(n: Int) -> Int      // bind a libc function straight from your p
 println(llabs(-5))
 ```
 
+A library that is not part of libc is linked by naming it: a `link = ["sqlite3"]` line
+in `aion.project` (see [projects.md](projects.md)) or a `// link: sqlite3` comment at the
+top of a standard-library module adds `-lsqlite3` to the build.
+
 ## Runtime errors
 
 The program stops with exit code 1 and a message on stderr for: division by
@@ -936,6 +976,5 @@ memory, and `panic(...)` — unless a [`try`](#cleanup-and-errors) catches it.
 ## Not (yet) in the language
 
 Preemptive threads (tasks take turns), a `select` over several channels, inheritance
-from generic types, `Byte`/`Int32` types and bitwise operators, binary data, and
-a way to link system libraries.  (Plain object types are not checked against being
+from generic types, and `Byte`/`Int32` types.  (Plain object types are not checked against being
 unset; use `T?` where a value may be missing.)
