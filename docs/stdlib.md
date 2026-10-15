@@ -49,6 +49,7 @@ extern fn length(s: String) -> Int = "aion_strings_length"
 | Aion     | C                | Notes                                                    |
 |----------|------------------|----------------------------------------------------------|
 | `Int`    | `int64_t`        | exactly 64 bits — **not** `int` or `long`                |
+| `Char`   | `int64_t`        | a Unicode code point                                     |
 | `Float`  | `double`         |                                                          |
 | `Bool`   | `bool`           | `<stdbool.h>`                                            |
 | `String` | `const char *`   | NUL-terminated; see the ownership rules below            |
@@ -129,6 +130,11 @@ Always in scope.
   `print("name? ")` prompt shows up), `readText() -> String` (everything left),
   and `args() -> List<String>` (what follows the script: `aion script.aion a b`
   gives `["a", "b"]`).
+* **Char methods** — `isDigit() isLetter() isUpper() isLower() isWhitespace()`,
+  `upper() lower()`, `code() -> Int`, `digitValue() -> Int?`, `byteLength()` (its
+  UTF-8 size), `toString()`; and `Int.toChar()`.
+* **String and characters** — `charAt(i)` / `s[i]` (the character that starts at
+  byte `i`), `chars() -> List<Char>`; `for c in text` loops over the characters.
 * **String methods** — `length()` (bytes), `contains(s)`, `startsWith(s)`,
   `indexOf(s)` (-1 if absent), `substring(start, end)` (stops the program if the
   range is invalid), `trim()`, `replace(old, new)`, `split(sep)` (a

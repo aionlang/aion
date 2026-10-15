@@ -52,6 +52,9 @@ migration notes at the end of this section.
   enclosing block is left (end, `return`, `break`, `continue`, panic); `try { … }
   catch e { … }` is an expression that catches `panic(...)` and runtime errors
   (the message is a String, or `it` without a name).
+- **Characters.** The `Char` type: `'a'` literals with escapes and `\u{…}`,
+  comparison and `c + 1` / `c - 'a'` arithmetic, ranges (`'a'..='z'`), `Char`
+  methods, `text.chars()`, `text[i]` and `for c in text`.
 - **Input and arguments.** `readLine()` (a `String?`, null at the end of the input),
   `readText()`, and `args()`; `aion script.aion a b c` passes `a b c` to the program.
 - **Methods on built-in types.** `fn String.shout() = "$this!"`, `fn Int.double()`;

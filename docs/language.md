@@ -25,6 +25,7 @@ a statement (see [Line breaks](#line-breaks)).
 | `Int`         | 64-bit signed integer (wraps on overflow)     | `0`     |
 | `Float`       | 64-bit floating point                         | `0.0`   |
 | `Bool`        | `true` / `false`                              | `false` |
+| `Char`        | one Unicode code point, `'a'`                 | `'\0'`  |
 | `String`      | immutable UTF-8 text                          | `""`    |
 | `Point`       | an instance of a user-defined `type Point`    | null    |
 | `(Int) -> Int`| a function value; `Unit` means "no value"    | null    |
@@ -238,6 +239,35 @@ println(c.show())                            // hits=1
   it may be null (see [Nullability](#nullability)); a plain `Type` is still not
   checked against being unset.
 * Inheritance is not supported.
+
+## Characters
+
+A `Char` is one Unicode code point, written between single quotes: `'a'`, `'é'`,
+`'\n'`, `'\''`, `'\u{1F600}'`.  It is a type of its own (no implicit conversion
+from or to `Int`) that compares, counts and prints like a letter:
+
+```aion
+c := 'a'
+println(c, c < 'b', c + 2, 'e' - 'a', 'e' - 1)   // a true c 4 d
+println(c.code(), 100.toChar(), 'Z'.lower(), 'é'.upper())   // 97 d z É
+println('7'.isDigit(), 'x'.isLetter(), ' '.isWhitespace(), '7'.digitValue())
+
+for ch in 'a'..='e' { print(ch, "") }              // ranges of characters
+println()
+println('m' in 'a'..'z')
+
+text := "héllo"
+println(text.length(), text.chars().size())        // 6 bytes, 5 characters
+for ch in text { print(ch.upper(), "") }           // looping gives characters
+println()
+println(text[0], text.charAt(1))                   // h é   (offsets are bytes)
+```
+
+`c + n` and `c - n` are Chars, `c - d` is the distance (an `Int`), and `"$c"` or
+`c.toString()` makes text.  Letter and case rules are exact for ASCII, Latin-1,
+Greek and Cyrillic and a rule of thumb for other scripts.  `s[i]` and `charAt(i)`
+take a **byte** offset (the character that starts there), so use `chars()` or a
+`for` loop to walk text with non-ASCII letters.
 
 ## Function values and lambdas
 
@@ -726,6 +756,6 @@ memory, and `panic(...)` — unless a [`try`](#cleanup-and-errors) catches it.
 
 ## Not (yet) in the language
 
-Concurrency, inheritance, generic interfaces, `char`, reading input, slices, and
-user-defined hashing for map keys.  (Plain object types are not checked against
+Concurrency, inheritance, generic interfaces, slices, and user-defined hashing for
+map keys.  (Plain object types are not checked against
 being unset; use `T?` where a value may be missing.)
