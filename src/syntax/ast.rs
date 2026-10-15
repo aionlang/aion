@@ -180,6 +180,8 @@ pub enum ExprKind {
     Float(f64),
     Bool(bool),
     Str(String),
+    /// `'a'`: a Unicode code point.
+    Char(u32),
     /// `"hi ${name} and $other"`
     Interp(Vec<InterpPart>),
     Name(String),

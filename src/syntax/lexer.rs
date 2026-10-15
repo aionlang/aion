@@ -55,6 +55,9 @@ pub enum Token {
     Float,
     #[regex(r"[0-9]+")]
     Int,
+    /// A character literal such as `'a'`, `'\n'` or `'\u{1F600}'`, quotes included.
+    #[regex(r"'([^'\\\n]|\\[^\n]|\\u\{[0-9a-fA-F]{1,6}\})'")]
+    Char,
     /// A string literal, quotes included; see [`lex_string`].
     #[token("\"", lex_string)]
     Str,
@@ -176,6 +179,7 @@ impl Token {
             Token::Null => "`null`",
             Token::Float | Token::Int => "a number",
             Token::Str => "a string",
+            Token::Char => "a character",
             Token::Ident => "an identifier",
             Token::LParen => "`(`",
             Token::RParen => "`)`",

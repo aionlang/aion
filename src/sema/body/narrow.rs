@@ -95,7 +95,7 @@ pub(crate) fn walk_expr<'a>(e: &'a ast::Expr, lambda: bool, f: &mut dyn FnMut(As
 
 fn walk_expr_kind<'a>(kind: &'a A, lambda: bool, f: &mut dyn FnMut(Assign<'a>)) {
     match kind {
-        A::Int(_) | A::Float(_) | A::Bool(_) | A::Str(_) | A::Name(_) | A::Null => {}
+        A::Int(_) | A::Float(_) | A::Bool(_) | A::Str(_) | A::Char(_) | A::Name(_) | A::Null => {}
         A::Interp(parts) => {
             for p in parts {
                 if let InterpPart::Expr(e) = p {

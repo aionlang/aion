@@ -1779,6 +1779,8 @@ impl<'c, 'a> Cx<'c, 'a> {
 
             A::Null => mk(K::Null, Ty::Null),
 
+            A::Char(_) => return Err(Diagnostic::new("characters are not available yet", e.span)),
+
             A::Try { body, catch_name, handler } => self.try_expr(body, catch_name.as_ref(), handler, None, e.span)?,
 
             A::NotNull(inner) => {

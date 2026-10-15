@@ -802,6 +802,10 @@ impl<'a> Parser<'a> {
                 self.bump();
                 return self.string_expr(tok);
             }
+            Token::Char => {
+                self.bump();
+                ExprKind::Char(self.char_literal(tok)?)
+            }
             Token::LParen => {
                 self.bump();
                 let inner = self.scoped(true, false, |p| p.expr())?;
@@ -1060,6 +1064,30 @@ impl<'a> Parser<'a> {
     }
 
     /// Decode escapes and split `${...}` / `$name` interpolations out of a string literal.
+    /// The code point a character literal stands for.
+    fn char_literal(&self, tok: Tok) -> Result<u32> {
+        let full = self.text(tok);
+        let body = &full[1..full.len() - 1];
+        let Some(rest) = body.strip_prefix('\\') else {
+            return Ok(body.chars().next().expect("the lexer guarantees one character") as u32);
+        };
+        let bad = |what: &str| Diagnostic::new(what.to_string(), tok.span);
+        let mut chars = rest.chars();
+        Ok(match chars.next().expect("the lexer guarantees an escape") {
+            'n' => '\n' as u32,
+            't' => '\t' as u32,
+            'r' => '\r' as u32,
+            '0' => 0,
+            c @ ('\\' | '\'' | '"') => c as u32,
+            'u' => {
+                let hex = rest.trim_start_matches("u{").trim_end_matches('}');
+                let code = u32::from_str_radix(hex, 16).map_err(|_| bad("invalid unicode escape"))?;
+                char::from_u32(code).ok_or_else(|| bad("not a valid unicode code point"))? as u32
+            }
+            other => return Err(bad(&format!("unknown escape sequence `\\{other}`"))),
+        })
+    }
+
     fn string_expr(&mut self, tok: Tok) -> Result<Expr> {
         let full = self.text(tok);
         let raw = &full[1..full.len() - 1];
@@ -1417,6 +1445,27 @@ mod tests {
         assert!(f.bounds[0].is_some() && f.bounds[1].is_none());
         let Item::Type(t) = &m.items[1] else { panic!("expected a type") };
         assert!(t.bounds[0].is_some());
+    }
+
+    #[test]
+    fn character_literals() {
+        let ch = |src: &str| match parse_expr(src).kind {
+            ExprKind::Char(c) => c,
+            other => panic!("expected a character, got {other:?}"),
+        };
+        assert_eq!(ch("'a'"), 'a' as u32);
+        assert_eq!(ch("'\\n'"), 10);
+        assert_eq!(ch("'\\''"), '\'' as u32);
+        assert_eq!(ch("'\\\\'"), '\\' as u32);
+        assert_eq!(ch("'é'"), 'é' as u32);
+        assert_eq!(ch("'\\u{1F600}'"), 0x1F600);
+        assert_eq!(ch("'\"'"), '"' as u32);
+        let err = |src: &str| Parser::new(0, src, 0).and_then(|mut p| p.expr()).unwrap_err().message;
+        assert!(err("'\\q'").contains("unknown escape"));
+        assert!(err("'\\u{D800}'").contains("code point"));
+        // two characters, or none, are not a character literal
+        assert!(Parser::new(0, "'ab'", 0).is_err() || Parser::new(0, "'ab'", 0).and_then(|mut p| p.expr()).is_err());
+        assert!(Parser::new(0, "''", 0).is_err() || Parser::new(0, "''", 0).and_then(|mut p| p.expr()).is_err());
     }
 
     #[test]
