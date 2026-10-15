@@ -962,10 +962,14 @@ impl<'c, 'a> Cx<'c, 'a> {
     /// ```
     fn for_each(&mut self, var: &ast::Ident, iter: &ast::Expr, body: &[ast::Stmt], out: &mut Vec<hir::Stmt>) -> Result<()> {
         let mut coll = self.value(iter)?;
-        // A type can say what to loop over with `iter()` (a Map loops over its entries).
+        // A type can say what to loop over with `iter()` (a Map loops over its entries,
+        // a String over its characters).
         for _ in 0..4 {
-            let Ty::Obj(t) = coll.ty else { break };
-            let Some(&iter_fn) = self.ck.t.ty(t).methods.get("iter") else { break };
+            let iter_fn = match coll.ty {
+                Ty::Obj(t) => self.ck.t.ty(t).methods.get("iter").copied(),
+                other => self.ck.ext_method(other, "iter"),
+            };
+            let Some(iter_fn) = iter_fn else { break };
             coll = self.call_values(iter_fn, Some(coll), Vec::new(), iter.span)?;
         }
         let looping = match coll.ty {
@@ -1168,6 +1172,12 @@ impl<'c, 'a> Cx<'c, 'a> {
 
     /// `obj[index]`
     fn get_element(&mut self, obj: hir::Expr, index: hir::Expr, span: Span) -> Result<hir::Expr> {
+        // `"text"[i]`: a `get` method added to a built-in type
+        if !matches!(obj.ty, Ty::Obj(_))
+            && let Some(get) = self.ck.ext_method(obj.ty, "get")
+        {
+            return self.call_values(get, Some(obj), vec![(index, span)], span);
+        }
         if let Ty::Obj(t) = obj.ty {
             let info = self.ck.t.ty(t);
             if let Some(elem) = info.array_elem {
