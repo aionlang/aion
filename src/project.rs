@@ -6,6 +6,7 @@
 //! entry = "main.aion"             # default
 //! lib = "src/lib.aion"            # what `import myapp` loads when used as a dependency
 //! link = ["sqlite3"]              # system libraries (`-lsqlite3`) the C code of this package needs
+//! c = ["native/fast.c"]           # C files compiled into every program that uses this package
 //!
 //! [dependencies]
 //! utils = { path = "../utils" }
@@ -34,6 +35,8 @@ pub struct Project {
     pub lib: Option<PathBuf>,
     /// System libraries to link (`-l<name>`).
     pub link: Vec<String>,
+    /// C source files (inside the project) compiled into the program.
+    pub c: Vec<PathBuf>,
     pub deps: Vec<Dependency>,
 }
 
@@ -76,6 +79,8 @@ pub struct Package {
     pub lib: Option<PathBuf>,
     /// System libraries this package's C code needs.
     pub link: Vec<String>,
+    /// C source files of the package.
+    pub c: Vec<PathBuf>,
     /// Dependency name → index into the package list.
     pub deps: HashMap<String, usize>,
 }
@@ -110,7 +115,7 @@ pub fn load(file: &Path) -> Result<Project> {
         }
     };
     for (k, _, line) in &toml.top {
-        if !["name", "version", "entry", "lib", "link"].contains(&k.as_str()) {
+        if !["name", "version", "entry", "lib", "link", "c"].contains(&k.as_str()) {
             return Err(Diagnostic::general(format!("{}:{line}: unknown key `{k}`", file.display())));
         }
     }
@@ -128,6 +133,28 @@ pub fn load(file: &Path) -> Result<Project> {
         }
         Some((_, _, line)) => {
             return Err(Diagnostic::general(format!("{}:{line}: `link` must be a list: [\"sqlite3\"]", file.display())));
+        }
+    };
+
+    let c = match toml.top.iter().find(|(k, _, _)| k == "c") {
+        None => Vec::new(),
+        Some((_, Value::List(files), line)) => {
+            let mut paths = Vec::new();
+            for f in files {
+                let path = Path::new(f);
+                let inside = path.is_relative() && !path.components().any(|c| matches!(c, std::path::Component::ParentDir));
+                if !inside || path.extension().is_none_or(|e| e != "c") {
+                    return Err(Diagnostic::general(format!(
+                        "{}:{line}: `{f}` must be a .c file inside the project (a relative path without `..`)",
+                        file.display()
+                    )));
+                }
+                paths.push(root.join(path));
+            }
+            paths
+        }
+        Some((_, _, line)) => {
+            return Err(Diagnostic::general(format!("{}:{line}: `c` must be a list: [\"native/fast.c\"]", file.display())));
         }
     };
 
@@ -164,7 +191,7 @@ pub fn load(file: &Path) -> Result<Project> {
             deps.push(Dependency { name: dep.clone(), source });
         }
     }
-    Ok(Project { root, name, entry, lib, link, deps })
+    Ok(Project { root, name, entry, lib, link, c, deps })
 }
 
 // ── resolving dependencies ──────────────────────────────────────────
@@ -178,6 +205,7 @@ pub fn resolve(project: Option<&Project>, entry_dir: &Path) -> Result<Vec<Packag
             root: root.clone(),
             lib: project.and_then(|p| p.lib.clone()),
             link: project.map(|p| p.link.clone()).unwrap_or_default(),
+            c: project.map(|p| p.c.clone()).unwrap_or_default(),
             deps: HashMap::new(),
         }],
         by_root: HashMap::new(),
@@ -219,7 +247,8 @@ impl Resolver {
                     let lib = sub.as_ref().and_then(|p| p.lib.clone()).or_else(|| default_lib(&dir, &dep.name));
                     let idx = self.packages.len();
                     let link = sub.as_ref().map(|p| p.link.clone()).unwrap_or_default();
-                    self.packages.push(Package { root: dir.clone(), lib, link, deps: HashMap::new() });
+                    let c = sub.as_ref().map(|p| p.c.clone()).unwrap_or_default();
+                    self.packages.push(Package { root: dir.clone(), lib, link, c, deps: HashMap::new() });
                     self.by_root.insert(dir, idx);
                     if let Some(sub) = sub {
                         self.add_deps(idx, &sub.deps)?;

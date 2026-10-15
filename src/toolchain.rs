@@ -28,7 +28,7 @@ fn candidates() -> Vec<String> {
 
 pub fn build(
     ir: &str,
-    c_sources: &[(String, &'static str)],
+    c_sources: &[(String, String)],
     libs: &[String],
     output: &Path,
     opts: &Options,
@@ -49,7 +49,7 @@ pub fn build(
 fn compile(
     dir: &Path,
     ir: &str,
-    c_sources: &[(String, &'static str)],
+    c_sources: &[(String, String)],
     libs: &[String],
     output: &Path,
     opts: &Options,

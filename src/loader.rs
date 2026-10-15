@@ -43,7 +43,7 @@ pub struct ResolvedImport {
 pub struct Loaded {
     pub modules: Vec<LoadedModule>,
     /// `(file name, source)` of the C half of every imported stdlib module.
-    pub c_sources: Vec<(String, &'static str)>,
+    pub c_sources: Vec<(String, String)>,
     /// System libraries to link: the packages' `link` settings and the `// link:` lines of stdlib modules.
     pub libs: Vec<String>,
 }
@@ -66,10 +66,18 @@ pub fn load(map: &mut SourceMap, entry: &Path, packages: Vec<Package>) -> Result
     for lib in loader.packages.iter().flat_map(|p| p.link.clone()).collect::<Vec<_>>() {
         loader.link(lib);
     }
+    // C files that packages bring along are compiled into the program.
+    let bundled: Vec<PathBuf> = loader.packages.iter().flat_map(|p| p.c.clone()).collect();
+    for (i, path) in bundled.iter().enumerate() {
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| Diagnostic::general(format!("cannot read {}: {e}", path.display())))?;
+        let base = path.file_name().map_or("code.c".into(), |n| n.to_string_lossy().into_owned());
+        loader.c_sources.push((format!("pkg{i}_{base}"), text));
+    }
 
     let (prelude, prelude_c) = embedded::stdlib_module("prelude").expect("stdlib/prelude.aion exists");
     if let Some(c) = prelude_c {
-        loader.c_sources.push(("prelude.c".into(), c));
+        loader.c_sources.push(("prelude.c".into(), c.to_string()));
     }
     loader.add("std:prelude".into(), "<std>/prelude.aion", prelude, "prelude".into(), None, 0)?;
 
@@ -86,7 +94,7 @@ struct Loader<'a> {
     by_key: HashMap<String, usize>,
     /// Keys of modules currently being loaded, for cycle detection.
     stack: Vec<String>,
-    c_sources: Vec<(String, &'static str)>,
+    c_sources: Vec<(String, String)>,
     libs: Vec<String>,
     packages: Vec<Package>,
 }
@@ -209,7 +217,7 @@ impl Loader<'_> {
                 .hint(format!("available: {}", embedded::stdlib_names().join(", "))));
         };
         if let Some(c) = c {
-            self.c_sources.push((format!("{name}.c"), c));
+            self.c_sources.push((format!("{name}.c"), c.to_string()));
         }
         // `// link: sqlite3 z` at the top of a module names the system libraries its C code needs.
         for lib in aion.lines().take_while(|l| l.starts_with("//")).filter_map(|l| l.strip_prefix("// link:")) {

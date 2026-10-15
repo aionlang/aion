@@ -540,3 +540,38 @@ println(keys.join(" "))
         "a b enter tab   backspace ctrl-c up down right left home end delete pageup pagedown é 中 ctrl-a z escape"
     );
 }
+
+/// A project's `c = [...]` files are compiled into the program, and so are those of its dependencies.
+#[test]
+fn packages_can_bundle_c_code() {
+    let root = scratch("bundled-c");
+    write(
+        &root.join("aion.project"),
+        "name = \"app\"\nc = [\"native/scale.c\"]\n\n[dependencies]\nadder = { path = \"adder\" }\n",
+    );
+    write(
+        &root.join("native/scale.c"),
+        "#include \"aion.h\"\n#include <stdio.h>\nint64_t app_scale(int64_t x) { return x * 10; }\nconst char *app_greeting(const char *name) {\n    char buf[64];\n    snprintf(buf, sizeof buf, \"hello, %s\", name);\n    return aion_string(buf);\n}\n",
+    );
+    write(&root.join("adder/aion.project"), "name = \"adder\"\nlib = \"lib.aion\"\nc = [\"add.c\"]\n");
+    write(&root.join("adder/add.c"), "#include \"aion.h\"\nint64_t adder_add(int64_t a, int64_t b) { return a + b; }\n");
+    write(&root.join("adder/lib.aion"), "extern fn add(a: Int, b: Int) -> Int = \"adder_add\"\n");
+    write(
+        &root.join("main.aion"),
+        "import adder\nextern fn scale(x: Int) -> Int = \"app_scale\"\nextern fn greeting(name: String) -> String = \"app_greeting\"\nprintln(scale(adder.add(2, 3)), greeting(\"Ann\"))\n",
+    );
+    let out = aion_in(&root, &[]);
+    assert_eq!(stdout(&out), "50 hello, Ann\n", "{}", stderr(&out));
+
+    for (value, message) in [
+        ("[\"/etc/x.c\"]", "must be a .c file inside the project"),
+        ("[\"../x.c\"]", "must be a .c file inside the project"),
+        ("[\"native/scale.h\"]", "must be a .c file inside the project"),
+        ("\"native/scale.c\"", "`c` must be a list"),
+        ("[\"native/missing.c\"]", "cannot read"),
+    ] {
+        write(&root.join("aion.project"), &format!("name = \"app\"\nc = {value}\n\n[dependencies]\nadder = {{ path = \"adder\" }}\n"));
+        let out = aion_in(&root, &[]);
+        assert!(!out.status.success() && stderr(&out).contains(message), "{value}: {}", stderr(&out));
+    }
+}

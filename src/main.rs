@@ -135,7 +135,7 @@ fn locate(input: Option<&Path>) -> Result<(PathBuf, Option<project::Project>), D
 /// Generated LLVM IR plus the C sources and system libraries it must be linked with.
 struct Compiled {
     ir: String,
-    c_sources: Vec<(String, &'static str)>,
+    c_sources: Vec<(String, String)>,
     libs: Vec<String>,
 }
 
