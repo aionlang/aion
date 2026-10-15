@@ -1,0 +1,10 @@
+[1, 2, 3] [3, 2, 1]
+[apple, fig, pear] [-1, 0, 2.5] [a, b, c]
+[false, true, true]
+3 1 null
+[v0.9, v1.2, v1.10, v2.0] [v2.0, v1.10, v1.2, v0.9]
+v2.0 v0.9
+[fig, kiwi, apple, banana]
+[banana, kiwi, fig, apple]
+[banana, apple, kiwi, fig]
+-1 1 0

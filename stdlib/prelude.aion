@@ -89,6 +89,18 @@ fn Int.toChar() = '\0' + this
 // 0..9 for a digit, else null.
 fn Char.digitValue() -> Int? = if isDigit() { this - '0' } else { null }
 
+// ── Ordering ────────────────────────────────────────────────────
+
+// Things that can be put in order: a.compareTo(b) is negative, zero or positive.
+// Any type with a matching compareTo qualifies, e.g. `fn compareTo(other: Version) = …`.
+interface Comparable<T> { fn compareTo(other: T) -> Int }
+
+fn Int.compareTo(other: Int) = if this < other { -1 } else if this > other { 1 } else { 0 }
+fn Float.compareTo(other: Float) = if this < other { -1 } else if this > other { 1 } else { 0 }
+fn String.compareTo(other: String) = if this < other { -1 } else if this > other { 1 } else { 0 }
+fn Char.compareTo(other: Char) = if this < other { -1 } else if this > other { 1 } else { 0 }
+fn Bool.compareTo(other: Bool) = if this == other { 0 } else if this { 1 } else { -1 }
+
 // ── Collections ─────────────────────────────────────────────────
 //
 // `Array<T>` is built into the compiler: a fixed-size block of slots with
@@ -297,6 +309,27 @@ type List<T> {
         out := List<T>()
         for i in 0..n { out.add(src[i]) }
         return out
+    }
+
+    // Ordered by compareTo (the elements must have one); sortedBy orders by a key.
+    fn sorted() -> List<T> = sortedWith { a, b -> a.compareTo(b) }
+    fn sortedDescending() -> List<T> = sortedWith { a, b -> b.compareTo(a) }
+    fn sortedBy<K: Comparable<K>>(key: (T) -> K) -> List<T> = sortedWith { a, b -> key(a).compareTo(key(b)) }
+    fn maxOrNull() -> T? {
+        if count == 0 { return null }
+        best := items[0]
+        for i in 1..count {
+            if items[i].compareTo(best) > 0 { best = items[i] }
+        }
+        return best
+    }
+    fn minOrNull() -> T? {
+        if count == 0 { return null }
+        best := items[0]
+        for i in 1..count {
+            if items[i].compareTo(best) < 0 { best = items[i] }
+        }
+        return best
     }
 
     fn join(separator: String = ", ") -> String {

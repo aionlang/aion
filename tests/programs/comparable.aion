@@ -1,0 +1,19 @@
+// Comparable<T>: sorted(), sortedBy, min and max through compareTo
+println([3, 1, 2].sorted(), [3, 1, 2].sortedDescending())
+println(["pear", "apple", "fig"].sorted(), [2.5, -1.0, 0.0].sorted(), ['c', 'a', 'b'].sorted())
+println([true, false, true].sorted())
+println([3, 1, 2].maxOrNull(), [3, 1, 2].minOrNull(), List<Int>().maxOrNull())
+
+type Version(major: Int, minor: Int) {
+    fn compareTo(other: Version) = if major != other.major { major - other.major } else { minor - other.minor }
+    fn toString() = "v$major.$minor"
+}
+versions := [Version(1, 10), Version(1, 2), Version(0, 9), Version(2, 0)]
+println(versions.sorted(), versions.sortedDescending())
+println(versions.maxOrNull(), versions.minOrNull())
+
+words := ["kiwi", "fig", "banana", "apple"]
+println(words.sortedBy { it.length() })
+println(words.sortedBy { it[1] })
+println(words.sortedBy { -it.length() })
+println(1.compareTo(2), "b".compareTo("a"), 'x'.compareTo('x'))
