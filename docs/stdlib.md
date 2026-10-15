@@ -135,11 +135,26 @@ Always in scope.
   UTF-8 size), `toString()`; and `Int.toChar()`.
 * **String and characters** — `charAt(i)` / `s[i]` (the character that starts at
   byte `i`), `chars() -> List<Char>`; `for c in text` loops over the characters.
-* **String methods** — `length()` (bytes), `contains(s)`, `startsWith(s)`,
-  `indexOf(s)` (-1 if absent), `substring(start, end)` (stops the program if the
-  range is invalid), `trim()`, `replace(old, new)`, `split(sep)` (a
-  `List<String>`), `isInt()`, `toIntOr(fallback)` and `toIntOrNull()` (the
-  whole text must be a number), `upper()`, `lower()` (ASCII).  Offsets are bytes.
+* **String methods** — `length()` (bytes), `charCount()`, `isEmpty()`, `isBlank()`,
+  `contains(s)`, `startsWith(s)`, `endsWith(s)`, `indexOf(s)` and `lastIndexOf(s)`
+  (-1 if absent), `substring(start, end)` (stops the program if the range is
+  invalid), `trim()`, `trimStart()`, `trimEnd()`, `replace(old, new)`, `split(sep)`
+  and `lines()` (a `List<String>`), `repeat(n)`, `padLeft(width, fill = " ")` and
+  `padRight(width, fill = " ")` (widths count characters), `upper()`, `lower()`
+  (ASCII).  Offsets are bytes.
+* **Parsing numbers** — `isInt()`, `toIntOr(fallback)` and `toIntOrNull()` (the
+  whole text must be a number), `parseInt(radix) -> Int?` (`"ff".parseInt(16)`),
+  `isFloat()`, `toFloatOr(fallback)` and `toFloatOrNull()`.
+* **Int and Float** — `n.toFloat()`, `x.toInt()` (towards zero), `x.round()`,
+  `x.floor()`, `x.ceil()` (all give an `Int`), `x.format(decimals)` (text),
+  `x.roundTo(decimals)` (a `Float`), `x.isNaN()`, `x.isInfinite()`, `abs() sign()
+  min(o) max(o) clamp(low, high)` on both, `n.pow(k)`, `n.gcd(m)`,
+  `n.toRadix(base)`, `n.toHex()`, `n.toBinary()`, and `toString()` on `Int`, `Float`
+  and `Bool`.
+* **Bytes** — raw binary data: `Bytes(n, fill = 0)`, `bytesOf(list)`, `b[i]`,
+  `b[i] = v`, `b[a..b]`, `b + other`, `==`, `size() get set slice concat indexOf
+  contains toHex() toText() toList()`, `String.toBytes()` and `String.fromHex()`.
+  See the [language guide](language.md#bytes).
 * `hashOf(value) -> Int` — a non-negative hash of an Int, Float, Bool, String
   (by content) or object (by identity); what `Map` and `Set` use.
 
@@ -180,8 +195,72 @@ sort (fine for script-sized data).  A list prints as `[1, 2]`, a map as
 
 ### `std.math`
 
-`pi`; `sqrt pow sin cos floor ceil abs fmax fmin` (Float → Float, from libm) and
-`max min` (Int, Int → Int).
+Constants `pi tau e inf nan`; `sqrt cbrt pow exp log log2 log10 hypot` ·
+`sin cos tan asin acos atan atan2 sinh cosh tanh` · `floor ceil round trunc fmod abs
+fmax fmin` (Float → Float, from libm) · `toRadians toDegrees` · `max min` (Int, Int →
+Int).  `Float.isNaN()` tells a `nan`; `nan == nan` is false, as in C.
+
+### `std.fs` — files
+
+```aion
+import fs
+import path
+
+dir := fs.makeTempDir("demo-")!!
+defer fs.removeAll(dir)
+file := path.join(dir, "notes.txt")
+fs.writeText(file, "one\ntwo\n")
+println(fs.readLines(file), fs.size(file), fs.exists(file))
+println(fs.readText(path.join(dir, "missing")), fs.lastError())   // null No such file or directory
+```
+
+`readText(path) -> String?`, `readLines`, `readBytes -> Bytes?`; `writeText`,
+`writeLines`, `writeBytes`, `appendText`, `appendBytes` (→ `Bool`); `exists isDir
+isFile size modified`; `listDir -> List<String>?` (sorted names), `mkdir`, `mkdirs`,
+`remove` (a file or empty directory), `removeAll` (a tree), `rename`, `copy`; `cwd`,
+`chdir`, `absolute -> String?`, `tempDir`, `makeTempDir(prefix) -> String?`.
+Failure is `null`, `false` or `-1`, and `fs.lastError()` says why.  POSIX only.
+
+### `std.path`
+
+Paths as text: `join(a, b)`, `basename`, `dirname`, `extension`, `stem`,
+`withExtension(p, ext)`, `isAbsolute`, `normalize` (resolves `.` and `..` without
+touching the disk).  The separator is `/`.
+
+### `std.os`
+
+`env(name) -> String?`, `setEnv`, `unsetEnv`, `environment() -> Map<String, String>`;
+`pid() cpuCount() hostname() platform() arch() homeDir()`; `exit(code)`.
+Running programs: `exec(program, args, input = "") -> CommandResult` (no shell; collects
+output; `status`, `stdout`, `stderr`, `ok()`), `shell(command, input = "")` (through
+`sh -c`) and `run(program, args) -> Int` (shares the terminal).  `status` is -1 if the
+program could not be started, 128 + N if signal N ended it.  The calling task waits for the program.
+
+```aion no_run
+import os
+r := os.shell("ls | wc -l")
+println(r.status, r.stdout.trim())
+println(os.run("echo", ["hello"]))
+```
+
+### `std.time`
+
+Clocks: `millis()` (wall clock, ms since 1970), `nanos()` and `monotonic()` (for measuring),
+`measure { … } -> Int` (ms taken).  `DateTime(millis, utc = true)` with `year() month() day()
+hour() minute() second() weekday() dayOfYear() weekdayName() monthName()`, `format(pattern)`
+(strftime: `%Y-%m-%d %H:%M:%S %A %b %j %z`), `iso()`, `plus(ms) plusSeconds plusMinutes
+plusHours plusDays plusMonths plusYears`, `since(other)`, `toUtc() toLocal()`; it compares
+and works as a `Map` key.  `now()`, `nowLocal()`, `of(year, month, day, hour = 0, …)`
+(out-of-range fields carry over), `parse(text, pattern = "%Y-%m-%d %H:%M:%S") -> DateTime?`,
+and the unit constants `second minute hour day` (ms).
+
+### `std.random`
+
+`int(bound)` (0 up to bound), `range(low, high)` (both included), `float()`,
+`between(low, high)`, `bool()`, `chance(p)`, `choice(list)`, `shuffle(list)`,
+`sample(list, n)`, `any()`, `seed(n)` for repeatable runs.  A fast generator that is
+**not** for secrets: `secureBytes(n) -> Bytes` and `token(bytes = 16) -> String` use the
+operating system's source.
 
 ### `std.strings`
 
