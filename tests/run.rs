@@ -515,3 +515,28 @@ println(wrong, http.lastError().contains("certificate"))
         stderr(&out)
     );
 }
+
+/// `term.readKey` names the keys arriving on standard input, including escape sequences.
+#[test]
+fn keys_are_read_from_standard_input() {
+    let dir = scratch("keys");
+    write(
+        &dir.join("main.aion"),
+        r#"import term
+keys := List<String>()
+while true {
+    key := term.readKey(1000)
+    if key == null { break }
+    keys.add(key)
+}
+println(keys.join(" "))
+"#,
+    );
+    let input = "ab\r\t \x7f\x03\x1b[A\x1b[B\x1b[C\x1b[D\x1b[H\x1b[F\x1b[3~\x1b[5~\x1b[6~é中\x01z\x1b";
+    let out = aion_with_input(&dir, &["main.aion"], input);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out).trim_end(),
+        "a b enter tab   backspace ctrl-c up down right left home end delete pageup pagedown é 中 ctrl-a z escape"
+    );
+}

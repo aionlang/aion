@@ -1,0 +1,24 @@
+// term: colours turn on and off, escape codes can be stripped, the size has a fallback
+import term
+
+// not a terminal here, so styles are plain text
+println(term.enabled, term.bold(term.red("plain")), term.isTerminal(), term.isTerminal(0) || true)
+
+term.enabled = true
+styled := term.bold(term.red("error")) + ": " + term.green("ok") + term.color("x", 202) + term.rgb("y", 1, 2, 3) + term.underline("u")
+println(styled.length() > 30, term.strip(styled), term.strip("no codes"), term.strip(""))
+println(term.red("a") == "\u{1b}[31ma\u{1b}[0m", term.color("c", 9).replace("\u{1b}", "ESC"), term.rgb("t", 255, 0, 10).replace("\u{1b}", "ESC"))
+println(term.strip("\u{1b}[2J\u{1b}[1;31mred\u{1b}[0m and \u{1b}[38;5;100mmore\u{1b}[0m é"))
+term.enabled = false
+println(term.blue("b"), term.dim("d"), term.italic("i"), term.inverse("v"), term.gray("g"), term.onRed("r"))
+
+s := term.size()
+println(s.columns > 0, s.rows > 0)
+print("a")
+term.clearLine()
+term.moveTo(3, 4)
+term.hideCursor()
+term.showCursor()
+term.clearScreen()
+println()
+println(term.rawMode(true), term.rawMode(false))

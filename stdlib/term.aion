@@ -1,0 +1,95 @@
+// import term
+//
+//   println(term.bold(term.red("error:")) + " something broke")
+//   if term.isTerminal() { println("width: ${term.size().columns}") }
+//
+//   term.rawMode(true)                       // read single key presses
+//   while true {
+//       key := term.readKey()
+//       if key == "q" || key == "ctrl-c" { break }
+//   }
+//   term.rawMode(false)
+//
+// Terminal colours and styles (ANSI escape codes, switched off automatically when output is not a terminal or the NO_COLOR
+// variable is set), the terminal size and single-key input.
+
+import os
+
+extern fn __isTty(fd: Int) -> Bool = "aion_term_is_tty"
+extern fn __size() -> Int = "aion_term_size"
+extern fn rawMode(on: Bool) -> Bool = "aion_term_raw"
+extern fn __key(timeoutMs: Int) -> String? = "aion_term_key"
+
+// Is standard output a terminal?  (`isTerminal(0)` asks about standard input, `isTerminal(2)` about standard error.)
+fn isTerminal(fd: Int = 1) -> Bool = __isTty(fd)
+
+// How big the terminal is.
+type Size(columns: Int, rows: Int)
+
+// Columns and rows of the terminal, or 80 by 24 when there is none.
+fn size() -> Size {
+    s := __size()
+    return if s == 0 { Size(80, 24) } else { Size(s / 65536, s % 65536) }
+}
+
+// May colours be used?  Not when NO_COLOR is set, or output is not a terminal.  Set `term.enabled` to force it.
+enabled := os.env("NO_COLOR") == null && isTerminal(1)
+
+fn style(text: String, code: String) -> String = if enabled { "\u{1b}[" + code + "m" + text + "\u{1b}[0m" } else { text }
+
+fn bold(text: String) = style(text, "1")
+fn dim(text: String) = style(text, "2")
+fn italic(text: String) = style(text, "3")
+fn underline(text: String) = style(text, "4")
+fn inverse(text: String) = style(text, "7")
+
+fn black(text: String) = style(text, "30")
+fn red(text: String) = style(text, "31")
+fn green(text: String) = style(text, "32")
+fn yellow(text: String) = style(text, "33")
+fn blue(text: String) = style(text, "34")
+fn magenta(text: String) = style(text, "35")
+fn cyan(text: String) = style(text, "36")
+fn white(text: String) = style(text, "37")
+fn gray(text: String) = style(text, "90")
+fn onRed(text: String) = style(text, "41")
+fn onGreen(text: String) = style(text, "42")
+fn onBlue(text: String) = style(text, "44")
+
+// One of the 256 palette colours (0 to 255), or a true colour.
+fn color(text: String, index: Int) = style(text, "38;5;$index")
+fn rgb(text: String, r: Int, g: Int, b: Int) = style(text, "38;2;$r;$g;$b")
+
+// The text without any escape codes (to measure it or write it to a file).
+fn strip(text: String) -> String {
+    out := StringBuilder()
+    at := 0
+    n := text.length()
+    while at < n {
+        c := text.charAt(at)
+        if c == '\u{1b}' && at + 1 < n && text.charAt(at + 1) == '[' {
+            at += 2
+            while at < n {
+                d := text.charAt(at)
+                at += 1
+                if d.code() >= 64 && d.code() <= 126 { break }
+            }
+        } else {
+            out.appendChar(c)
+            at += c.byteLength()
+        }
+    }
+    return out.toString()
+}
+
+// Cursor and screen control: these write escape codes straight away.
+fn clearScreen() { print("\u{1b}[2J\u{1b}[H") }
+fn clearLine() { print("\r\u{1b}[2K") }
+fn moveTo(column: Int, row: Int) { print("\u{1b}[$row;${column}H") }
+fn hideCursor() { print("\u{1b}[?25l") }
+fn showCursor() { print("\u{1b}[?25h") }
+
+// The next key press in raw mode (see `rawMode`): a character as itself, or "enter", "tab", "backspace", "escape",
+// "up", "down", "left", "right", "home", "end", "delete", "pageup", "pagedown", "ctrl-a" .. "ctrl-z".
+// With a timeout (ms) it gives "" when nothing was pressed in time.  Null when the input has ended.
+fn readKey(timeoutMs: Int = -1) -> String? = __key(timeoutMs)
