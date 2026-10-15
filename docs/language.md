@@ -157,7 +157,7 @@ println(greet("Bob", greeting: "Hi"))           // Hi, Bob!
 println(greet(greeting: "Yo", name: "Cy"))      // named arguments, any order
 ```
 
-* Parameters need types; defaults must be literals.
+* Parameters need types; defaults must be literals (or `null`, for an optional parameter such as `title: String? = null`).
 * After a named argument, all following arguments must be named.  Arguments are
   evaluated in the order they are written.
 * `= expr` infers the return type; write `-> Type` to state it.  With a block
@@ -184,6 +184,11 @@ of its own (`"hi".length()`, `.contains(s)`, `.upper()` and friends are
 [methods](#methods-on-built-in-types)).  Escapes: `\n \t \r \0 \\ \" \$`.  A `$` not followed by a name or `{`
 is just a dollar sign.  `Int`, `Float`, `Bool` and objects convert to text in
 `${}`; build text with interpolation, not `+`.
+
+`\u{1F600}` puts any Unicode code point in a string (`"caf\u{e9}"` is `café`).  A `Float`
+prints as the shortest text that reads back as the same number: `0.1`, `0.30000000000000004`,
+`12` for a whole number, `1e+20` for a huge one.  For fixed decimals use
+`x.format(2)` (`3.14159.format(2)` is `3.14`).
 
 ## Types
 
