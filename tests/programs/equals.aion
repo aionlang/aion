@@ -1,0 +1,19 @@
+// A type can define equals(other) to change what == means for its objects
+type Point(x: Int, y: Int) {
+    fn equals(other: Point) = x == other.x && y == other.y
+}
+type Id(n: Int)    // no equals: identity
+
+a := Point(1, 2)
+b := Point(1, 2)
+c := Point(3, 4)
+println(a == b, a != b, a == c, a != c, a == a)
+n1 := Id(1)
+n2 := Id(1)
+println(n1 == n2, n1 == n1)
+
+pts := [Point(0, 0), Point(5, 5)]
+println(pts.contains(Point(5, 5)), pts.indexOf(Point(5, 5)), pts.contains(Point(1, 1)))
+m: Point? = Point(1, 2)
+none: Point? = null
+println(m == a, m == none, none == none, none == a, a == m)

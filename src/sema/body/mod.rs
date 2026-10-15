@@ -1992,6 +1992,14 @@ impl<'c, 'a> Cx<'c, 'a> {
         {
             return self.optional_equality(op == B::Eq, l, r, span);
         }
+        // Objects compare with their own `equals(other)` if they have one.
+        if matches!(op, B::Eq | B::Ne)
+            && let (Ty::Obj(a), Ty::Obj(b)) = (l.ty, r.ty)
+            && a == b
+            && let Some(equals) = self.custom_equals(a)
+        {
+            return Ok(self.object_equality(op == B::Eq, equals, l, r));
+        }
 
         // Mixed Int/Float arithmetic and comparison happens in Float.
         let (l, r) = match (l.ty, r.ty) {
@@ -2111,6 +2119,36 @@ impl<'c, 'a> Cx<'c, 'a> {
             ),
             ty,
         ))
+    }
+
+    /// The `equals(other: T) -> Bool` method of type `ty`, if it has one.
+    fn custom_equals(&self, ty: TypeId) -> Option<FnId> {
+        let info = self.ck.t.ty(ty);
+        if info.iface.is_some() || info.array_elem.is_some() {
+            return None;
+        }
+        let &f = info.methods.get("equals")?;
+        let decl = self.ck.func(f);
+        let fits = decl.params.len() == 2 && decl.params[1].ty == Ty::Obj(ty);
+        (fits && self.ck.ret_of(f, Span::default()).ok()? == Ty::Bool).then_some(f)
+    }
+
+    /// `a == b` through `a.equals(b)`; two nulls are equal and a null is never equal to an object.
+    fn object_equality(&mut self, equal: bool, equals: FnId, l: hir::Expr, r: hir::Expr) -> hir::Expr {
+        let ty = l.ty;
+        let (a, b) = (self.new_local("$a", ty), self.new_local("$b", ty));
+        let null_a = mk(K::IsNull(Box::new(self.local_expr(a))), Ty::Bool);
+        let null_b = mk(K::IsNull(Box::new(self.local_expr(b))), Ty::Bool);
+        let present_b = mk(K::Not(Box::new(mk(K::IsNull(Box::new(self.local_expr(b))), Ty::Bool))), Ty::Bool);
+        let call = mk(K::Call { func: equals, args: vec![self.local_expr(a), self.local_expr(b)] }, Ty::Bool);
+        let both = mk(K::Logical { and: true, lhs: Box::new(present_b), rhs: Box::new(call) }, Ty::Bool);
+        let test = mk(
+            K::Cond { cond: Box::new(null_a), then: Box::new(null_b), otherwise: Box::new(both) },
+            Ty::Bool,
+        );
+        let bind = vec![hir::Stmt::Let(a, Some(l)), hir::Stmt::Let(b, Some(r))];
+        let result = mk(K::Block(bind, Box::new(test)), Ty::Bool);
+        if equal { result } else { mk(K::Not(Box::new(result)), Ty::Bool) }
     }
 
     /// `==` / `!=` where a side is optional or `null`.
