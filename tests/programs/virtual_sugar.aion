@@ -1,0 +1,39 @@
+// Index, loop, size, slice, `in`, `==` and hashOf on an open type go to the real kind's method
+open type Seq {
+    open fn size() = 0
+    open fn get(i: Int) = -1
+    open fn set(i: Int, v: Int) { println("base set") }
+    open fn iter() = List<Int>()
+    open fn slice(from: Int, to: Int) = "base slice"
+    open fn contains(x: Int) = false
+    open fn equals(o: Seq) = true
+    open fn hashCode() = 1
+}
+type Evens(n: Int) : Seq() {
+    override fn size() = n
+    override fn get(i: Int) = i * 2
+    override fn set(i: Int, v: Int) { println("evens set $i=$v") }
+    override fn iter() = [10, 20, 30]
+    override fn slice(from: Int, to: Int) = "evens ${from}..$to"
+    override fn contains(x: Int) = x % 2 == 0
+    override fn equals(o: Seq) = o.size() == n
+    override fn hashCode() = n * 7
+}
+type Empty : Seq()
+
+s: Seq = Evens(4)
+e: Seq = Empty()
+println(s.size(), s[3], e.size(), e[3])
+s[1] = 5
+e[1] = 5
+for x in s { print(x, " ") }
+println()
+for x in e { print(x, " ") }
+println("(none)")
+println(s[1..3], e[1..3])
+println(4 in s, 3 in s, 4 in e)
+println(s == Evens(4), s == Evens(5), e == s, s != Evens(4))
+println(hashOf(s), hashOf(e))
+m := Map<Seq, String>()
+m[s] = "evens"
+println(m[Evens(4)], m.containsKey(Evens(5)))

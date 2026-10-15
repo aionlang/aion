@@ -1019,7 +1019,9 @@ impl<'c, 'a> Cx<'c, 'a> {
                 other => self.ck.ext_method(other, "iter"),
             };
             let Some(iter_fn) = iter_fn else { break };
-            coll = self.call_values(iter_fn, Some(coll), Vec::new(), iter.span)?;
+            let before = coll.ty;
+            let call = self.call_values(iter_fn, Some(coll), Vec::new(), iter.span)?;
+            coll = self.virtual_on(call, before, "iter");
         }
         let looping = match coll.ty {
             Ty::Obj(t) => {
@@ -1106,7 +1108,9 @@ impl<'c, 'a> Cx<'c, 'a> {
             }
         };
         let recv = self.local_expr(tmp);
+        let whole_ty = whole.ty;
         let call = self.call_values(method, Some(recv), vec![(from, span), (to, span)], span)?;
+        let call = self.virtual_on(call, whole_ty, "slice");
         let ty = call.ty;
         Ok(mk(K::Block(vec![hir::Stmt::Let(tmp, Some(whole))], Box::new(call)), ty))
     }
@@ -1125,7 +1129,9 @@ impl<'c, 'a> Cx<'c, 'a> {
                 return Ok(mk(K::ArrayLen(Box::new(coll)), Ty::Int));
             }
             if let Some(&size) = info.methods.get("size") {
+                let ty = coll.ty;
                 let call = self.call_values(size, Some(coll), Vec::new(), span)?;
+                let call = self.virtual_on(call, ty, "size");
                 return self.coerce(call, Ty::Int, span);
             }
         }
@@ -1296,7 +1302,9 @@ impl<'c, 'a> Cx<'c, 'a> {
                 return Ok(mk(K::Elem { array: Box::new(obj), index: Box::new(index) }, elem));
             }
             if let Some(&get) = info.methods.get("get") {
-                return self.call_values(get, Some(obj), vec![(index, span)], span);
+                let ty = obj.ty;
+                let call = self.call_values(get, Some(obj), vec![(index, span)], span)?;
+                return Ok(self.virtual_on(call, ty, "get"));
             }
         }
         Err(Diagnostic::new(format!("a {} cannot be indexed", self.name(obj.ty)), span)
@@ -1319,8 +1327,9 @@ impl<'c, 'a> Cx<'c, 'a> {
                 return Ok(hir::Stmt::SetElem { array: obj, index, value });
             }
             if let Some(&set) = info.methods.get("set") {
+                let ty = obj.ty;
                 let call = self.call_values(set, Some(obj), vec![(index, span), (value, span)], span)?;
-                return Ok(hir::Stmt::Expr(call));
+                return Ok(hir::Stmt::Expr(self.virtual_on(call, ty, "set")));
             }
         }
         Err(Diagnostic::new(format!("cannot assign to an element of a {}", self.name(obj.ty)), span)
@@ -1488,7 +1497,9 @@ impl<'c, 'a> Cx<'c, 'a> {
             Ty::Opt(o) => mk(K::Unwrap(Box::new(self.local_expr(tmp))), self.ck.t.opt_inner(o)),
             _ => self.local_expr(tmp),
         };
+        let object_ty = object.ty;
         let call = mk(K::Call { func: hash, args: vec![object] }, Ty::Int);
+        let call = self.virtual_on(call, object_ty, "hashCode");
         let reduced = |cx: &Self| {
             mk(K::Binary(hir::BinOp::Rem, Box::new(cx.local_expr(raw)), Box::new(int(MODULUS))), Ty::Int)
         };
@@ -1719,6 +1730,15 @@ impl<'c, 'a> Cx<'c, 'a> {
         match virtuals.get(name) {
             Some(&(root, index)) => self.virtualize(call, root, index),
             None => call,
+        }
+    }
+
+    /// A call of `name` made on a value of type `ty` through sugar (`xs[i]`, `for`, `a..b` slices): looked up
+    /// through the real type when the method is `open`, like a written-out call.
+    fn virtual_on(&self, call: hir::Expr, ty: Ty, name: &str) -> hir::Expr {
+        match ty {
+            Ty::Obj(t) => self.virtual_if_open(call, &self.ck.t.ty(t).virtuals, name),
+            _ => call,
         }
     }
 
@@ -2424,6 +2444,7 @@ impl<'c, 'a> Cx<'c, 'a> {
         let null_b = mk(K::IsNull(Box::new(self.local_expr(b))), Ty::Bool);
         let present_b = mk(K::Not(Box::new(mk(K::IsNull(Box::new(self.local_expr(b))), Ty::Bool))), Ty::Bool);
         let call = mk(K::Call { func: equals, args: vec![self.local_expr(a), self.local_expr(b)] }, Ty::Bool);
+        let call = self.virtual_on(call, ty, "equals");
         let both = mk(K::Logical { and: true, lhs: Box::new(present_b), rhs: Box::new(call) }, Ty::Bool);
         let test = mk(
             K::Cond { cond: Box::new(null_a), then: Box::new(null_b), otherwise: Box::new(both) },
