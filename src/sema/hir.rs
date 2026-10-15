@@ -198,6 +198,8 @@ pub enum ExprKind {
     New(TypeId),
     /// Is the object (not null) an instance of `target` or of a type that extends it?
     IsInstance { value: Box<Expr>, target: TypeId },
+    /// `value as target` (panics if it is not one) or `value as? target` (null if it is not one).
+    Downcast { value: Box<Expr>, target: TypeId, safe: bool },
     /// A value of a type that implements an interface, used as that interface
     /// (the same pointer; the object header says which type it really is).
     Upcast(Box<Expr>),

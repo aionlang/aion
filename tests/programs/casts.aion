@@ -1,0 +1,20 @@
+// exit: 1
+// stderr: cannot cast to Dog
+// as checks and converts; as? gives null instead of failing
+open type Animal(name: String)
+open type Dog(name: String) : Animal(name) { fn fetch() = "$name fetches" }
+type Cat(name: String) : Animal(name) { fn purr() = "$name purrs" }
+
+a: Animal = Dog("Rex")
+b: Animal = Cat("Tom")
+println((a as Dog).fetch(), (b as Cat).purr())
+println((a as? Dog)?.fetch(), (a as? Cat)?.purr(), (b as? Cat)?.name)
+println((a as? Cat) == null, (a as? Dog) != null)
+up: Animal = Dog("U") as Animal
+println(up.name, (up as? Animal)?.name)
+maybe: Animal? = null
+println((maybe as? Dog)?.name)
+animals: List<Animal> = [Dog("d1"), Cat("c1"), Dog("d2")]
+dogs := animals.filter { it is Dog }.map { (it as Dog).fetch() }
+println(dogs)
+println((b as Dog).fetch())

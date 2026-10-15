@@ -1782,6 +1782,26 @@ impl<'c, 'a> Cx<'c, 'a> {
         Ok(target)
     }
 
+    /// `value as T` / `value as? T`
+    fn cast_expr(&mut self, value: &ast::Expr, ty: &ast::TypeRef, safe: bool) -> Result<hir::Expr> {
+        let v = self.value(value)?;
+        let target = self.class_target(&v, ty, value.span.to(ty.span))?;
+        let result = if safe { self.ck.t.opt_of(Ty::Obj(target)) } else { Ty::Obj(target) };
+        // Going up (or staying) always works, so there is nothing to check.
+        let from = match v.ty {
+            Ty::Obj(t) => Some(t),
+            Ty::Opt(o) => match self.ck.t.opt_inner(o) {
+                Ty::Obj(t) => Some(t),
+                _ => None,
+            },
+            _ => None,
+        };
+        if safe && from.is_some_and(|f| f == target || self.ck.is_subtype(f, target)) {
+            return Ok(mk(K::Upcast(Box::new(v)), result));
+        }
+        Ok(mk(K::Downcast { value: Box::new(v), target, safe }, result))
+    }
+
     /// `value is T` / `value !is T`
     fn is_expr(&mut self, value: &ast::Expr, ty: &ast::TypeRef, negated: bool) -> Result<hir::Expr> {
         let v = self.value(value)?;
@@ -2064,7 +2084,7 @@ impl<'c, 'a> Cx<'c, 'a> {
 
             A::Is { value, ty, negated } => self.is_expr(value, ty, *negated)?,
 
-            A::Cast { .. } => return Err(Diagnostic::new("`as` is not available yet", e.span)),
+            A::Cast { value, ty, safe } => self.cast_expr(value, ty, *safe)?,
 
             A::Try { body, catch_name, handler } => self.try_expr(body, catch_name.as_ref(), handler, None, e.span)?,
 

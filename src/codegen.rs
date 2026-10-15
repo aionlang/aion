@@ -46,6 +46,7 @@ declare void @aion_panic_null() noreturn
 declare void @aion_panic_div_zero() noreturn
 declare void @aion_panic_index(i64, i64) noreturn
 declare void @aion_panic_unwrap() noreturn
+declare void @aion_panic_cast(ptr) noreturn
 declare void @aion_set_args(i32, ptr)
 declare ptr @aion_array_new(i64, i64, i64)
 declare i64 @aion_hash_int(i64)
@@ -57,7 +58,7 @@ declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
 const RUNTIME_SYMBOLS: &[&str] = &[
     "aion_new_object", "aion_concat", "aion_int_to_str", "aion_float_to_str", "aion_bool_to_str",
     "aion_str_eq", "aion_str_cmp", "aion_print_str", "aion_print_char", "aion_char_to_str", "aion_print_int", "aion_print_float", "aion_print_bool",
-    "aion_panic_null", "aion_panic_div_zero", "aion_panic_index", "aion_panic_unwrap", "aion_set_args", "aion_array_new", "aion_hash_int", "aion_hash_str", "aion_frame_top",
+    "aion_panic_null", "aion_panic_div_zero", "aion_panic_index", "aion_panic_unwrap", "aion_panic_cast", "aion_set_args", "aion_array_new", "aion_hash_int", "aion_hash_str", "aion_frame_top",
 ];
 
 pub fn emit(p: &Program) -> String {
@@ -831,6 +832,24 @@ impl<'a> FnGen<'a> {
             }
 
             ExprKind::Upcast(inner) => self.expr(inner),
+
+            ExprKind::Downcast { value, target, safe } => {
+                let v = self.expr(value);
+                let ok = self.instance_test(&v, *target);
+                if *safe {
+                    let t = self.tmp();
+                    self.line(format!("{t} = select i1 {ok}, ptr {v}, ptr null"));
+                    return t;
+                }
+                let (bad, good) = (self.label("badcast"), self.label("cast"));
+                self.term(format!("br i1 {ok}, label %{good}, label %{bad}"));
+                self.begin(&bad);
+                let name = self.pool.operand(&self.p.types[*target].name);
+                self.line(format!("call void @aion_panic_cast(ptr {name})"));
+                self.term("unreachable");
+                self.begin(&good);
+                v
+            }
 
             ExprKind::IsInstance { value, target } => {
                 let v = self.expr(value);
