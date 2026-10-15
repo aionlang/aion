@@ -1,0 +1,139 @@
+// http: a client and a server in one program, plus hand-made servers that speak the odd parts of HTTP/1.1
+import http
+import json
+import net
+import os
+
+server := http.listen(0, "127.0.0.1") { req ->
+    when req.path {
+        "/hello" -> http.text("Hello, ${req.param("name") ?: "world"}!")
+        "/echo" -> http.respond(201, req.body, req.header("content-type") ?: "none").with("X-Method", req.method).with("X-Length", "${req.body.size()}")
+        "/headers" -> http.text(req.headers.keys().sorted().join(",") + "|" + (req.header("x-custom") ?: "-") + "|" + (req.header("user-agent") ?: "-"))
+        "/json" -> {
+            doc := req.json()
+            if doc == null { http.text("not json", 400) } else { http.jsonResponse(json.object().put("got", doc).put("n", json.int(doc.size()))) }
+        }
+        "/old" -> http.redirect("/hello?name=redirected", 301)
+        "/chain1" -> http.redirect("/chain2", 302)
+        "/chain2" -> http.redirect("http://127.0.0.1:${req.header("host")!!.split(":")[1]}/hello?name=chain", 307)
+        "/loop" -> http.redirect("/loop", 302)
+        "/post-redirect" -> http.redirect("/echo", 303)
+        "/keep-post" -> http.redirect("/echo", 307)
+        "/boom" -> {
+            panic("handler failed")
+            http.text("unreachable")
+        }
+        "/big" -> http.bytes(Bytes(1000000, 7), "application/octet-stream")
+        "/empty" -> http.respond(204, Bytes(0), "text/plain")
+        "/query" -> http.text("${req.query.size()} " + req.query.keys().sorted().map { "$it=${req.param(it)}" }.join("&") + " path=${req.path}")
+        else -> http.notFound()
+    }
+}!!
+base := "http://127.0.0.1:${server.port()}"
+
+r := http.get(base + "/hello")!!
+println(r.status, r.reason, r.ok(), r.text(), r.header("CONTENT-TYPE"), r.header("nothing"), r.headers.containsKey("content-length"))
+println(http.get(base + "/hello?name=Ann%20Lee+Jr")!!.text())
+println(http.get(base + "/nope")!!.status, http.get(base + "/nope")!!.ok(), http.get(base + "/nope")!!.text())
+
+// bodies, methods and headers
+e := http.post(base + "/echo", "some text")!!
+println(e.status, e.text(), e.header("content-type"), e.header("x-method"), e.header("x-length"))
+println(http.put(base + "/echo", "x", {"Content-Type": "text/special"})!!.header("content-type"), http.request("PATCH", base + "/echo", null, "p".toBytes())!!.header("x-method"))
+println(http.delete(base + "/echo")!!.header("x-method"), http.postBytes(base + "/echo", bytesOf([0, 255, 10, 13, 0]))!!.body.toHex())
+h := http.head(base + "/hello")!!
+println(h.status, h.body.size(), h.header("content-length"))
+println(http.get(base + "/headers", {"X-Custom": "yes", "ACCEPT": "text/plain"})!!.text())
+
+// JSON
+doc := http.postJson(base + "/json", json.parse(r"""{"a": [1, 2, 3], "b": {"c": null}}""")!!)!!
+println(doc.status, doc.header("content-type"), doc.text(), doc.json()!!.getInt("n"))
+println(http.post(base + "/json", "{broken")!!.text(), http.get(base + "/hello")!!.json())
+
+// redirects
+println(http.get(base + "/old")!!.text(), http.get(base + "/chain1")!!.text())
+println(http.get(base + "/old", null, http.Options(follow: false))!!.status, http.get(base + "/old", null, http.Options(follow: false))!!.header("location"))
+println(http.get(base + "/loop"), http.lastError())
+println(http.get(base + "/loop", null, http.Options(maxRedirects: 2)), http.lastError())
+pr := http.post(base + "/post-redirect", "payload")!!
+println(pr.status, pr.header("x-method"), pr.header("x-length"))
+kp := http.post(base + "/keep-post", "payload")!!
+println(kp.status, kp.header("x-method"), kp.header("x-length"), kp.text())
+
+// server errors, large and empty bodies, query strings
+println(http.get(base + "/boom")!!.status, http.get(base + "/boom")!!.text())
+big := http.get(base + "/big")!!
+println(big.body.size(), big.body == Bytes(1000000, 7), big.header("content-length"))
+println(http.get(base + "/empty")!!.status, http.get(base + "/empty")!!.body.size())
+println(http.get(base + "/query?a=1&b=two%20words&c&d=x+y&=e&e=%zz")!!.text())
+println(http.get(base + "/query")!!.text(), http.get(base + "/query/?x=1")!!.status)
+
+// many requests at once
+done := Channel<Int>(20)
+for i in 0..10 {
+    launch {
+        done.send(http.get(base + "/hello?name=$i")!!.text().length())
+    }
+}
+total := 0
+for i in 0..10 {
+    total += done.receive()!!
+}
+println(total)
+
+// hand-made servers: chunked encoding, close-delimited bodies, odd status lines, broken answers
+fn once(answer: String) -> Int {
+    l := net.listen(0, "127.0.0.1")!!
+    launch {
+        c := l.accept()
+        if c != null {
+            c.receive()
+            c.sendText(answer)
+            c.close()
+        }
+        l.close()
+    }
+    return l.port()
+}
+fn fetch(answer: String) -> http.Response? = http.get("http://127.0.0.1:${once(answer)}/")
+
+c := fetch("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n7;ext=1\r\n, world\r\n0\r\nTrailer: x\r\n\r\n")!!
+println(c.text(), c.header("transfer-encoding"))
+println(fetch("HTTP/1.0 200 OK\r\nX-A: 1\r\nx-a: 2\r\n\r\nuntil the end")!!.text(), fetch("HTTP/1.0 200 OK\r\nX-A: 1\r\nx-a: 2\r\n\r\n")!!.header("x-a"))
+println(fetch("HTTP/1.1 404 Nothing Here At All\r\nContent-Length: 3\r\n\r\nabcEXTRA")!!.reason)
+println(fetch("HTTP/1.1 304 Not Modified\r\nContent-Length: 10\r\n\r\n")!!.body.size())
+println(fetch("garbage\r\n\r\n"), http.lastError())
+println(fetch("HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nshort"), http.lastError())
+println(fetch("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n"), http.lastError())
+println(fetch("HTTP/1.1 200 OK\r\nContent-Length: abc\r\n\r\n"), http.lastError())
+println(fetch(""), http.lastError())
+println(fetch("HTTP/1.1 200 OK\r\nContent-Length: 999999999999\r\n\r\n"), http.lastError())
+
+// client errors
+println(http.get("ftp://example.com/"), http.lastError())
+println(http.get("not a url"), http.lastError())
+println(http.get("http://127.0.0.1:1/"), http.lastError().startsWith("cannot connect"))
+quiet := net.listen(0, "127.0.0.1")!!
+println(http.get("http://127.0.0.1:${quiet.port()}/", null, http.Options(timeoutMs: 100)), http.lastError())
+quiet.close()
+
+// URLs and proxies
+u := http.parseUrl("HTTPS://User:pw@Example.COM:8443/a/b?x=1#frag")!!
+println(u, u.host, u.port, u.user, u.target, u.secure(), u.authority())
+println(http.parseUrl("http://example.com"), http.parseUrl("http://[::1]:80/p")!!.authority(), http.parseUrl("http://host:99999/"), http.parseUrl("http://:80/"), http.parseUrl("http://h?q=1")!!.target)
+base1 := http.parseUrl("http://a.com/dir/page?q=1")!!
+println(http.resolve(base1, "other"), http.resolve(base1, "/abs"), http.resolve(base1, "//b.com/x"), http.resolve(base1, "https://c.com/y"), http.resolve(base1, "../up"))
+os.unsetEnv("no_proxy")
+os.unsetEnv("NO_PROXY")
+os.setEnv("https_proxy", "http://me:secret@proxy.local:3128")
+os.setEnv("http_proxy", "plain.proxy:8080")
+secure := http.parseUrl("https://example.com/")!!
+plain := http.parseUrl("http://example.com/")!!
+println(http.proxyFor(secure), http.proxyFor(secure)!!.user, http.proxyFor(plain), http.proxyFor(http.parseUrl("http://127.0.0.1/")!!), http.proxyFor(http.parseUrl("http://localhost/")!!))
+os.setEnv("no_proxy", "internal.corp, .example.com ,other")
+println(http.proxyFor(secure), http.proxyFor(http.parseUrl("http://example.com/")!!), http.proxyFor(http.parseUrl("http://www.example.com/")!!), http.proxyFor(http.parseUrl("http://internal.corp/")!!), http.proxyFor(http.parseUrl("http://notinternal.corp/")!!))
+os.setEnv("no_proxy", "*")
+println(http.proxyFor(secure))
+
+server.close()
+println(http.get(base + "/hello"), http.lastError().startsWith("cannot connect"))

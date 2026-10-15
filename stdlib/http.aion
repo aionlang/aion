@@ -1,0 +1,676 @@
+// import http
+//
+//   r := http.get("https://example.com/api/items")
+//   if r == null { println("failed: ${http.lastError()}") } else {
+//       println(r.status, r.header("content-type"), r.text().length())
+//       items := r.json()
+//   }
+//   http.post("http://localhost:8080/echo", "hello", headers: {"Content-Type": "text/plain"})
+//   http.postJson("https://example.com/api", json.object().put("name", json.string("Ann")))
+//
+//   server := http.listen(8080) { req ->
+//       if req.path == "/hello" { http.text("Hello, ${req.param("name") ?: "world"}!") } else { http.notFound() }
+//   }!!
+//
+// An HTTP/1.1 client and a small server.  The client follows redirects, speaks TLS (https needs OpenSSL's
+// libssl installed), honours the http_proxy / https_proxy / no_proxy environment variables, and sends
+// "Connection: close", so every request uses a fresh connection.  The server answers one request per
+// connection, each in its own task.  Compressed (gzip) responses are not supported: the client asks for none.
+
+import net
+import encoding
+import json
+import os
+import fs
+
+lastErr := ""
+
+// Why the most recent request (or `listen`) returned null.
+fn lastError() -> String = lastErr
+
+fn fail(message: String) {
+    lastErr = message
+}
+
+// ── Messages ─────────────────────────────────────────────────────
+
+// What the server answered (or what a handler answers with).  Header names are lower case in a received
+// Response; `header(name)` ignores case.
+type Response(status: Int, headers: Map<String, String>, body: Bytes) {
+    reason: String = ""
+
+    fn ok() = status >= 200 && status < 300
+    fn text() = body.toText()
+    fn header(name: String) -> String? = headers.getOrNull(name.lower())
+    // Add or replace a header; returns the response so calls can be chained.
+    fn with(name: String, value: String) -> Response {
+        headers[name.lower()] = value
+        return this
+    }
+    // The body parsed as JSON, or null if it is not valid JSON.
+    fn json() -> json.Json? = json.parse(text())
+    fn toString() = "Response($status, ${body.size()} bytes)"
+}
+
+// What a client sent to the server.
+type Request(method: String, target: String, headers: Map<String, String>, body: Bytes, peer: String) {
+    path: String = ""
+    query: Map<String, String> = Map<String, String>()
+
+    init {
+        mark := target.indexOf("?")
+        if mark < 0 {
+            path = encoding.urlDecode(target) ?: target
+        } else {
+            path = encoding.urlDecode(target.substring(0, mark)) ?: target.substring(0, mark)
+            for pair in target.substring(mark + 1, target.length()).split("&") {
+                if pair.length() == 0 { continue }
+                eq := pair.indexOf("=")
+                key := if eq < 0 { pair } else { pair.substring(0, eq) }
+                value := if eq < 0 { "" } else { pair.substring(eq + 1, pair.length()) }
+                query[encoding.urlDecode(key, true) ?: key] = encoding.urlDecode(value, true) ?: value
+            }
+        }
+    }
+
+    fn header(name: String) -> String? = headers.getOrNull(name.lower())
+    // A query parameter: /search?q=aion -> param("q") is "aion".
+    fn param(name: String) -> String? = query.getOrNull(name)
+    fn text() = body.toText()
+    fn json() -> json.Json? = json.parse(text())
+    fn toString() = "$method $target"
+}
+
+// How the client behaves.
+type Options(timeoutMs: Int = 30000, follow: Bool = true, maxRedirects: Int = 10, verify: Bool = true, caFile: String = "", useProxy: Bool = true, maxBody: Int = 268435456)
+
+// ── URLs ─────────────────────────────────────────────────────────
+
+type Url(scheme: String, host: String, port: Int, target: String, user: String) {
+    fn secure() = scheme == "https"
+    // The Host header value.
+    fn authority() = (if host.contains(":") { "[" + host + "]" } else { host }) + (if port == defaultPort(scheme) { "" } else { ":$port" })
+    fn toString() = "$scheme://" + authority() + target
+}
+
+fn defaultPort(scheme: String) = if scheme == "https" { 443 } else { 80 }
+
+// Split "http://user:pw@host:8080/path?query#fragment"; null if it is not an http(s) URL.
+fn parseUrl(text: String) -> Url? {
+    sep := text.indexOf("://")
+    if sep < 0 { return null }
+    scheme := text.substring(0, sep).lower()
+    if scheme != "http" && scheme != "https" { return null }
+    rest := text.substring(sep + 3, text.length())
+    hash := rest.indexOf("#")
+    if hash >= 0 { rest = rest.substring(0, hash) }
+    slash := rest.indexOf("/")
+    mark := rest.indexOf("?")
+    cut := if slash < 0 && mark < 0 { rest.length() } else if slash < 0 { mark } else if mark < 0 { slash } else { slash.min(mark) }
+    authority := rest.substring(0, cut)
+    target := rest.substring(cut, rest.length())
+    if !target.startsWith("/") { target = "/" + target }
+    user := ""
+    at := authority.lastIndexOf("@")
+    if at >= 0 {
+        user = authority.substring(0, at)
+        authority = authority.substring(at + 1, authority.length())
+    }
+    host := authority
+    port := defaultPort(scheme)
+    if authority.startsWith("[") {
+        close := authority.indexOf("]")
+        if close < 0 { return null }
+        host = authority.substring(1, close)
+        tail := authority.substring(close + 1, authority.length())
+        if tail.startsWith(":") {
+            p := tail.substring(1, tail.length()).toIntOrNull()
+            if p == null { return null }
+            port = p
+        }
+    } else {
+        colon := authority.lastIndexOf(":")
+        if colon >= 0 {
+            p := authority.substring(colon + 1, authority.length()).toIntOrNull()
+            if p == null { return null }
+            host = authority.substring(0, colon)
+            port = p
+        }
+    }
+    if host.length() == 0 || port < 1 || port > 65535 { return null }
+    return Url(scheme, host.lower(), port, target, user)
+}
+
+// A redirect target (absolute, "//host/path", "/path" or "relative") resolved against the URL it came from.
+fn resolve(base: Url, location: String) -> Url? {
+    if location.contains("://") { return parseUrl(location) }
+    root := base.scheme + "://" + base.authority()
+    if location.startsWith("//") { return parseUrl(base.scheme + ":" + location) }
+    if location.startsWith("/") { return parseUrl(root + location) }
+    dir := base.target
+    mark := dir.indexOf("?")
+    if mark >= 0 { dir = dir.substring(0, mark) }
+    dir = dir.substring(0, dir.lastIndexOf("/") + 1)
+    return parseUrl(root + dir + location)
+}
+
+fn isLoopback(host: String) = host == "localhost" || host == "::1" || host.startsWith("127.")
+
+// ── Proxies ──────────────────────────────────────────────────────
+
+fn envAny(names: List<String>) -> String? {
+    for name in names {
+        value := os.env(name)
+        if value != null && value.length() > 0 { return value }
+    }
+    return null
+}
+
+fn proxyBypassed(host: String) -> Bool {
+    if isLoopback(host) { return true }
+    list := envAny(["no_proxy", "NO_PROXY"])
+    if list == null { return false }
+    for entry in list.split(",") {
+        e := entry.trim().lower()
+        if e.startsWith(".") { e = e.substring(1, e.length()) }
+        if e.length() == 0 { continue }
+        if e == "*" || host == e || host.endsWith("." + e) { return true }
+    }
+    return false
+}
+
+// The proxy to use for a URL, from the environment, or null.
+fn proxyFor(url: Url) -> Url? {
+    if proxyBypassed(url.host) { return null }
+    names := if url.secure() { ["https_proxy", "HTTPS_PROXY"] } else { ["http_proxy", "HTTP_PROXY"] }
+    value := envAny(names)
+    if value == null { return null }
+    return parseUrl(if value.contains("://") { value } else { "http://" + value })
+}
+
+// ── Reading a message from a connection ──────────────────────────
+
+type Reader(conn: net.Conn) {
+    buf: BytesBuilder = BytesBuilder()
+    eof: Bool = false
+    problem: String = ""
+
+    // Read more into the buffer; false at the end of the stream or on an error (see `problem`).
+    fn fill() -> Bool {
+        part := conn.receive(65536)
+        if part == null {
+            problem = net.lastError()
+            return false
+        }
+        if part.size() == 0 {
+            eof = true
+            return false
+        }
+        buf.add(part)
+        return true
+    }
+
+    // Everything up to the first occurrence of `marker` (which is consumed too), or null.
+    fn until(marker: Bytes, limit: Int) -> Bytes? {
+        searched := 0
+        while true {
+            at := buf.find(marker, searched)
+            if at >= 0 {
+                chunk := buf.take(at + marker.size())
+                return chunk.slice(0, at)
+            }
+            if buf.size() > limit {
+                problem = "the header is too large"
+                return null
+            }
+            searched = (buf.size() - marker.size() + 1).max(0)
+            if !fill() { return null }
+        }
+        return null
+    }
+
+    fn line() -> String? {
+        raw := until("\r\n".toBytes(), 65536)
+        return if raw == null { null } else { raw.toText() }
+    }
+
+    // Exactly `count` bytes, or null if the stream ends first.
+    fn exactly(count: Int) -> Bytes? {
+        while buf.size() < count {
+            if !fill() {
+                if problem.length() == 0 { problem = "the connection closed before the whole body arrived" }
+                return null
+            }
+        }
+        return buf.take(count)
+    }
+
+    // Everything until the stream ends.
+    fn rest(limit: Int) -> Bytes? {
+        while fill() {
+            if buf.size() > limit {
+                problem = "the body is too large"
+                return null
+            }
+        }
+        if problem.length() > 0 { return null }
+        return buf.take(buf.size())
+    }
+
+    // The body in chunked transfer encoding.
+    fn chunked(limit: Int) -> Bytes? {
+        out := BytesBuilder()
+        while true {
+            header := line()
+            if header == null { return null }
+            semi := header.indexOf(";")
+            size := (if semi >= 0 { header.substring(0, semi) } else { header }).trim().parseInt(16)
+            if size == null || size < 0 {
+                problem = "invalid chunk size"
+                return null
+            }
+            if size == 0 {
+                // trailers, up to the empty line
+                while true {
+                    trailer := line()
+                    if trailer == null || trailer.length() == 0 { break }
+                }
+                return out.toBytes()
+            }
+            if out.size() + size > limit {
+                problem = "the body is too large"
+                return null
+            }
+            piece := exactly(size)
+            if piece == null { return null }
+            out.add(piece)
+            end := exactly(2)
+            if end == null { return null }
+        }
+        return null
+    }
+}
+
+// "Name: value" lines into a map with lower-case names; repeated headers are joined with ", ".
+fn parseHeaders(lines: List<String>, from: Int) -> Map<String, String> {
+    out := Map<String, String>()
+    for i in from..lines.size() {
+        line := lines[i]
+        colon := line.indexOf(":")
+        if colon <= 0 { continue }
+        name := line.substring(0, colon).trim().lower()
+        value := line.substring(colon + 1, line.length()).trim()
+        previous := out.getOrNull(name)
+        out[name] = if previous == null { value } else { previous + ", " + value }
+    }
+    return out
+}
+
+// "Content-Type" from "content-type".
+fn capitalize(name: String) -> String {
+    out := StringBuilder()
+    up := true
+    for c in name {
+        out.appendChar(if up { c.upper() } else { c })
+        up = c == '-'
+    }
+    return out.toString()
+}
+
+fn headerBlock(headers: Map<String, String>) -> String {
+    out := StringBuilder()
+    for entry in headers {
+        out.append(capitalize(entry.key)).append(": ").append(entry.value).append("\r\n")
+    }
+    return out.toString()
+}
+
+// ── The client ───────────────────────────────────────────────────
+
+fn basicAuth(userinfo: String) -> String = "Basic " + encoding.base64(userinfo)
+
+// Open a connection to the URL's server (through a proxy if there is one) and, for https, secure it.
+fn open(url: Url, proxy: Url?, options: Options) -> net.Conn? {
+    through := if proxy == null { url } else { proxy!! }
+    conn := net.connect(through.host, through.port, options.timeoutMs)
+    if conn == null {
+        fail(net.lastError())
+        return null
+    }
+    if proxy != null && proxy.secure() {
+        if !conn.startTls(proxy.host, options.verify, options.caFile) {
+            fail("TLS to the proxy failed: " + net.lastError())
+            conn.close()
+            return null
+        }
+    }
+    if url.secure() {
+        if proxy != null {
+            // ask the proxy for a tunnel to the real server
+            connect := "CONNECT ${url.host}:${url.port} HTTP/1.1\r\nHost: ${url.host}:${url.port}\r\n"
+            if proxy.user.length() > 0 { connect += "Proxy-Authorization: " + basicAuth(proxy.user) + "\r\n" }
+            if !conn.sendText(connect + "\r\n") {
+                fail("could not reach the proxy: " + net.lastError())
+                conn.close()
+                return null
+            }
+            reader := Reader(conn)
+            head := reader.until("\r\n\r\n".toBytes(), 65536)
+            if head == null {
+                fail("the proxy did not answer: " + reader.problem)
+                conn.close()
+                return null
+            }
+            status := head.toText().split("\r\n")[0]
+            if !status.contains(" 200") {
+                fail("the proxy refused the tunnel: " + status)
+                conn.close()
+                return null
+            }
+        }
+        if !conn.startTls(url.host, options.verify, options.caFile) {
+            fail(net.lastError())
+            conn.close()
+            return null
+        }
+    }
+    return conn
+}
+
+// One request on one connection, without following redirects.
+fn roundTrip(method: String, url: Url, headers: Map<String, String>, body: Bytes?, options: Options) -> Response? {
+    proxy := if options.useProxy { proxyFor(url) } else { null }
+    conn := open(url, proxy, options)
+    if conn == null { return null }
+    through := proxy != null && !url.secure()
+    target := if through { url.toString() } else { url.target }
+
+    send := Map<String, String>()
+    send["host"] = url.authority()
+    send["user-agent"] = "aion"
+    send["accept"] = "*/*"
+    send["accept-encoding"] = "identity"
+    send["connection"] = "close"
+    if url.user.length() > 0 { send["authorization"] = basicAuth(url.user) }
+    if through && proxy!!.user.length() > 0 { send["proxy-authorization"] = basicAuth(proxy!!.user) }
+    if body != null { send["content-length"] = "${body.size()}" } else if method == "POST" || method == "PUT" || method == "PATCH" { send["content-length"] = "0" }
+    for entry in headers { send[entry.key.lower()] = entry.value }
+
+    head := method + " " + target + " HTTP/1.1\r\n" + headerBlock(send) + "\r\n"
+    ok := conn.sendText(head) && (body == null || body.size() == 0 || conn.send(body))
+    if !ok {
+        fail("sending the request failed: " + net.lastError())
+        conn.close()
+        return null
+    }
+
+    reader := Reader(conn)
+    response := readResponse(reader, method == "HEAD", options)
+    if response == null {
+        fail(if reader.problem.length() > 0 { reader.problem } else { "the server closed the connection without answering" })
+    }
+    conn.close()
+    return response
+}
+
+fn readResponse(reader: Reader, head: Bool, options: Options) -> Response? {
+    block := reader.until("\r\n\r\n".toBytes(), 1048576)
+    if block == null { return null }
+    lines := block.toText().split("\r\n")
+    parts := lines[0].split(" ")
+    if parts.size() < 2 || !parts[0].startsWith("HTTP/") {
+        reader.problem = "not an HTTP response: " + lines[0]
+        return null
+    }
+    status := parts[1].toIntOrNull()
+    if status == null {
+        reader.problem = "invalid status line: " + lines[0]
+        return null
+    }
+    reason := if parts.size() > 2 { lines[0].substring(parts[0].length() + parts[1].length() + 2, lines[0].length()) } else { "" }
+    headers := parseHeaders(lines, 1)
+
+    body := Bytes(0)
+    noBody := head || status < 200 || status == 204 || status == 304
+    if !noBody {
+        transfer := headers.getOrNull("transfer-encoding")
+        length := headers.getOrNull("content-length")
+        got: Bytes? = null
+        if transfer != null && transfer.lower().contains("chunked") {
+            got = reader.chunked(options.maxBody)
+        } else if length != null {
+            n := length.trim().toIntOrNull()
+            if n == null || n < 0 {
+                reader.problem = "invalid Content-Length"
+                return null
+            }
+            if n > options.maxBody {
+                reader.problem = "the body is too large"
+                return null
+            }
+            got = reader.exactly(n)
+        } else {
+            got = reader.rest(options.maxBody)
+        }
+        if got == null { return null }
+        body = got
+    }
+    r := Response(status, headers, body)
+    r.reason = reason
+    return r
+}
+
+fn isRedirect(status: Int) = status == 301 || status == 302 || status == 303 || status == 307 || status == 308
+
+// Send a request and read the answer; null if no answer arrived (see `lastError()`).  Redirects are followed.
+fn request(method: String, url: String, headers: Map<String, String>? = null, body: Bytes? = null, options: Options? = null) -> Response? {
+    opts := options ?: Options()
+    extra := headers ?: Map<String, String>()
+    current := parseUrl(url)
+    if current == null {
+        fail("not an http:// or https:// URL: $url")
+        return null
+    }
+    verb := method.upper()
+    payload := body
+    redirects := 0
+    while true {
+        response := roundTrip(verb, current!!, extra, payload, opts)
+        if response == null { return null }
+        if !opts.follow || !isRedirect(response.status) { return response }
+        location := response.header("location")
+        if location == null { return response }
+        if redirects >= opts.maxRedirects {
+            fail("too many redirects")
+            return null
+        }
+        next := resolve(current!!, location)
+        if next == null {
+            fail("cannot follow the redirect to $location")
+            return null
+        }
+        redirects += 1
+        // browsers turn POST into GET after 301/302/303; 307 and 308 keep the method and body
+        if response.status == 303 || ((response.status == 301 || response.status == 302) && verb == "POST") {
+            if verb != "HEAD" { verb = "GET" }
+            payload = null
+        }
+        current = next
+    }
+    return null
+}
+
+fn get(url: String, headers: Map<String, String>? = null, options: Options? = null) -> Response? = request("GET", url, headers, null, options)
+fn head(url: String, headers: Map<String, String>? = null, options: Options? = null) -> Response? = request("HEAD", url, headers, null, options)
+fn delete(url: String, headers: Map<String, String>? = null, options: Options? = null) -> Response? = request("DELETE", url, headers, null, options)
+
+// Send a text body (Content-Type text/plain unless you give one); `postBytes` sends raw bytes.
+fn post(url: String, body: String, headers: Map<String, String>? = null, options: Options? = null) -> Response? =
+    request("POST", url, withType(headers, "text/plain; charset=utf-8"), body.toBytes(), options)
+fn put(url: String, body: String, headers: Map<String, String>? = null, options: Options? = null) -> Response? =
+    request("PUT", url, withType(headers, "text/plain; charset=utf-8"), body.toBytes(), options)
+fn postBytes(url: String, body: Bytes, headers: Map<String, String>? = null, options: Options? = null) -> Response? =
+    request("POST", url, withType(headers, "application/octet-stream"), body, options)
+// Send a JSON document as the body.
+fn postJson(url: String, value: json.Json, headers: Map<String, String>? = null, options: Options? = null) -> Response? =
+    request("POST", url, withType(headers, "application/json"), value.compact().toBytes(), options)
+fn putJson(url: String, value: json.Json, headers: Map<String, String>? = null, options: Options? = null) -> Response? =
+    request("PUT", url, withType(headers, "application/json"), value.compact().toBytes(), options)
+
+// The headers with a Content-Type added unless they already have one.
+fn withType(headers: Map<String, String>?, contentType: String) -> Map<String, String> {
+    out := Map<String, String>()
+    if headers != null {
+        for entry in headers { out[entry.key.lower()] = entry.value }
+    }
+    if !out.containsKey("content-type") { out["content-type"] = contentType }
+    return out
+}
+
+// Fetch a URL into a file; false on failure (see `lastError()`).
+fn download(url: String, path: String, options: Options? = null) -> Bool {
+    r := get(url, null, options)
+    if r == null { return false }
+    if !r.ok() {
+        fail("the server answered ${r.status} ${r.reason}")
+        return false
+    }
+    saved := fs.writeBytes(path, r.body)
+    if !saved { fail("cannot write $path: " + fs.lastError()) }
+    return saved
+}
+
+// ── Building answers ─────────────────────────────────────────────
+
+fn respond(status: Int, body: Bytes, contentType: String) -> Response {
+    r := Response(status, Map<String, String>(), body)
+    r.headers["content-type"] = contentType
+    return r
+}
+
+fn text(body: String, status: Int = 200) -> Response = respond(status, body.toBytes(), "text/plain; charset=utf-8")
+fn html(body: String, status: Int = 200) -> Response = respond(status, body.toBytes(), "text/html; charset=utf-8")
+fn jsonResponse(value: json.Json, status: Int = 200) -> Response = respond(status, value.compact().toBytes(), "application/json")
+fn bytes(body: Bytes, contentType: String = "application/octet-stream", status: Int = 200) -> Response = respond(status, body, contentType)
+fn notFound() -> Response = text("Not Found", 404)
+fn redirect(location: String, status: Int = 302) -> Response {
+    r := respond(status, Bytes(0), "text/plain; charset=utf-8")
+    r.headers["location"] = location
+    return r
+}
+
+fn reasonFor(status: Int) -> String {
+    if status == 200 { return "OK" }
+    if status == 201 { return "Created" }
+    if status == 204 { return "No Content" }
+    if status == 301 { return "Moved Permanently" }
+    if status == 302 { return "Found" }
+    if status == 303 { return "See Other" }
+    if status == 304 { return "Not Modified" }
+    if status == 307 { return "Temporary Redirect" }
+    if status == 308 { return "Permanent Redirect" }
+    if status == 400 { return "Bad Request" }
+    if status == 401 { return "Unauthorized" }
+    if status == 403 { return "Forbidden" }
+    if status == 404 { return "Not Found" }
+    if status == 405 { return "Method Not Allowed" }
+    if status == 408 { return "Request Timeout" }
+    if status == 409 { return "Conflict" }
+    if status == 411 { return "Length Required" }
+    if status == 413 { return "Payload Too Large" }
+    if status == 500 { return "Internal Server Error" }
+    if status == 501 { return "Not Implemented" }
+    if status == 503 { return "Service Unavailable" }
+    return if status < 300 { "OK" } else if status < 400 { "Redirect" } else if status < 500 { "Client Error" } else { "Server Error" }
+}
+
+// ── The server ───────────────────────────────────────────────────
+
+type Server(listener: net.Listener) {
+    // The port being served (useful after `listen(0, …)`).
+    fn port() = listener.port()
+    // Stop accepting connections; requests being handled finish.
+    fn close() { listener.close() }
+}
+
+// Start serving on a port (0 picks a free one) and return at once; connections are handled by tasks that
+// run whenever the main program waits (sleeps, joins, makes a request, ...).  A handler that fails
+// (panics) answers 500.
+fn listen(port: Int, host: String = "", handler: (Request) -> Response) -> Server? {
+    listener := net.listen(port, host)
+    if listener == null {
+        fail(net.lastError())
+        return null
+    }
+    launch { acceptLoop(listener!!, handler) }
+    return Server(listener!!)
+}
+
+// Like `listen`, then keep the program alive for ever.
+fn serve(port: Int, host: String = "", handler: (Request) -> Response) {
+    server := listen(port, host, handler)
+    if server == null { panic("cannot serve on port $port: $lastErr") }
+    waitAll()
+}
+
+fn acceptLoop(listener: net.Listener, handler: (Request) -> Response) {
+    while true {
+        conn := listener.accept()
+        if conn == null { break }
+        launch { handleConnection(conn!!, handler) }
+    }
+}
+
+fn handleConnection(conn: net.Conn, handler: (Request) -> Response) {
+    reader := Reader(conn)
+    request := readRequest(reader, conn)
+    if request == null {
+        if reader.problem.length() > 0 && !reader.eof {
+            send(conn, respond(400, reader.problem.toBytes(), "text/plain; charset=utf-8"))
+        }
+        conn.close()
+        return
+    }
+    answer := try { handler(request!!) } catch e { respond(500, "Internal Server Error".toBytes(), "text/plain; charset=utf-8") }
+    send(conn, answer)
+    conn.close()
+}
+
+fn readRequest(reader: Reader, conn: net.Conn) -> Request? {
+    block := reader.until("\r\n\r\n".toBytes(), 65536)
+    if block == null { return null }
+    lines := block.toText().split("\r\n")
+    parts := lines[0].split(" ")
+    if parts.size() != 3 || !parts[2].startsWith("HTTP/") {
+        reader.problem = "malformed request line"
+        return null
+    }
+    headers := parseHeaders(lines, 1)
+    body := Bytes(0)
+    length := headers.getOrNull("content-length")
+    if headers.getOrNull("transfer-encoding") != null {
+        got := reader.chunked(16777216)
+        if got == null { return null }
+        body = got
+    } else if length != null {
+        n := length.trim().toIntOrNull()
+        if n == null || n < 0 || n > 16777216 {
+            reader.problem = "invalid or too large Content-Length"
+            return null
+        }
+        got := reader.exactly(n)
+        if got == null { return null }
+        body = got
+    }
+    return Request(parts[0].upper(), parts[1], headers, body, conn.peer())
+}
+
+fn send(conn: net.Conn, answer: Response) {
+    out := Map<String, String>()
+    for entry in answer.headers { out[entry.key.lower()] = entry.value }
+    out["content-length"] = "${answer.body.size()}"
+    out["connection"] = "close"
+    reason := if answer.reason.length() > 0 { answer.reason } else { reasonFor(answer.status) }
+    conn.sendText("HTTP/1.1 ${answer.status} $reason\r\n" + headerBlock(out) + "\r\n")
+    if answer.body.size() > 0 { conn.send(answer.body) }
+}

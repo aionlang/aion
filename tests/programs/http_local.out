@@ -1,0 +1,43 @@
+200 OK true Hello, world! text/plain; charset=utf-8 null true
+Hello, Ann Lee Jr!
+404 false Not Found
+201 some text text/plain; charset=utf-8 POST 9
+text/special PATCH
+DELETE 00ff0a0d00
+200 0 13
+accept,accept-encoding,connection,host,user-agent,x-custom|yes|aion
+200 application/json {"got":{"a":[1,2,3],"b":{"c":null}},"n":2} 2
+not json null
+Hello, redirected! Hello, chain!
+301 /hello?name=redirected
+null too many redirects
+null too many redirects
+201 GET 0
+201 POST 7 payload
+500 Internal Server Error
+1000000 true 1000000
+204 0
+6 =e&a=1&b=two words&c=&d=x y&e=%zz path=/query
+0  path=/query 404
+90
+hello, world chunked
+until the end 1, 2
+Nothing Here At All
+0
+null not an HTTP response: garbage
+null the connection closed before the whole body arrived
+null invalid chunk size
+null invalid Content-Length
+null the server closed the connection without answering
+null the body is too large
+null not an http:// or https:// URL: ftp://example.com/
+null not an http:// or https:// URL: not a url
+null true
+null timed out waiting for data
+https://example.com:8443/a/b?x=1 example.com 8443 User:pw /a/b?x=1 true example.com:8443
+http://example.com/ [::1] null null /?q=1
+http://a.com/dir/other http://a.com/abs http://b.com/x https://c.com/y http://a.com/dir/../up
+http://proxy.local:3128/ me:secret http://plain.proxy:8080/ null null
+null null null null http://plain.proxy:8080/
+null
+null true
