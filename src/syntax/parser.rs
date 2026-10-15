@@ -859,14 +859,12 @@ impl<'a> Parser<'a> {
         let kind = match kind {
             Token::Int => {
                 self.bump();
-                let v = self.text(tok).parse::<i64>().map_err(|_| {
-                    Diagnostic::new("integer literal is too large for Int (64-bit)", span)
-                })?;
-                ExprKind::Int(v)
+                ExprKind::Int(int_literal(self.text(tok), span)?)
             }
             Token::Float => {
                 self.bump();
-                ExprKind::Float(self.text(tok).parse().expect("lexer guarantees a valid float"))
+                let text = self.text(tok).replace('_', "");
+                ExprKind::Float(text.parse().expect("lexer guarantees a valid float"))
             }
             Token::Null => {
                 self.bump();
@@ -1246,6 +1244,23 @@ impl<'a> Parser<'a> {
 }
 
 /// Binary operator precedence table (higher binds tighter).
+/// The value of an integer literal: decimal, or `0x` / `0b` / `0o` (which may use all 64 bits).
+fn int_literal(text: &str, span: Span) -> Result<i64> {
+    let text = text.replace('_', "");
+    let too_large = || Diagnostic::new("integer literal is too large for Int (64-bit)", span);
+    let radix = |prefix: &str, base: u32| {
+        let digits = &text[prefix.len()..];
+        // a hex or binary literal may spell all 64 bits, e.g. 0xFFFF_FFFF_FFFF_FFFF is -1
+        u64::from_str_radix(digits, base).map(|v| v as i64).map_err(|_| too_large())
+    };
+    match text.get(..2).map(str::to_ascii_lowercase).as_deref() {
+        Some("0x") => radix(&text[..2], 16),
+        Some("0b") => radix(&text[..2], 2),
+        Some("0o") => radix(&text[..2], 8),
+        _ => text.parse::<i64>().map_err(|_| too_large()),
+    }
+}
+
 fn binop(t: Token) -> Option<(u8, BinOp)> {
     Some(match t {
         Token::OrOr => (1, BinOp::Or),
@@ -1620,6 +1635,35 @@ mod tests {
         assert!(matches!(parse_expr("a!!").kind, ExprKind::NotNull(_)));
         // a variable can still be called `is` or `as` where no operator fits
         assert!(matches!(parse_expr("as").kind, ExprKind::Name(_)));
+    }
+
+    #[test]
+    fn number_literals() {
+        let int = |src: &str| match parse_expr(src).kind {
+            ExprKind::Int(v) => v,
+            other => panic!("expected an integer, got {other:?}"),
+        };
+        assert_eq!(int("42"), 42);
+        assert_eq!(int("1_000_000"), 1_000_000);
+        assert_eq!(int("0xFF"), 255);
+        assert_eq!(int("0Xff_ff"), 65535);
+        assert_eq!(int("0b1010_1010"), 170);
+        assert_eq!(int("0o755"), 493);
+        assert_eq!(int("0xFFFFFFFFFFFFFFFF"), -1);
+        assert_eq!(int("0x8000000000000000"), i64::MIN);
+        let float = |src: &str| match parse_expr(src).kind {
+            ExprKind::Float(v) => v,
+            other => panic!("expected a float, got {other:?}"),
+        };
+        assert_eq!(float("1.5"), 1.5);
+        assert_eq!(float("2.5e-3"), 0.0025);
+        assert_eq!(float("1e3"), 1000.0);
+        assert_eq!(float("1_0.5"), 10.5);
+        let err = |src: &str| Parser::new(0, src, 0).and_then(|mut p| p.expr()).unwrap_err().message;
+        assert!(err("9223372036854775808").contains("too large"));
+        assert!(err("0x1FFFFFFFFFFFFFFFF").contains("too large"));
+        // ranges and member access on integers are not floats
+        assert!(matches!(parse_expr("1..3").kind, ExprKind::Range { .. }));
     }
 
     #[test]
