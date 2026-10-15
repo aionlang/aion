@@ -403,6 +403,14 @@ fn setOf<T>(items: List<T>) -> Set<T> {
     return out
 }
 
+// ── Standard input ──────────────────────────────────────────────
+
+// The next line of input without its line break, or null when the input has ended.
+// Output printed so far is flushed first, so `print("name? ")` shows before it waits.
+extern fn readLine() -> String? = "aion_read_line"
+// All the remaining input as one String ("" if there is none).
+extern fn readText() -> String = "aion_read_text"
+
 // ── Program arguments ───────────────────────────────────────────
 
 extern fn __argc() -> Int = "aion_argc"

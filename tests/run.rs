@@ -320,6 +320,43 @@ fn a_script_with_a_shebang_line_runs() {
     assert_eq!(stdout(&aion_in(&root, &["s.aion"])), "answer 42\n");
 }
 
+/// Run `aion <args>` in `dir` with `input` on standard input.
+fn aion_with_input(dir: &Path, args: &[&str], input: &str) -> Output {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_aion"))
+        .args(args)
+        .current_dir(dir)
+        .env("AION_CACHE", test_cache())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+    child.wait_with_output().unwrap()
+}
+
+#[test]
+fn programs_can_read_standard_input() {
+    let root = scratch("stdin");
+    write(
+        &root.join("lines.aion"),
+        "print(\"name? \")\nname := readLine() ?: \"nobody\"\nprintln(\"hello\", name)\n\
+         total := 0\nline := readLine()\nwhile line != null {\n    total += line.toIntOr(0)\n    line = readLine()\n}\n\
+         println(\"sum\", total, readLine())\n",
+    );
+    let out = aion_with_input(&root, &["lines.aion"], "Ada\n1\n2\r\nx\n39");
+    assert_eq!(stdout(&out), "name? hello Ada\nsum 42 null\n", "{}", stderr(&out));
+    // an empty input is not an error
+    let out = aion_with_input(&root, &["lines.aion"], "");
+    assert_eq!(stdout(&out), "name? hello nobody\nsum 0 null\n", "{}", stderr(&out));
+
+    write(&root.join("all.aion"), "text := readText()\nprintln(text.length(), text.split(\"\\n\").size())\n");
+    let out = aion_with_input(&root, &["all.aion"], "a\nb\nc");
+    assert_eq!(stdout(&out), "5 3\n", "{}", stderr(&out));
+}
+
 #[test]
 fn arguments_after_the_script_reach_the_program() {
     let root = scratch("args");
