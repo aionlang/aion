@@ -1,0 +1,101 @@
+// import path
+//
+//   path.join("/home/ann", "docs/a.txt")   // /home/ann/docs/a.txt
+//   path.basename("/home/ann/a.txt")       // a.txt
+//   path.extension("a.tar.gz")             // gz
+//
+// Taking file paths apart and putting them together, as text; nothing here
+// touches the disk (see `fs` for that).  "/" is the separator.
+
+fn isAbsolute(p: String) -> Bool = p.startsWith("/")
+
+// `a` and `b` with exactly one "/" between; an absolute `b` replaces `a`.
+fn join(a: String, b: String) -> String {
+    if a.length() == 0 || isAbsolute(b) {
+        return b
+    }
+    if b.length() == 0 {
+        return a
+    }
+    return if a.endsWith("/") { a + b } else { a + "/" + b }
+}
+
+// Without trailing slashes ("/" stays "/").
+fn __trim(p: String) -> String {
+    end := p.length()
+    while end > 1 && p.charAt(end - 1) == '/' {
+        end -= 1
+    }
+    return p.substring(0, end)
+}
+
+// The last part: "/a/b/c.txt" -> "c.txt", "/a/b/" -> "b", "/" -> "".
+fn basename(p: String) -> String {
+    q := __trim(p)
+    if q == "/" {
+        return ""
+    }
+    at := q.lastIndexOf("/")
+    return q.substring(at + 1, q.length())
+}
+
+// Everything before the last part: "/a/b/c" -> "/a/b", "c" -> ".", "/c" -> "/".
+fn dirname(p: String) -> String {
+    q := __trim(p)
+    at := q.lastIndexOf("/")
+    if at < 0 {
+        return "."
+    }
+    if at == 0 {
+        return "/"
+    }
+    return __trim(q.substring(0, at))
+}
+
+// The part of the name after its last dot, without the dot: "a.tar.gz" -> "gz", ".bashrc" -> "", "a" -> "".
+fn extension(p: String) -> String {
+    name := basename(p)
+    at := name.lastIndexOf(".")
+    return if at <= 0 { "" } else { name.substring(at + 1, name.length()) }
+}
+
+// The name without its extension: "a.tar.gz" -> "a.tar", ".bashrc" -> ".bashrc".
+fn stem(p: String) -> String {
+    name := basename(p)
+    at := name.lastIndexOf(".")
+    return if at <= 0 { name } else { name.substring(0, at) }
+}
+
+// The path with another extension (given without the dot; "" removes it).
+fn withExtension(p: String, ext: String) -> String {
+    base := basename(p)
+    dir := p.substring(0, p.length() - base.length())
+    name := stem(p)
+    return dir + (if ext.length() == 0 { name } else { name + "." + ext })
+}
+
+// Resolve "." and ".." and repeated slashes without looking at the disk:
+// "/a/./b/../c//d" -> "/a/c/d", "a/../.." -> "..", "" -> ".".
+fn normalize(p: String) -> String {
+    absolute := isAbsolute(p)
+    parts := List<String>()
+    for part in p.split("/") {
+        if part.length() == 0 || part == "." {
+            continue
+        }
+        if part == ".." {
+            if parts.size() > 0 && parts[parts.size() - 1] != ".." {
+                parts.pop()
+            } else if !absolute {
+                parts.add("..")
+            }
+        } else {
+            parts.add(part)
+        }
+    }
+    body := parts.join("/")
+    if absolute {
+        return "/" + body
+    }
+    return if body.length() == 0 { "." } else { body }
+}

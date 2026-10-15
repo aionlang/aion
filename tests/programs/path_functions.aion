@@ -1,0 +1,11 @@
+// path: joining, splitting and normalising file paths
+import path
+
+println(path.join("a", "b"), path.join("a/", "b"), path.join("", "b"), path.join("a", ""), path.join("a", "/b"))
+println(path.basename("/a/b/c.txt"), path.basename("/a/b/"), path.basename("c"), "[" + path.basename("/") + "]")
+println(path.dirname("/a/b/c"), path.dirname("c"), path.dirname("/c"), path.dirname("/"), path.dirname("a/b/"))
+println(path.extension("a.tar.gz"), "[" + path.extension(".bashrc") + "]", "[" + path.extension("a") + "]", path.extension("/x.d/f.txt"))
+println(path.stem("a.tar.gz"), path.stem(".bashrc"), path.stem("/x/y.z"))
+println(path.withExtension("/x/y.txt", "md"), path.withExtension("y", "md"), path.withExtension("/x/y.txt", ""))
+println(path.isAbsolute("/a"), path.isAbsolute("a"))
+println(path.normalize("/a/./b/../c//d"), path.normalize("a/../.."), path.normalize(""), path.normalize("/.."), path.normalize("../a/../b"))
