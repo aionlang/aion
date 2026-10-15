@@ -28,6 +28,24 @@ extern fn String.toIntOr(fallback: Int) -> Int = "aion_strings_to_int_or"
 extern fn String.isInt() -> Bool = "aion_strings_is_int"
 fn String.toIntOrNull() -> Int? = if isInt() { toIntOr(0) } else { null }
 
+// The character that starts at byte `index`.  s[i] is the same.
+extern fn String.charAt(index: Int) -> Char = "aion_str_char_at"
+fn String.get(index: Int) = charAt(index)
+
+// The characters of the text; `for c in text` loops over them.
+fn String.chars() -> List<Char> {
+    out := List<Char>()
+    at := 0
+    end := length()
+    while at < end {
+        c := charAt(at)
+        out.add(c)
+        at += c.byteLength()
+    }
+    return out
+}
+fn String.iter() = chars()
+
 fn String.split(separator: String) -> List<String> {
     parts := List<String>()
     if separator.length() == 0 {
