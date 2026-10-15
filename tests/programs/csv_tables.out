@@ -1,0 +1,42 @@
+0 [] []
+0 [] []
+1 [1] [[a]]
+1 [3] [[a, b, c]]
+1 [3] [[a, b, c]]
+3 [2, 2, 2] [[a, b], [1, 2], [3, 4]]
+2 [2, 2] [[a, b], [1, 2]]
+2 [3, 3] [[a, , c], [, , ]]
+1 [3] [[a, b, ]]
+1 [2] [[, ]]
+2 [1, 1] [[one], [two]]
+1 [2] [[quoted, plain]]
+1 [3] [[a,b, c"d, e]]
+2 [2, 2] [[line one
+line two, x], [y, z]]
+1 [2] [[, "]]
+1 [1] [[trailing]]
+1 [2] [[ spaced ,  fields ]]
+1 [3] [[é, 中文, ü
+日本]]
+2 [3, 3] [[a, b, c], [1, 2, 3]]
+2 [2, 2] [[a, b], [1, 2]]
+1 [2] [[a,b, c]]
+ERROR line 1: unexpected 'x' after a closing quote
+ERROR line 1: a quote inside an unquoted field
+ERROR line 2: a quoted field is never closed
+ERROR line 1: unexpected 'y' after a closing quote
+ERROR the delimiter must be one character other than a quote or a line break
+ERROR the delimiter must be one character other than a quote or a line break
+3 Ann Smith, Bob null Rome 3
+0 0 null
+a,b
+1,2
+ "x,y","say ""hi""","line
+break"," pad ",
+ true
+a;"b;c";d
+ plain "a,b" "a;b"
+true 7
+true true  x 
+true 8 7 null true
+2000 row 1999 quote " and, comma true

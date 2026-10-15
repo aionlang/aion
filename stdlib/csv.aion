@@ -1,0 +1,167 @@
+// import csv
+//
+//   rows := csv.parse("name,age\nAnn,31\n\"Smith, Bob\",42\n")!!     // [[name, age], [Ann, 31], [Smith, Bob, 42]]
+//   for r in csv.parseRecords(text)!! { println(r["name"], r["age"]) }   // rows as maps, using the first line as names
+//   println(csv.format([["a", "b,c"], ["say \"hi\"", "1"]]))          // a,"b,c" / "say ""hi""",1
+//
+// Comma-separated values as in RFC 4180: fields may be quoted with " (a doubled "" is a quote), quoted fields may
+// hold the delimiter and line breaks, and lines end with \n or \r\n.  Pass `delimiter` for tabs or semicolons.
+
+import fs
+
+lastErr := ""
+
+// Why the most recent `parse` returned null.
+fn lastError() -> String = lastErr
+
+fn fail(message: String) {
+    lastErr = message
+}
+
+// Split text into rows of fields; null if a quoted field is never closed or a quote appears inside a plain field.
+fn parse(text: String, delimiter: String = ",") -> List<List<String>>? {
+    if delimiter.charCount() != 1 || delimiter == "\"" || delimiter == "\n" || delimiter == "\r" {
+        fail("the delimiter must be one character other than a quote or a line break")
+        return null
+    }
+    sep := delimiter.charAt(0)
+    rows := List<List<String>>()
+    row := List<String>()
+    field := StringBuilder()
+    n := text.length()
+    at := 0
+    line := 1
+    // a field has started (even an empty quoted one) when the row is not just a blank line
+    started := false
+    while at < n {
+        c := text.charAt(at)
+        if c == '"' {
+            if field.length() > 0 || (started && field.length() == 0 && !atFieldStart(text, at, sep)) {
+                fail("line $line: a quote inside an unquoted field")
+                return null
+            }
+            // quoted field
+            at += 1
+            closed := false
+            while at < n {
+                q := text.charAt(at)
+                if q == '"' {
+                    if at + 1 < n && text.charAt(at + 1) == '"' {
+                        field.append("\"")
+                        at += 2
+                    } else {
+                        at += 1
+                        closed = true
+                        break
+                    }
+                } else {
+                    if q == '\n' { line += 1 }
+                    field.appendChar(q)
+                    at += q.byteLength()
+                }
+            }
+            if !closed {
+                fail("line $line: a quoted field is never closed")
+                return null
+            }
+            started = true
+            if at < n {
+                after := text.charAt(at)
+                if after != sep && after != '\n' && after != '\r' {
+                    fail("line $line: unexpected '$after' after a closing quote")
+                    return null
+                }
+            }
+        } else if c == sep {
+            row.add(field.toString())
+            field.clear()
+            started = true
+            at += 1
+            // a trailing delimiter means one more (empty) field
+            if at >= n || text.charAt(at) == '\n' || text.charAt(at) == '\r' { started = true }
+            continue
+        } else if c == '\n' || c == '\r' {
+            if c == '\r' && at + 1 < n && text.charAt(at + 1) == '\n' { at += 1 }
+            at += 1
+            line += 1
+            if started || field.length() > 0 {
+                row.add(field.toString())
+                rows.add(row)
+            } else if row.size() > 0 {
+                rows.add(row)
+            }
+            // an empty line is skipped
+            row = List<String>()
+            field.clear()
+            started = false
+        } else {
+            field.appendChar(c)
+            started = true
+            at += c.byteLength()
+        }
+    }
+    if started || field.length() > 0 {
+        row.add(field.toString())
+        rows.add(row)
+    }
+    return rows
+}
+
+// Is `at` right at the start of a field (the text before it ends with a delimiter or a line break)?
+fn atFieldStart(text: String, at: Int, sep: Char) -> Bool {
+    if at == 0 { return true }
+    before := text.charAt(at - 1)
+    return before == sep || before == '\n' || before == '\r'
+}
+
+// Rows as maps from the header names (the first row) to the values.  Short rows leave the missing fields out.
+fn parseRecords(text: String, delimiter: String = ",") -> List<Map<String, String>>? {
+    rows := parse(text, delimiter)
+    if rows == null { return null }
+    out := List<Map<String, String>>()
+    if rows.size() == 0 { return out }
+    names := rows[0]
+    for i in 1..rows.size() {
+        record := Map<String, String>()
+        for j in 0..rows[i].size() {
+            if j < names.size() { record[names[j]] = rows[i][j] }
+        }
+        out.add(record)
+    }
+    return out
+}
+
+// A field as it must be written: quoted when it holds the delimiter, a quote or a line break (or starts or ends with a space).
+fn quote(field: String, delimiter: String = ",") -> String {
+    needs := field.contains(delimiter) || field.contains("\"") || field.contains("\n") || field.contains("\r") || field.startsWith(" ") || field.endsWith(" ") || field.length() == 0 && false
+    return if needs { "\"" + field.replace("\"", "\"\"") + "\"" } else { field }
+}
+
+// Rows of fields as CSV text, one line each, ending with a line break.
+fn format(rows: List<List<String>>, delimiter: String = ",") -> String {
+    out := StringBuilder()
+    for row in rows {
+        for i in 0..row.size() {
+            if i > 0 { out.append(delimiter) }
+            out.append(quote(row[i], delimiter))
+        }
+        out.append("\n")
+    }
+    return out.toString()
+}
+
+// Read and parse a file; null if it can't be read or isn't valid CSV (see `lastError()`).
+fn readFile(path: String, delimiter: String = ",") -> List<List<String>>? {
+    text := fs.readText(path)
+    if text == null {
+        fail("cannot read $path: " + fs.lastError())
+        return null
+    }
+    return parse(text, delimiter)
+}
+
+fn writeFile(path: String, rows: List<List<String>>, delimiter: String = ",") -> Bool {
+    if fs.writeText(path, format(rows, delimiter)) { return true }
+    fail("cannot write $path: " + fs.lastError())
+    return false
+}

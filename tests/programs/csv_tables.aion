@@ -1,0 +1,66 @@
+// csv: RFC 4180 parsing and writing, with quotes, embedded line breaks, other delimiters and errors
+import csv
+import fs
+
+fn show(text: String, delimiter: String = ",") {
+    rows := csv.parse(text, delimiter)
+    if rows == null {
+        println("ERROR " + csv.lastError())
+        return
+    }
+    println(rows.size(), rows.map { it.size() }, rows)
+}
+
+show("")
+show("\n")
+show("a")
+show("a,b,c")
+show("a,b,c\n")
+show("a,b\n1,2\n3,4")
+show("a,b\r\n1,2\r\n")
+show("a,,c\n,,\n")
+show("a,b,\n")
+show(",")
+show("one\n\ntwo\n\n\n")
+show("\"quoted\",plain")
+show("\"a,b\",\"c\"\"d\",e")
+show("\"line one\nline two\",x\ny,z")
+show("\"\",\"\"\"\"")
+show("\"trailing\"\n")
+show(" spaced , fields ")
+show("é,中文,\"ü\n日本\"")
+show("a;b;c\n1;2;3", ";")
+show("a\tb\n1\t2", "\t")
+show("a,b;c", ";")
+show("\"a\"x,b")
+show("a\"b,c")
+show("\"never closed,b\nc,d")
+show("ok,\"x\"y")
+show("a,b", ",,")
+show("a,b", "\"")
+
+records := csv.parseRecords("name,age,city\nAnn,31,Oslo\n\"Smith, Bob\",42\nCy,7,Rome,extra\n")!!
+println(records.size(), records[0]["name"], records[1]["name"], records[1].getOrNull("city"), records[2]["city"], records[2].size())
+println(csv.parseRecords("only,header")!!.size(), csv.parseRecords("")!!.size(), csv.parseRecords("a,\"b")) 
+
+println(csv.format([["a", "b"], ["1", "2"]]), csv.format([["x,y", "say \"hi\"", "line\nbreak", " pad ", ""]]), csv.format(List<List<String>>()) == "")
+println(csv.format([["a", "b;c", "d"]], ";"), csv.quote("plain"), csv.quote("a,b"), csv.quote("a;b", ";"))
+
+// whatever is written reads back
+tricky := [["id", "text"], ["1", "he said \"no\", twice"], ["2", "two\nlines"], ["3", ""], ["4", "é中"], ["5", ",,,"], ["6", " x "]]
+println(csv.format(csv.parse(csv.format(tricky))!!) == csv.format(tricky), csv.parse(csv.format(tricky, "\t"), "\t")!!.size())
+same := csv.parse(csv.format(tricky))!!
+println(same[2][1] == "two\nlines", same[3][1] == "", same[6][1])
+
+dir := fs.makeTempDir("aion-csv-")!!
+defer fs.removeAll(dir)
+file := dir + "/table.csv"
+println(csv.writeFile(file, tricky), fs.readText(file)!!.lines().size(), csv.readFile(file)!!.size(), csv.readFile(dir + "/nope.csv"), csv.lastError().startsWith("cannot read"))
+
+big := List<List<String>>()
+for i in 0..2000 {
+    big.add(["row $i", "$i", "quote \" and, comma"])
+}
+text := csv.format(big)
+back := csv.parse(text)!!
+println(back.size(), back[1999][0], back[1999][2], back.size() == big.size())
