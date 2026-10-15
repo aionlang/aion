@@ -281,6 +281,17 @@ void *aion_array_new(int64_t len, int64_t is_ptr, int64_t fill) {
     return a;
 }
 
+/* ── Bytes ────────────────────────────────────────────────────── */
+
+void *aion_bytes_new(int64_t len) {
+    if (len < 0) aion_panic("negative size");
+    if ((uint64_t)len > UINT32_MAX) aion_panic("a Bytes value is limited to 4 GiB");
+    return gc_alloc((size_t)len, 0, 0);
+}
+
+int64_t aion_bytes_size(const void *bytes) { return HEADER_OF(bytes)->size; }
+uint8_t *aion_bytes_data(void *bytes) { return (uint8_t *)bytes; }
+
 /* Hashes for Map keys: non-negative, well mixed in the low bits. */
 int64_t aion_hash_int(int64_t x) {
     uint64_t z = (uint64_t)x + 0x9e3779b97f4a7c15ull;

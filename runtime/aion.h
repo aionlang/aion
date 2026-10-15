@@ -24,6 +24,12 @@
 
 /* ── Public API for C modules ─────────────────────────────────── */
 
+/* A Bytes value: raw bytes (any value, NUL included) in a GC object; the length is the
+ * object's size.  Never NULL: an empty one is a static object. */
+void *aion_bytes_new(int64_t len);                 /* zero-filled */
+int64_t aion_bytes_size(const void *bytes);
+uint8_t *aion_bytes_data(void *bytes);
+
 /* Copy `s` into a new Aion String. */
 const char *aion_string(const char *s);
 /* Copy the first `n` bytes of `s` into a new Aion String. */
