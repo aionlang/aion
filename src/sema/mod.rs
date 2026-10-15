@@ -397,6 +397,9 @@ impl<'a> Checker<'a> {
                     self.t.define(mi, &td.name, Sym::Type(id))?;
                     own_types.push((id, td));
                 }
+                Item::Interface(d) if !d.type_params.is_empty() => {
+                    return Err(Diagnostic::new("generic interfaces are not available yet", d.name.span));
+                }
                 Item::Interface(d) => {
                     let id = self.t.add_type(TypeInfo {
                         name: d.name.name.clone(),

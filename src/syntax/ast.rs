@@ -118,6 +118,8 @@ pub struct TypeDecl {
 #[derive(Debug)]
 pub struct InterfaceDecl {
     pub name: Ident,
+    /// `interface Comparable<T> { … }`
+    pub type_params: Vec<Ident>,
     pub methods: Vec<MethodSig>,
 }
 

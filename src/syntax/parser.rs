@@ -366,6 +366,7 @@ impl<'a> Parser<'a> {
     fn interface_decl(&mut self) -> Result<InterfaceDecl> {
         self.bump();
         let name = self.ident()?;
+        let type_params = self.type_params()?;
         self.expect(Token::LBrace)?;
         let methods = self.scoped(false, false, |p| {
             let mut methods = Vec::new();
@@ -393,7 +394,7 @@ impl<'a> Parser<'a> {
             }
         })?;
         self.expect(Token::RBrace)?;
-        Ok(InterfaceDecl { name, methods })
+        Ok(InterfaceDecl { name, type_params, methods })
     }
 
     fn type_decl(&mut self) -> Result<TypeDecl> {
@@ -1454,6 +1455,9 @@ mod tests {
         assert_eq!(i.methods.len(), 3);
         assert_eq!(i.methods[1].params.len(), 2);
         assert!(i.methods[0].ret.is_some() && i.methods[2].ret.is_none());
+        let m = module("interface Comparable<T> { fn compareTo(other: T) -> Int }");
+        let Item::Interface(g) = &m.items[0] else { panic!("expected an interface") };
+        assert_eq!(g.type_params.len(), 1);
         let err = Parser::new(0, "interface A { fn f() = 1 }", 0).and_then(|mut p| p.module()).unwrap_err();
         assert!(err.message.contains("only a signature"));
     }
