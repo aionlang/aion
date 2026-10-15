@@ -1,0 +1,65 @@
+// sqlite: tables, parameters, every value type, transactions and errors
+import sqlite
+
+db := sqlite.open(":memory:")!!
+println(sqlite.version().startsWith("3."))
+println(db.script("""
+    CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, score REAL, photo BLOB, note TEXT);
+    CREATE INDEX users_name ON users(name);
+"""))
+
+println(db.exec("INSERT INTO users (name, score, photo) VALUES (?, ?, ?)", [sqlite.text("Ann"), sqlite.float(4.5), sqlite.blob(bytesOf([0, 1, 255]))]), db.lastInsertId(), db.changes())
+println(db.exec("INSERT INTO users (name, score, note) VALUES (?, ?, ?)", [sqlite.text("Bob \"B\" O'Neil"), sqlite.int(7), sqlite.nil()]), db.lastInsertId())
+println(db.exec("INSERT INTO users (name) VALUES ('Zoë é 中')"), db.lastInsertId())
+
+for row in db.query("SELECT * FROM users ORDER BY id")!! {
+    println(row)
+}
+row := db.queryOne("SELECT id, name, score, photo, note FROM users WHERE name = ?", [sqlite.text("Ann")])!!
+println(row.int("id"), row.text("name"), row.float("score"), row.blob("photo"), row.isNull("note"), row.isNull("missing"), row.size())
+println(row.value("score").kind, row.value("photo").kind, row.value("note").kind, row.value("id").kind, row.value("name").kind)
+println(row["name"], row.at(0), row.at(99), row.index("photo"), row.text("note", "none"), row.int("name", -1))
+println(db.queryOne("SELECT 1 WHERE 0"), db.query("SELECT * FROM users WHERE id > 100")!!.size())
+
+// aggregates and mixed types
+sum := db.queryOne("SELECT count(*) AS n, sum(score) AS total, max(name) AS last FROM users")!!
+println(sum.int("n"), sum.float("total"), sum.text("last"))
+println(db.queryOne("SELECT 5 AS a, 2.5 AS b, 'x' AS c, NULL AS d, x'00ff' AS e")!!)
+println(db.queryOne("SELECT ? + 1 AS n", [sqlite.int(41)])!!.int("n"), db.queryOne("SELECT ? AS t", [sqlite.text("é")])!!.text("t"), db.queryOne("SELECT ? AS t", [sqlite.bool(true)])!!.int("t"))
+
+// updates and deletes report how many rows they touched
+println(db.exec("UPDATE users SET score = score * 2 WHERE score IS NOT NULL"), db.changes(), db.exec("DELETE FROM users WHERE name LIKE 'Z%'"), db.changes(), db.exec("DELETE FROM users WHERE id = 99"), db.changes())
+
+// transactions
+println(db.transaction { db.exec("INSERT INTO users (name) VALUES ('T1')") }, db.queryOne("SELECT count(*) AS n FROM users")!!.int("n"))
+failed := try {
+    db.transaction {
+        db.exec("INSERT INTO users (name) VALUES ('T2')")
+        panic("abort the transaction")
+    }
+} catch e {
+    false
+}
+println(failed, db.queryOne("SELECT count(*) AS n FROM users WHERE name = 'T2'")!!.int("n"))
+
+// errors
+println(db.exec("INSERT INTO users (name) VALUES (NULL)"), sqlite.lastError())
+println(db.query("SELECT * FROM nope"), sqlite.lastError())
+println(db.script("THIS IS NOT SQL"), sqlite.lastError().contains("syntax"))
+println(db.exec("SELECT ?", null), sqlite.lastError())
+println(db.exec("SELECT 1", [sqlite.int(1)]), sqlite.lastError())
+println(db.exec(""), sqlite.lastError())
+
+// many rows
+db.script("CREATE TABLE nums (n INTEGER, sq INTEGER)")
+db.transaction {
+    for i in 0..2000 {
+        db.exec("INSERT INTO nums VALUES (?, ?)", [sqlite.int(i), sqlite.int(i * i)])
+    }
+}
+big := db.query("SELECT n, sq FROM nums WHERE n % 500 = 0 ORDER BY n")!!
+println(big.size(), big.map { it.int("sq") })
+println(db.queryOne("SELECT sum(sq) AS s FROM nums")!!.int("s"))
+
+db.close()
+println(db.exec("SELECT 1"), db.query("SELECT 1"), db.script("SELECT 1"))

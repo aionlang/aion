@@ -1,0 +1,236 @@
+// import sqlite
+//
+//   db := sqlite.open("app.db")!!                        // or ":memory:"
+//   db.script("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, score REAL)")
+//   db.exec("INSERT INTO users (name, score) VALUES (?, ?)", [sqlite.text("Ann"), sqlite.float(4.5)])
+//   for row in db.query("SELECT id, name FROM users WHERE score > ?", [sqlite.float(1.0)])!! {
+//       println(row.int("id"), row.text("name"))
+//   }
+//   db.close()
+//
+// SQLite databases through prepared statements.  Values go in as `sqlite.int(5)`, `text("x")`,
+// `float(1.5)`, `blob(bytes)` and `nil()`, and come out of a Row by column name or position.  A failing call
+// returns false / null and `sqlite.lastError()` explains.  Needs the SQLite development package
+// (libsqlite3-dev, sqlite-devel, ...) when the program is built.
+// link: sqlite3
+
+extern fn lastError() -> String = "aion_sqlite_error"
+// The version of the SQLite library, e.g. "3.45.1".
+extern fn version() -> String = "aion_sqlite_version"
+
+extern fn __open(path: String) -> Int = "aion_sqlite_open"
+extern fn __close(db: Int) = "aion_sqlite_close"
+extern fn __script(db: Int, sql: String) -> Bool = "aion_sqlite_script"
+extern fn __prepare(db: Int, sql: String) -> Int = "aion_sqlite_prepare"
+extern fn __finalize(stmt: Int) = "aion_sqlite_finalize"
+extern fn __paramCount(stmt: Int) -> Int = "aion_sqlite_parameter_count"
+extern fn __bindNull(stmt: Int, index: Int) -> Bool = "aion_sqlite_bind_null"
+extern fn __bindInt(stmt: Int, index: Int, value: Int) -> Bool = "aion_sqlite_bind_int"
+extern fn __bindFloat(stmt: Int, index: Int, value: Float) -> Bool = "aion_sqlite_bind_float"
+extern fn __bindText(stmt: Int, index: Int, value: String) -> Bool = "aion_sqlite_bind_text"
+extern fn __bindBlob(stmt: Int, index: Int, value: Bytes) -> Bool = "aion_sqlite_bind_blob"
+extern fn __step(stmt: Int) -> Int = "aion_sqlite_step"
+extern fn __columnCount(stmt: Int) -> Int = "aion_sqlite_column_count"
+extern fn __columnName(stmt: Int, index: Int) -> String = "aion_sqlite_column_name"
+extern fn __columnType(stmt: Int, index: Int) -> Int = "aion_sqlite_column_type"
+extern fn __columnInt(stmt: Int, index: Int) -> Int = "aion_sqlite_column_int"
+extern fn __columnFloat(stmt: Int, index: Int) -> Float = "aion_sqlite_column_float"
+extern fn __columnText(stmt: Int, index: Int) -> String = "aion_sqlite_column_text"
+extern fn __columnBlob(stmt: Int, index: Int) -> Bytes = "aion_sqlite_column_blob"
+extern fn __changes(db: Int) -> Int = "aion_sqlite_changes"
+extern fn __lastInsertId(db: Int) -> Int = "aion_sqlite_last_insert_id"
+
+// ── Values ───────────────────────────────────────────────────────
+
+// One SQL value: an integer, a real, text, a blob or NULL.  `kind` is "int", "float", "text", "blob" or "null".
+type Value(kind: String, intValue: Int, floatValue: Float, textValue: String, blobValue: Bytes) {
+    fn isNull() = kind == "null"
+    // Numbers convert to each other; text that holds a number converts; anything else gives null.
+    fn asInt() -> Int? {
+        if kind == "int" { return intValue }
+        if kind == "float" { return floatValue.toInt() }
+        if kind == "text" { return textValue.toIntOrNull() }
+        return null
+    }
+    fn asFloat() -> Float? {
+        if kind == "float" { return floatValue }
+        if kind == "int" { return intValue.toFloat() }
+        if kind == "text" { return textValue.toFloatOrNull() }
+        return null
+    }
+    fn asText() -> String? {
+        if kind == "text" { return textValue }
+        if kind == "int" { return "$intValue" }
+        if kind == "float" { return "$floatValue" }
+        return null
+    }
+    fn asBlob() -> Bytes? {
+        if kind == "blob" { return blobValue }
+        if kind == "text" { return textValue.toBytes() }
+        return null
+    }
+    fn toString() = if kind == "null" { "NULL" } else if kind == "blob" { "x'" + blobValue.toHex() + "'" } else { asText() ?: "" }
+}
+
+fn int(value: Int) -> Value = Value("int", value, 0.0, "", Bytes(0))
+fn float(value: Float) -> Value = Value("float", 0, value, "", Bytes(0))
+fn text(value: String) -> Value = Value("text", 0, 0.0, value, Bytes(0))
+fn blob(value: Bytes) -> Value = Value("blob", 0, 0.0, "", value)
+fn nil() -> Value = Value("null", 0, 0.0, "", Bytes(0))
+fn bool(value: Bool) -> Value = int(if value { 1 } else { 0 })
+
+// One row of a result: the column names and the values in order.
+type Row(columns: List<String>, values: List<Value>) {
+    fn size() = values.size()
+    // The position of a column, or -1.
+    fn index(name: String) -> Int = columns.indexOf(name)
+    // The value in a column by name (or position); NULL when there is no such column.
+    fn value(name: String) -> Value {
+        i := index(name)
+        return if i < 0 { nil() } else { values[i] }
+    }
+    fn at(position: Int) -> Value = if position < 0 || position >= values.size() { nil() } else { values[position] }
+    fn get(name: String) -> Value = value(name)
+
+    fn int(name: String, fallback: Int = 0) = value(name).asInt() ?: fallback
+    fn float(name: String, fallback: Float = 0.0) = value(name).asFloat() ?: fallback
+    fn text(name: String, fallback: String = "") = value(name).asText() ?: fallback
+    fn blob(name: String) -> Bytes = value(name).asBlob() ?: Bytes(0)
+    fn isNull(name: String) = value(name).isNull()
+    fn toString() -> String {
+        out := List<String>()
+        for i in 0..columns.size() {
+            out.add("${columns[i]}=${values[i]}")
+        }
+        return out.join(", ")
+    }
+}
+
+// ── Databases ────────────────────────────────────────────────────
+
+type Database(handle: Int) {
+    open: Bool = true
+
+    // Run SQL text that can hold several statements and returns no rows (CREATE TABLE, PRAGMA, ...).
+    fn script(sql: String) -> Bool = open && __script(handle, sql)
+
+    // Run one statement with `?` parameters, discarding any rows; false if it failed.
+    fn exec(sql: String, params: List<Value>? = null) -> Bool {
+        stmt := prepared(sql, params)
+        if stmt < 0 { return false }
+        r := __step(stmt)
+        while r == 1 {
+            r = __step(stmt)
+        }
+        __finalize(stmt)
+        return r == 0
+    }
+
+    // All the rows a SELECT (or other statement that returns rows) produces; null if it failed.
+    fn query(sql: String, params: List<Value>? = null) -> List<Row>? {
+        stmt := prepared(sql, params)
+        if stmt < 0 { return null }
+        count := __columnCount(stmt)
+        names := List<String>()
+        for i in 0..count {
+            names.add(__columnName(stmt, i))
+        }
+        rows := List<Row>()
+        r := __step(stmt)
+        while r == 1 {
+            values := List<Value>()
+            for i in 0..count {
+                values.add(readColumn(stmt, i))
+            }
+            rows.add(Row(names, values))
+            r = __step(stmt)
+        }
+        __finalize(stmt)
+        return if r < 0 { null } else { rows }
+    }
+
+    // The first row, or null if there is none (or the statement failed: see `sqlite.lastError()`).
+    fn queryOne(sql: String, params: List<Value>? = null) -> Row? {
+        rows := query(sql, params)
+        return if rows == null { null } else { rows.firstOrNull() }
+    }
+
+    // The rows changed by the latest INSERT, UPDATE or DELETE; and the id of the latest inserted row.
+    fn changes() = __changes(handle)
+    fn lastInsertId() = __lastInsertId(handle)
+
+    // Run `body` inside BEGIN … COMMIT; if it panics the changes are rolled back and the panic goes on.
+    // Returns whether the commit worked.
+    fn transaction(body: () -> Unit) -> Bool {
+        if !script("BEGIN") { return false }
+        try {
+            body()
+        } catch e {
+            script("ROLLBACK")
+            panic(e)
+        }
+        if script("COMMIT") { return true }
+        script("ROLLBACK")
+        return false
+    }
+
+    fn close() {
+        if open {
+            open = false
+            __close(handle)
+        }
+    }
+
+    // A statement with its parameters bound, or -1.
+    fn prepared(sql: String, params: List<Value>?) -> Int {
+        if !open {
+            return -1
+        }
+        stmt := __prepare(handle, sql)
+        if stmt < 0 { return -1 }
+        given := if params == null { 0 } else { params.size() }
+        wanted := __paramCount(stmt)
+        if given != wanted {
+            __finalize(stmt)
+            fail("the statement has $wanted parameters but $given values were given")
+            return -1
+        }
+        for i in 0..given {
+            v := params!![i]
+            ok := if v.kind == "int" {
+                __bindInt(stmt, i + 1, v.intValue)
+            } else if v.kind == "float" {
+                __bindFloat(stmt, i + 1, v.floatValue)
+            } else if v.kind == "text" {
+                __bindText(stmt, i + 1, v.textValue)
+            } else if v.kind == "blob" {
+                __bindBlob(stmt, i + 1, v.blobValue)
+            } else {
+                __bindNull(stmt, i + 1)
+            }
+            if !ok {
+                __finalize(stmt)
+                fail("cannot bind parameter ${i + 1}")
+                return -1
+            }
+        }
+        return stmt
+    }
+}
+
+fn readColumn(stmt: Int, i: Int) -> Value {
+    t := __columnType(stmt, i)
+    if t == 1 { return int(__columnInt(stmt, i)) }
+    if t == 2 { return float(__columnFloat(stmt, i)) }
+    if t == 3 { return text(__columnText(stmt, i)) }
+    if t == 4 { return blob(__columnBlob(stmt, i)) }
+    return nil()
+}
+
+extern fn fail(message: String) = "aion_sqlite_set_error"
+
+// Open (creating if needed) a database file, or ":memory:" for a temporary one.
+fn open(path: String) -> Database? {
+    h := __open(path)
+    return if h < 0 { null } else { Database(h) }
+}

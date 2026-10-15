@@ -1,0 +1,27 @@
+true
+true
+true 1 1
+true 2
+true 3
+id=1, name=Ann, score=4.5, photo=x'0001ff', note=NULL
+id=2, name=Bob "B" O'Neil, score=7, photo=NULL, note=NULL
+id=3, name=Zoë é 中, score=NULL, photo=NULL, note=NULL
+1 Ann 4.5 Bytes(0001ff) true true 5
+float blob null int text
+Ann 1 NULL 3 none -1
+null 0
+3 11.5 Zoë é 中
+a=5, b=2.5, c=x, d=NULL, e=x'00ff'
+42 é 1
+true 2 true 1 true 0
+true 3
+false 0
+false NOT NULL constraint failed: users.name
+null no such table: nope
+false true
+false the statement has 1 parameters but 0 values were given
+false the statement has 0 parameters but 1 values were given
+false the SQL text holds no statement
+4 [0, 250000, 1000000, 2250000]
+2664667000
+false null false
