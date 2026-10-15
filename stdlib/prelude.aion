@@ -607,6 +607,75 @@ fn waitAll() {
     while __taskCount() > 1 { __park() }
 }
 
+// A queue for passing values from one task to another.
+//
+//   Channel<T>()      a send waits until a receiver has taken the value
+//   Channel<T>(10)    holds up to 10 values; a send waits only when it is full
+//
+// receive() waits for the next value and gives null once the channel is closed and empty.
+type Channel<T>(capacity: Int = 0) {
+    queue: List<T> = List<T>()
+    closed: Bool = false
+    sent: Int = 0
+    taken: Int = 0
+
+    fn size() = queue.size()
+    fn isClosed() = closed
+
+    fn send(value: T) {
+        limit := if capacity > 0 { capacity } else { 1 }
+        while !closed && queue.size() >= limit { __park() }
+        if closed { panic("send on a closed channel") }
+        queue.add(value)
+        sent += 1
+        ticket := sent
+        __notify()
+        if capacity == 0 {
+            while !closed && taken < ticket { __park() }
+        }
+    }
+
+    fn receive() -> T? {
+        while queue.isEmpty() && !closed { __park() }
+        if queue.isEmpty() { return null }
+        value := queue.removeAt(0)
+        taken += 1
+        __notify()
+        return value
+    }
+
+    // The next value if there is one right now, else null (it never waits).
+    fn tryReceive() -> T? {
+        if queue.isEmpty() { return null }
+        value := queue.removeAt(0)
+        taken += 1
+        __notify()
+        return value
+    }
+
+    // No more values will be sent; receivers get what is left, then null.
+    fn close() {
+        closed = true
+        __notify()
+    }
+
+    // Handle each value until the channel is closed and empty.
+    fn forEach(action: (T) -> Unit) {
+        value := receive()
+        while value != null {
+            action(value)
+            value = receive()
+        }
+    }
+
+    // Everything that is sent from now on, until the channel is closed.
+    fn drain() -> List<T> {
+        out := List<T>()
+        forEach { out.add(it) }
+        return out
+    }
+}
+
 // ── Support for `defer` and `try` (the compiler calls these; not for direct use) ──
 extern fn __defer_push(action: () -> Unit) = "aion_defer_push"
 extern fn __defer_mark() -> Int = "aion_defer_mark"

@@ -1,0 +1,15 @@
+send 1
+got 1
+send 2
+got 2
+send 3
+got 3
+closed: true null
+queued a
+queued b
+queued c
+queued d
+received [a, b, c, d]
+[1, 4, 9, 16, 25, 36]
+null
+7 null 0

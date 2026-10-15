@@ -1,0 +1,60 @@
+// exit: 1
+// stderr: send on a closed channel
+// Channels between tasks: unbuffered, buffered, worker pool, close
+// unbuffered: the sender waits for the receiver
+ch := Channel<Int>()
+producer := launch {
+    for i in 1..=3 {
+        println("send", i)
+        ch.send(i)
+    }
+    ch.close()
+}
+v := ch.receive()
+while v != null {
+    println("got", v)
+    v = ch.receive()
+}
+println("closed:", ch.isClosed(), ch.receive())
+
+// buffered: the sender runs ahead until the buffer is full
+buf := Channel<String>(2)
+sender := launch {
+    for w in ["a", "b", "c", "d"] {
+        buf.send(w)
+        println("queued", w)
+    }
+    buf.close()
+}
+yield()
+all := buf.drain()
+println("received", all)
+sender.join()
+
+// a worker pool: jobs go in, results come out
+jobs := Channel<Int>(10)
+results := Channel<Int>(10)
+workers := List<Job>()
+for w in 1..=3 {
+    workers.add(launch {
+        jobs.forEach { n ->
+            results.send(n * n)
+        }
+    })
+}
+for n in 1..=6 { jobs.send(n) }
+jobs.close()
+for w in workers { w.join() }
+results.close()
+println(results.drain().sorted())
+
+// tryReceive never waits
+q := Channel<Int>(5)
+println(q.tryReceive())
+q.send(7)
+println(q.tryReceive(), q.tryReceive(), q.size())
+
+// sending on a closed channel stops the program
+c := Channel<Int>(1)
+c.close()
+c.send(1)
