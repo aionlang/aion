@@ -541,6 +541,72 @@ fn args() -> List<String> {
     return out
 }
 
+// ── Tasks ───────────────────────────────────────────────────────
+//
+// Tasks are cooperative: they run one at a time and switch only when a task waits
+// (join, await, a channel, sleep) or calls yield(), so no locks are needed.  A panic in a
+// task that does not `try` it ends the program.  The program ends when the main code
+// does, even if tasks are still going; use waitAll() to let them finish.
+
+extern fn __spawn(body: () -> Unit) = "aion_spawn"
+extern fn __park() = "aion_park"
+extern fn __notify() = "aion_notify"
+extern fn __taskCount() -> Int = "aion_task_count"
+
+// Let the other tasks run for a while.
+extern fn yield() = "aion_yield"
+// Pause this task for `ms` milliseconds; the others keep running.
+extern fn sleep(ms: Int) = "aion_sleep"
+
+// A task that was started with launch { … }.
+type Job {
+    done: Bool = false
+    fn isDone() = done
+    // Wait for it to finish.
+    fn join() {
+        while !done { __park() }
+    }
+}
+
+// Run `body` as a task, concurrently with the code that follows.
+fn launch(body: () -> Unit) -> Job {
+    job := Job()
+    __spawn({
+        body()
+        job.done = true
+        __notify()
+    })
+    return job
+}
+
+// A task that produces a value.
+type Task<T> {
+    slot: Array<T> = Array<T>(1)
+    done: Bool = false
+    fn isDone() = done
+    // Wait for the result.
+    fn await() -> T {
+        while !done { __park() }
+        return slot[0]
+    }
+}
+
+// Run `body` as a task and get its result later with await().
+fn async<T>(body: () -> T) -> Task<T> {
+    task := Task<T>()
+    __spawn({
+        task.slot[0] = body()
+        task.done = true
+        __notify()
+    })
+    return task
+}
+
+// Wait until every task has finished.
+fn waitAll() {
+    while __taskCount() > 1 { __park() }
+}
+
 // ── Support for `defer` and `try` (the compiler calls these; not for direct use) ──
 extern fn __defer_push(action: () -> Unit) = "aion_defer_push"
 extern fn __defer_mark() -> Int = "aion_defer_mark"

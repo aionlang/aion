@@ -1,0 +1,7 @@
+// exit: 1
+// stderr: deadlock: every task is waiting
+// Waiting for something nobody will ever do is reported, not hung
+j := Job()
+println("waiting for a job nobody runs")
+j.join()
+println("not reached")

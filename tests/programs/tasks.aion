@@ -1,0 +1,35 @@
+// Tasks: launch, async/await, sleep, yield, waitAll
+// tasks take turns when they yield
+a := launch { for i in 0..3 { println("a", i); yield() } }
+b := launch { for i in 0..3 { println("b", i); yield() } }
+a.join()
+b.join()
+println("both done", a.isDone(), b.isDone())
+
+// results
+squares := List<Task<Int>>()
+for i in 1..=4 { squares.add(async { i * i }) }
+total := 0
+for t in squares { total += t.await() }
+println("sum of squares", total)
+name := async { "computed" }
+println(name.await(), name.await())
+
+// sleeping orders tasks by time, not by start
+log := List<String>()
+slow := launch { sleep(60); log.add("slow") }
+fast := launch { sleep(10); log.add("fast") }
+mid := launch { sleep(30); log.add("mid") }
+waitAll()
+println(log)
+
+// tasks share variables
+counter := 0
+jobs := List<Job>()
+for i in 0..5 { jobs.add(launch { for k in 0..100 { counter += 1; if k % 10 == 0 { yield() } } }) }
+for j in jobs { j.join() }
+println(counter)
+
+// a task that panics inside try
+r := async { try { panic("boom"); "fine" } catch e { "caught $e" } }
+println(r.await())
