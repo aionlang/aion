@@ -2019,6 +2019,10 @@ impl<'c, 'a> Cx<'c, 'a> {
 
             A::Char(c) => mk(K::Int(i64::from(*c)), Ty::Char),
 
+            A::Is { .. } | A::Cast { .. } => {
+                return Err(Diagnostic::new("`is` and `as` are not available yet", e.span));
+            }
+
             A::Try { body, catch_name, handler } => self.try_expr(body, catch_name.as_ref(), handler, None, e.span)?,
 
             A::NotNull(inner) => {

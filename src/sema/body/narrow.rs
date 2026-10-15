@@ -104,6 +104,7 @@ fn walk_expr_kind<'a>(kind: &'a A, lambda: bool, f: &mut dyn FnMut(Assign<'a>)) 
             }
         }
         A::Field(e, _) | A::SafeField(e, _) | A::NotNull(e) | A::Unary(_, e) => walk_expr(e, lambda, f),
+        A::Is { value, .. } | A::Cast { value, .. } => walk_expr(value, lambda, f),
         A::Elvis(a, b) | A::Binary(_, a, b) => {
             walk_expr(a, lambda, f);
             walk_expr(b, lambda, f);

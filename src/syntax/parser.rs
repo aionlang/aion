@@ -601,6 +601,36 @@ impl<'a> Parser<'a> {
             if self.nl() && !matches!(tok, Token::AndAnd | Token::OrOr | Token::Elvis) {
                 break;
             }
+            // `x is T`, `x !is T` (comparison level) and `x as T`, `x as? T` (above `*`).
+            let word = if tok == Token::Ident { self.text(self.toks[self.pos]) } else { "" };
+            let negated_is = tok == Token::Bang
+                && self.peek_at(1) == Some(Token::Ident)
+                && self.text(self.toks[self.pos + 1]) == "is"
+                && self.toks[self.pos].span.end == self.toks[self.pos + 1].span.start;
+            if word == "is" || negated_is {
+                if 4 < min_prec {
+                    break;
+                }
+                self.bump();
+                if negated_is {
+                    self.bump();
+                }
+                let ty = self.type_ref()?;
+                let span = lhs.span.to(ty.span);
+                lhs = Expr { kind: ExprKind::Is { value: Box::new(lhs), ty, negated: negated_is }, span };
+                continue;
+            }
+            if word == "as" {
+                if 8 < min_prec {
+                    break;
+                }
+                self.bump();
+                let safe = self.eat(Token::Question);
+                let ty = self.type_ref()?;
+                let span = lhs.span.to(ty.span);
+                lhs = Expr { kind: ExprKind::Cast { value: Box::new(lhs), ty, safe }, span };
+                continue;
+            }
             if tok == Token::Elvis {
                 if 5 < min_prec {
                     break;
@@ -1564,6 +1594,32 @@ mod tests {
         assert!(puppy.primary.is_none() && parent.args.len() == 2 && parent.args[1].name.is_some());
         // `open` is not reserved: it is still a fine variable name
         assert!(matches!(&m.items[3], Item::Stmt(_)));
+    }
+
+    #[test]
+    fn type_tests_and_casts() {
+        let is = |src: &str| match parse_expr(src).kind {
+            ExprKind::Is { negated, ty, .. } => (negated, matches!(&ty.kind, TypeKind::Named { name, .. } if name == "Dog")),
+            other => panic!("expected an `is`, got {other:?}"),
+        };
+        assert_eq!(is("x is Dog"), (false, true));
+        assert_eq!(is("x !is Dog"), (true, true));
+        let cast = |src: &str| match parse_expr(src).kind {
+            ExprKind::Cast { safe, .. } => safe,
+            other => panic!("expected a cast, got {other:?}"),
+        };
+        assert!(!cast("x as Dog"));
+        assert!(cast("x as? Dog"));
+        // `as` binds tighter than `*` and `+`; `is` sits with the comparisons, below `&&`
+        let e = parse_expr("a + b as Dog");
+        assert!(matches!(&e.kind, ExprKind::Binary(BinOp::Add, _, r) if matches!(r.kind, ExprKind::Cast { .. })));
+        let e = parse_expr("a is Dog && b");
+        assert!(matches!(&e.kind, ExprKind::Binary(BinOp::And, l, _) if matches!(l.kind, ExprKind::Is { .. })));
+        // `x !is T` does not disturb `!=` or `!!`
+        assert!(matches!(parse_expr("a != b").kind, ExprKind::Binary(BinOp::Ne, ..)));
+        assert!(matches!(parse_expr("a!!").kind, ExprKind::NotNull(_)));
+        // a variable can still be called `is` or `as` where no operator fits
+        assert!(matches!(parse_expr("as").kind, ExprKind::Name(_)));
     }
 
     #[test]

@@ -221,6 +221,10 @@ pub enum ExprKind {
     Elvis(Box<Expr>, Box<Expr>),
     /// The `null` literal.
     Null,
+    /// `x is Dog` / `x !is Dog`
+    Is { value: Box<Expr>, ty: TypeRef, negated: bool },
+    /// `x as Dog` (fails if it is not one) / `x as? Dog` (null if it is not one)
+    Cast { value: Box<Expr>, ty: TypeRef, safe: bool },
     /// `try { … } catch e { … }`: the value of the block, or of the handler if something panicked.
     Try { body: Vec<Stmt>, catch_name: Option<Ident>, handler: Vec<Stmt> },
     /// `f(x)`, `List<Int>()`: explicit type arguments are optional.
