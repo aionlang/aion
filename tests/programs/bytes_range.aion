@@ -1,0 +1,7 @@
+// exit: 1
+// stderr: a byte is a number from 0 to 255
+b := Bytes(2)
+b[0] = 255
+println(b)
+b[1] = 256
+println("not reached")

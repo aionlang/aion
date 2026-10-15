@@ -1,0 +1,6 @@
+// exit: 1
+// stderr: index 2 is out of bounds for size 2
+b := Bytes(2)
+println(b[1])
+println(b[2])
+println("not reached")

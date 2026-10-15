@@ -204,3 +204,113 @@ int64_t aion_char_lower(int64_t c) {
     if (c >= 0x400 && c <= 0x40F) return c + 80;
     return c;
 }
+
+/* ── Bytes ────────────────────────────────────────────────────── */
+
+void *aion_bytes_make(int64_t size, int64_t fill) {
+    void *b = aion_bytes_new(size);
+    if (fill) memset(aion_bytes_data(b), (int)(fill & 0xFF), (size_t)size);
+    return b;
+}
+
+int64_t aion_bytes_get(const void *b, int64_t i) {
+    int64_t n = aion_bytes_size(b);
+    if (i < 0 || i >= n) {
+        char msg[96];
+        snprintf(msg, sizeof msg, "index %lld is out of bounds for size %lld", (long long)i, (long long)n);
+        aion_panic(msg);
+    }
+    return ((const uint8_t *)b)[i];
+}
+
+void aion_bytes_set(void *b, int64_t i, int64_t v) {
+    int64_t n = aion_bytes_size(b);
+    if (i < 0 || i >= n) {
+        char msg[96];
+        snprintf(msg, sizeof msg, "index %lld is out of bounds for size %lld", (long long)i, (long long)n);
+        aion_panic(msg);
+    }
+    if (v < 0 || v > 255) aion_panic("a byte is a number from 0 to 255");
+    ((uint8_t *)b)[i] = (uint8_t)v;
+}
+
+void *aion_bytes_slice(const void *b, int64_t from, int64_t to) {
+    int64_t n = aion_bytes_size(b);
+    if (from < 0 || to > n || from > to) {
+        char msg[128];
+        snprintf(msg, sizeof msg, "slice bounds [%lld..%lld] are out of range for size %lld", (long long)from,
+                 (long long)to, (long long)n);
+        aion_panic(msg);
+    }
+    void *out = aion_bytes_new(to - from);
+    memcpy(aion_bytes_data(out), (const uint8_t *)b + from, (size_t)(to - from));
+    return out;
+}
+
+void *aion_bytes_concat(const void *a, const void *b) {
+    int64_t na = aion_bytes_size(a), nb = aion_bytes_size(b);
+    void *out = aion_bytes_new(na + nb);
+    memcpy(aion_bytes_data(out), a, (size_t)na);
+    memcpy(aion_bytes_data(out) + na, b, (size_t)nb);
+    return out;
+}
+
+bool aion_bytes_equals(const void *a, const void *b) {
+    int64_t n = aion_bytes_size(a);
+    return n == aion_bytes_size(b) && memcmp(a, b, (size_t)n) == 0;
+}
+
+int64_t aion_bytes_hash(const void *b) {
+    uint64_t h = 0xcbf29ce484222325ull;
+    for (int64_t i = 0, n = aion_bytes_size(b); i < n; i++) h = (h ^ ((const uint8_t *)b)[i]) * 0x100000001b3ull;
+    return (int64_t)(h >> 1);
+}
+
+int64_t aion_bytes_index_of(const void *b, int64_t value, int64_t from) {
+    int64_t n = aion_bytes_size(b);
+    for (int64_t i = from < 0 ? 0 : from; i < n; i++)
+        if (((const uint8_t *)b)[i] == (uint8_t)value) return i;
+    return -1;
+}
+
+/* The bytes of a String (without its NUL). */
+void *aion_str_to_bytes(const char *s) {
+    size_t n = strlen(s);
+    void *out = aion_bytes_new((int64_t)n);
+    memcpy(aion_bytes_data(out), s, n);
+    return out;
+}
+
+/* The bytes as text; the text ends at the first NUL byte, if there is one. */
+const char *aion_bytes_to_str(const void *b) {
+    return aion_string_n((const char *)b, strnlen((const char *)b, (size_t)aion_bytes_size(b)));
+}
+
+const char *aion_bytes_to_hex(const void *b) {
+    static const char digits[] = "0123456789abcdef";
+    int64_t n = aion_bytes_size(b);
+    char *buf = malloc((size_t)n * 2 + 1);
+    if (!buf) aion_panic("out of memory");
+    for (int64_t i = 0; i < n; i++) {
+        uint8_t v = ((const uint8_t *)b)[i];
+        buf[2 * i] = digits[v >> 4];
+        buf[2 * i + 1] = digits[v & 15];
+    }
+    const char *s = aion_string_n(buf, (size_t)n * 2);
+    free(buf);
+    return s;
+}
+
+/* Hex text to bytes; NULL if it is not an even number of hex digits. */
+void *aion_bytes_from_hex(const char *s) {
+    size_t n = strlen(s);
+    if (n % 2) return NULL;
+    void *out = aion_bytes_new((int64_t)(n / 2));
+    for (size_t i = 0; i < n; i += 2) {
+        int hi = isxdigit((unsigned char)s[i]) ? (isdigit((unsigned char)s[i]) ? s[i] - '0' : (s[i] | 32) - 'a' + 10) : -1;
+        int lo = isxdigit((unsigned char)s[i + 1]) ? (isdigit((unsigned char)s[i + 1]) ? s[i + 1] - '0' : (s[i + 1] | 32) - 'a' + 10) : -1;
+        if (hi < 0 || lo < 0) return NULL;
+        aion_bytes_data(out)[i / 2] = (uint8_t)(hi << 4 | lo);
+    }
+    return out;
+}

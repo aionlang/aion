@@ -89,6 +89,54 @@ fn Int.toChar() = '\0' + this
 // 0..9 for a digit, else null.
 fn Char.digitValue() -> Int? = if isDigit() { this - '0' } else { null }
 
+// ── Bytes ───────────────────────────────────────────────────────
+
+// Raw bytes, as read from a file or a socket.  `Bytes(8)` is eight zero bytes,
+// `Bytes(8, 255)` eight 0xFF; b[i] is a number from 0 to 255 and b.size() the length.
+// Two Bytes are == when they hold the same bytes, and they work as Map keys.
+extern fn __bytes_make(size: Int, fill: Int) -> Bytes = "aion_bytes_make"
+fn Bytes(size: Int, fill: Int = 0) = __bytes_make(size, fill)
+
+extern fn Bytes.size() -> Int = "aion_bytes_size"
+extern fn Bytes.get(index: Int) -> Int = "aion_bytes_get"
+extern fn Bytes.set(index: Int, value: Int) = "aion_bytes_set"
+// b[from..to] is a copy of those bytes.
+extern fn Bytes.slice(from: Int, to: Int) -> Bytes = "aion_bytes_slice"
+extern fn Bytes.concat(other: Bytes) -> Bytes = "aion_bytes_concat"
+extern fn __bytes_index_of(b: Bytes, value: Int, from: Int) -> Int = "aion_bytes_index_of"
+// The position of the first byte equal to `value` at or after `from`, or -1.
+fn Bytes.indexOf(value: Int, from: Int = 0) = __bytes_index_of(this, value, from)
+fn Bytes.contains(value: Int) = indexOf(value) >= 0
+
+// Lower-case hex, two digits per byte; and back (null if the text is not hex).
+extern fn Bytes.toHex() -> String = "aion_bytes_to_hex"
+extern fn String.fromHex() -> Bytes? = "aion_bytes_from_hex"
+// The UTF-8 text in the bytes (up to the first zero byte); and the bytes of a text.
+extern fn Bytes.toText() -> String = "aion_bytes_to_str"
+extern fn String.toBytes() -> Bytes = "aion_str_to_bytes"
+
+fn Bytes.toList() -> List<Int> {
+    out := List<Int>()
+    for i in 0..size() {
+        out.add(get(i))
+    }
+    return out
+}
+fn Bytes.iter() = toList()
+
+// The bytes with the given values (each 0 to 255).
+fn bytesOf(values: List<Int>) -> Bytes {
+    out := Bytes(values.size())
+    for i in 0..values.size() {
+        out[i] = values[i]
+    }
+    return out
+}
+
+extern fn __bytes_equals(a: Bytes, b: Bytes) -> Bool = "aion_bytes_equals"
+extern fn __bytes_hash(b: Bytes) -> Int = "aion_bytes_hash"
+fn __bytes_str(b: Bytes) -> String = "Bytes(${b.toHex()})"
+
 // ── Ordering ────────────────────────────────────────────────────
 
 // Things that can be put in order: a.compareTo(b) is negative, zero or positive.

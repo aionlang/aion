@@ -1,0 +1,43 @@
+// Bytes: raw byte strings, with equality, hashing and conversion
+b := Bytes(4)
+b[0] = 255
+b[3] = 16
+b[1] += 7
+println(b, b.size())
+println(b == bytesOf([255, 7, 0, 16]), b != Bytes(4), b == b[0..4])
+
+s := "héllo".toBytes()
+println(s.size(), s.toText(), s[1..3], s.toHex())
+println(s.toHex().fromHex() == s, "zz".fromHex() == null, "abc".fromHex() == null)
+println("6869".fromHex() ?: Bytes(0), "6869".fromHex()!!.toText())
+
+total := 0
+for x in bytesOf([1, 2, 3]) {
+    total += x
+}
+println(total, 2 in bytesOf([1, 2, 3]), b.indexOf(16), b.indexOf(16, 4), b.contains(7))
+
+m := Map<Bytes, Int>()
+m[bytesOf([1, 2])] = 5
+m[bytesOf([1, 2])] += 1
+println(m[bytesOf([1, 2])], m.size(), hashOf(bytesOf([1, 2])) == hashOf(bytesOf([1, 2])))
+
+println((s + b).size(), (b + Bytes(0)) == b, Bytes(2, 7), Bytes(0))
+
+type Packet(data: Bytes) {
+    fn first() = data[0]
+    fn describe() = "packet of ${data.size()}"
+}
+p := Packet(bytesOf([9, 8]))
+println(p.first(), p.describe(), p)
+
+// Many allocations under the collector.
+keep := List<Bytes>()
+for i in 0..200 {
+    keep.add(Bytes(i % 17 + 1, i % 256))
+}
+sum := 0
+for k in keep {
+    sum += k[0] + k.size()
+}
+println(sum)
