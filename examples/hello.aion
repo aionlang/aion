@@ -1,3 +1,5 @@
+// The smallest program: `fn main()` is optional (see script.aion), but it is allowed.
+
 fn main() {
     println("Hello from Aion!")
 }

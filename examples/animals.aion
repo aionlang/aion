@@ -1,3 +1,5 @@
+// A type with a constructor, and methods added from outside the type with `fn Animal.method()`.
+
 import math
 
 type Animal {

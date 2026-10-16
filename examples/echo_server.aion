@@ -1,3 +1,7 @@
+// A TCP echo server on port 8080 using the sockets module: whatever you send, it sends back.  It runs
+// until stopped (Ctrl-C), so the tests only check that it compiles.  Try it with:  nc localhost 8080
+// For something more modern see http_notes.aion, which uses the net and http modules.
+
 from sockets import TcpListener
 
 fn main() {
