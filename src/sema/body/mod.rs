@@ -5,7 +5,7 @@ use std::mem::{replace, take};
 use std::rc::Rc;
 
 use super::hir::{self, ExprKind as K, FnId, GlobalId, LocalId, Ty, TypeId};
-use super::{Checker, Const, Subst, Sym, Work};
+use super::{Checker, Const, ParamDefault, Subst, Sym, Work};
 use crate::diag::{Diagnostic, Result, Span};
 use crate::syntax::ast::{self, AssignOp, ExprKind as A, FnBody, InterpPart, StmtKind};
 
@@ -38,9 +38,21 @@ pub(super) fn check_fn(ck: &Checker, id: FnId, work: &Work) -> Result<hir::Func>
             }
         }),
         Work::Init { stmts } => lambda_assigned(|f| stmts.iter().for_each(|s| walk_stmt(s, false, f))),
+        Work::Default { expr, .. } => lambda_assigned(|f| walk_expr(expr, false, f)),
     };
 
     let body = match work {
+        Work::Default { expr, subst } => {
+            cx.subst = subst.clone();
+            if info.params.first().is_some_and(|p| p.name == "this")
+                && let Ty::Obj(ty) = info.params[0].ty
+            {
+                cx.this = Some(ty);
+            }
+            let ret = info.ret.get().expect("a default has its parameter's type");
+            let v = cx.value_expected(expr, Some(ret))?;
+            Some(vec![hir::Stmt::Return(Some(cx.coerce(v, ret, expr.span)?))])
+        }
         Work::Fn { decl, subst } | Work::Method { decl, subst } => {
             cx.subst = subst.clone();
             if matches!(work, Work::Method { .. })
@@ -3071,11 +3083,25 @@ impl<'c, 'a> Cx<'c, 'a> {
             }
         }
 
-        let mut call_args: Vec<hir::Expr> = recv.into_iter().collect();
+        // A computed default reads the arguments before it, so those are held in temporaries.
+        let computes = params
+            .iter()
+            .zip(&values)
+            .any(|(p, v)| v.is_none() && matches!(p.default, Some(ParamDefault::Computed(_))));
+        let mut held: Vec<LocalId> = Vec::new();
+        let mut call_args: Vec<hir::Expr> = Vec::new();
+        if let Some(r) = recv {
+            call_args.push(self.hold(r, computes, &mut pins, &mut held));
+        }
         for (p, v) in params.iter().zip(values) {
-            call_args.push(match (v, &p.default) {
+            let arg = match (v, &p.default) {
                 (Some(v), _) => v,
-                (None, Some(c)) => self.coerce(const_expr(c), p.ty, span)?,
+                (None, Some(ParamDefault::Const(c))) => self.coerce(const_expr(c), p.ty, span)?,
+                (None, Some(ParamDefault::Computed(f))) => {
+                    ck.ret_of(*f, span)?;
+                    let args = held.iter().map(|&l| self.local_expr(l)).collect();
+                    mk(K::Call { func: *f, args }, p.ty)
+                }
                 (None, None) if p.vararg => self.list_from(Vec::new(), Some(p.ty), span)?,
                 (None, None) => {
                     return Err(Diagnostic::new(
@@ -3083,10 +3109,26 @@ impl<'c, 'a> Cx<'c, 'a> {
                         span,
                     ));
                 }
-            });
+            };
+            call_args.push(self.hold(arg, computes, &mut pins, &mut held));
         }
         let call = mk(K::Call { func: id, args: call_args }, ret);
         Ok(if pins.is_empty() { call } else { mk(K::Block(pins, Box::new(call)), ret) })
+    }
+
+    /// When `active`, put `e` in a temporary (unless it is a variable already) so it can be read again.
+    fn hold(&mut self, e: hir::Expr, active: bool, pins: &mut Vec<hir::Stmt>, held: &mut Vec<LocalId>) -> hir::Expr {
+        if !active {
+            return e;
+        }
+        if let K::Local(id) = e.kind {
+            held.push(id);
+            return e;
+        }
+        let tmp = self.new_local("$arg", e.ty);
+        pins.push(hir::Stmt::Let(tmp, Some(e)));
+        held.push(tmp);
+        self.local_expr(tmp)
     }
 
     /// The built-in, type-polymorphic `print` / `println`.

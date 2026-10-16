@@ -126,11 +126,20 @@ pub enum Const {
     Null,
 }
 
+/// What a call fills in for an argument that was left out.
+#[derive(Clone)]
+pub enum ParamDefault {
+    /// A literal: `n: Int = 0`.
+    Const(Const),
+    /// Any other expression: `b: Int = a * 2`.  A function of the parameters before it (and `this`).
+    Computed(FnId),
+}
+
 #[derive(Clone)]
 pub struct ParamInfo {
     pub name: String,
     pub ty: Ty,
-    pub default: Option<Const>,
+    pub default: Option<ParamDefault>,
     /// `vararg xs: Int`: `ty` is the `List<Int>` the function sees; callers pass the items one by one.
     pub vararg: bool,
 }
@@ -198,6 +207,8 @@ pub struct Tables {
 pub enum Work<'a> {
     Fn { decl: &'a ast::FnDecl, subst: Subst },
     Method { decl: &'a ast::FnDecl, subst: Subst },
+    /// A computed default argument (see [`ParamDefault::Computed`]); its parameters are those before it.
+    Default { expr: &'a ast::Expr, subst: Subst },
     Ctor { ty: TypeId, decl: &'a ast::TypeDecl, subst: Subst },
     /// The initialiser of a type that is open or extends another (`this`, then the constructor's parameters).
     TypeInit { ty: TypeId, decl: &'a ast::TypeDecl },
@@ -712,9 +723,28 @@ impl<'a> Checker<'a> {
         Ok(fields)
     }
 
-    fn param_info(&self, mi: usize, p: &ast::Param, subst: &Subst) -> Result<ParamInfo> {
+    /// `earlier` are the parameters before `p`, which a computed default may use.
+    fn param_info(&self, mi: usize, p: &'a ast::Param, subst: &Subst, earlier: &[ParamInfo]) -> Result<ParamInfo> {
         let ty = self.resolve_value_type(mi, &p.ty, subst)?;
-        let default = p.default.as_ref().map(|e| const_default(e, ty, &self.t)).transpose()?;
+        let default = match &p.default {
+            None => None,
+            Some(e) => Some(match const_default(e, ty, &self.t)? {
+                Some(c) => ParamDefault::Const(c),
+                None => {
+                    // Any other expression becomes a function of the parameters before it.
+                    let params = earlier.iter().map(|q| ParamInfo { default: None, ..q.clone() }).collect();
+                    let info = FnInfo {
+                        name: format!("the default of `{}`", p.name.name),
+                        module: mi,
+                        symbol: format!("{}__default_{}__{}", self.module_names[mi], p.name.name, self.fns.borrow().len()),
+                        kind: FuncKind::Free,
+                        params,
+                        ret: Cell::new(Some(ty)),
+                    };
+                    ParamDefault::Computed(self.declare_fn(info, Work::Default { expr: e, subst: subst.clone() }))
+                }
+            }),
+        };
         if p.vararg {
             let Some(&Sym::GenericType(list)) = self.t.scopes[0].items.get("List") else {
                 return Err(Diagnostic::new("the prelude has no `List`", p.name.span));
@@ -728,7 +758,7 @@ impl<'a> Checker<'a> {
     fn params(
         &self,
         mi: usize,
-        params: &[ast::Param],
+        params: &'a [ast::Param],
         receiver: Option<Ty>,
         subst: &Subst,
     ) -> Result<Vec<ParamInfo>> {
@@ -740,7 +770,8 @@ impl<'a> Checker<'a> {
             if out.iter().any(|q| q.name == p.name.name) {
                 return Err(Diagnostic::new(format!("duplicate parameter `{}`", p.name.name), p.name.span));
             }
-            out.push(self.param_info(mi, p, subst)?);
+            let info = self.param_info(mi, p, subst, &out)?;
+            out.push(info);
         }
         Ok(out)
     }
@@ -749,7 +780,7 @@ impl<'a> Checker<'a> {
     fn signature(
         &self,
         mi: usize,
-        decl: &ast::FnDecl,
+        decl: &'a ast::FnDecl,
         kind: FuncKind,
         receiver: Option<Ty>,
         symbol: String,
@@ -1003,7 +1034,9 @@ impl<'a> Checker<'a> {
     fn declare_fn(&self, info: FnInfo, work: Work<'a>) -> FnId {
         let mut fns = self.fns.borrow_mut();
         let lazy = match &work {
-            Work::Fn { subst, .. } | Work::Method { subst, .. } | Work::Ctor { subst, .. } => !subst.is_empty(),
+            Work::Fn { subst, .. } | Work::Method { subst, .. } | Work::Ctor { subst, .. } | Work::Default { subst, .. } => {
+                !subst.is_empty()
+            }
             Work::Init { .. } | Work::TypeInit { .. } => false,
         };
         fns.push(FnSlot { info: Some(Rc::new(info)), work: Some(work), state: State::New, func: None, lazy, used: false });
@@ -1054,7 +1087,7 @@ impl<'a> Checker<'a> {
     /// An error inside an instance of a generic function should say which one.
     fn note_instance(&self, mut d: Diagnostic, work: &Work) -> Diagnostic {
         let subst = match work {
-            Work::Fn { subst, .. } | Work::Method { subst, .. } | Work::Ctor { subst, .. } => subst,
+            Work::Fn { subst, .. } | Work::Method { subst, .. } | Work::Ctor { subst, .. } | Work::Default { subst, .. } => subst,
             Work::Init { .. } | Work::TypeInit { .. } => return d,
         };
         if subst.is_empty() {
@@ -1430,16 +1463,16 @@ fn symbol_for(module: &str, owner: Option<&str>, decl: &ast::FnDecl) -> String {
     }
 }
 
-/// Default arguments must be literals (possibly negated), matching the parameter type;
-/// an optional parameter may also default to `null`.
-fn const_default(e: &ast::Expr, ty: Ty, t: &Tables) -> Result<Const> {
+/// A default argument that is a literal (possibly negated) matching the parameter type, or `null` for
+/// an optional parameter.  `None` for any other expression, which is computed at the call.
+fn const_default(e: &ast::Expr, ty: Ty, t: &Tables) -> Result<Option<Const>> {
     let (ty, optional) = match ty {
         Ty::Opt(o) => (t.opt_inner(o), true),
         other => (other, false),
     };
     if matches!(e.kind, ExprKind::Null) {
         return if optional {
-            Ok(Const::Null)
+            Ok(Some(Const::Null))
         } else {
             Err(Diagnostic::new(format!("a {} can't default to null", t.ty_name(ty)), e.span)
                 .hint(format!("declare the parameter as `{}?`", t.ty_name(ty))))
@@ -1458,9 +1491,9 @@ fn const_default(e: &ast::Expr, ty: Ty, t: &Tables) -> Result<Const> {
         _ => None,
     };
     match lit {
-        None => Err(Diagnostic::new("default values must be literals", e.span)),
-        Some((c, found)) if found == ty => Ok(c),
-        Some((Const::Int(v), Ty::Int)) if ty == Ty::Float => Ok(Const::Float(v as f64)),
+        None => Ok(None),
+        Some((c, found)) if found == ty => Ok(Some(c)),
+        Some((Const::Int(v), Ty::Int)) if ty == Ty::Float => Ok(Some(Const::Float(v as f64))),
         Some((_, found)) => Err(Diagnostic::new(
             format!("expected a {} default, found {}", t.ty_name(ty), t.ty_name(found)),
             e.span,

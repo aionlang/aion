@@ -1,0 +1,2 @@
+// error: undefined variable `b`
+fn f(a: Int = b, b: Int = 1) -> Int = a

@@ -1,0 +1,36 @@
+// A default can be any expression.  It is worked out at each call, and may use the parameters
+// before it (and, in a method, the fields).
+LIMIT := 100
+
+fn clamp(x: Int, hi: Int = LIMIT) -> Int = x > hi ? hi : x
+println(clamp(500))
+println(clamp(500, 10))
+
+fn box(w: Int, h: Int = w, area: Int = w * h) -> String = "$w x $h = $area"
+println(box(3))
+println(box(3, 4))
+println(box(3, 4, 99))
+println(box(2, area: 7))
+
+fn collect(item: Int, into: List<Int> = []) -> List<Int> {
+    into.add(item)
+    return into
+}
+println(collect(1))
+println(collect(2))
+println(collect(3, [9]))
+
+type Opts(verbose: Bool = false, name: String = "x" + "y")
+o := Opts()
+println("${o.verbose} ${o.name}")
+
+type Counter(start: Int = 0, step: Int = start + 1) {
+    fn pad(width: Int = start * 10) = width
+    fn describe() = "$start $step ${pad()} ${pad(5)}"
+}
+println(Counter().describe())
+println(Counter(5).describe())
+println(Counter(5, 2).describe())
+
+type Box<T>(value: T, label: String = "box of $value")
+println(Box(7).label)

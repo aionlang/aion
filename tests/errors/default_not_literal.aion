@@ -1,3 +1,0 @@
-// error: default values must be literals
-fn f(a: Int = 1 + 2) {}
-fn main() {}
