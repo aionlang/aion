@@ -371,6 +371,9 @@ impl<'a> Parser<'a> {
                 .hint("e.g. `fn double(x: Int) = x * 2`"));
         } else if self.peek() == Some(Token::LBrace) {
             FnBody::Block(self.block()?)
+        } else if self.peek() == Some(Token::Colon) {
+            return Err(Diagnostic::new("a return type is written with `->`, not `:`", self.here())
+                .hint("e.g. `fn double(x: Int) -> Int = x * 2`"));
         } else {
             return Err(self.expected("`{` or `=`"));
         };

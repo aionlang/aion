@@ -1,0 +1,2 @@
+// error: a return type is written with `->`
+fn double(x: Int): Int = x * 2
