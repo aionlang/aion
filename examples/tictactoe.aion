@@ -128,9 +128,9 @@ println("naive against naive:      ", play("naive", "naive", false))
 // > O plays square 6
 // >  X | X | O
 // > ---+---+---
-// >  X | O |  
+// >  X | O |
 // > ---+---+---
-// >  O |   |  
+// >  O |   |
 // > result: O
 // >
 // > perfect X against naive O: X

@@ -1,0 +1,101 @@
+// Inheritance: a company's staff.  `open` types can be extended, `override` replaces a method, `super` reaches
+// the parent's version, and `is` / `as` ask what an object really is.
+//
+//   aion examples/inheritance.aion
+
+open type Employee(name: String, salary: Int) {
+    // `open` methods can be overridden; calls are looked up on the real object.
+    open fn title() = "employee"
+    open fn bonus() = 0
+    open fn pay() = salary + bonus()
+
+    // Not open: the same for every kind of employee.
+    fn badge() = "${name.padRight(6)} ${title().padRight(9)} ${pay().toString().padLeft(6)}"
+}
+
+open type Manager(name: String, salary: Int, reports: Int) : Employee(name, salary) {
+    override fn title() = "manager"
+    override fn bonus() = reports * 1000
+}
+
+type Director(name: String, salary: Int) : Manager(name, salary, 12) {
+    override fn title() = "director"
+    // the manager's bonus plus a fixed extra
+    override fn bonus() = super.bonus() + 5000
+}
+
+type Engineer(name: String, salary: Int, language: String) : Employee(name, salary) {
+    override fn title() = "engineer"
+    override fn bonus() = if language == "Aion" { 2000 } else { 500 }
+    fn code() = "$name writes $language"
+}
+
+type Intern(name: String) : Employee(name, 1000) {
+    override fn title() = "intern"
+}
+
+staff: List<Employee> = [
+    Director("Ada", 9000), Manager("Bob", 6000, 4), Engineer("Cy", 5000, "Aion"),
+    Engineer("Di", 5200, "C"), Intern("Ed"), Employee("Flo", 3000),
+]
+
+for e in staff { println(e.badge()) }
+
+payroll := 0
+for e in staff { payroll += e.pay() }
+println("payroll:", payroll)
+
+// Asking what something is.
+for e in staff {
+    note := if e is Director {
+        "runs the company"
+    } else if e is Manager {
+        // a Director is a Manager too, which is why the Director test comes first
+        "manages people"
+    } else if e is Engineer {
+        // after the test, `e` has the narrower type, so Engineer's own methods are available
+        e.code()
+    } else {
+        "no special role"
+    }
+    println("${e.name}: $note")
+}
+
+// Conversions: `as` stops the program if the object is not that kind, `as?` gives null instead.
+boss := staff[0]
+manager := boss as Manager
+println(manager.reports, "reports,", (staff[2] as? Manager)?.reports, (staff[2] as? Engineer)?.language)
+
+// Subtypes can go wherever a parent is expected, including collections of the parent.
+byKind := Map<String, List<Employee>>()
+for e in staff {
+    if !(e.title() in byKind) { byKind[e.title()] = List<Employee>() }
+    byKind[e.title()].add(e)
+}
+for kind in byKind.keys().sorted() {
+    println(kind.padRight(9), byKind[kind].map { it.name }.join(", "))
+}
+
+// Printing an object shows its real type.
+println(staff[1], staff[4])
+
+// > Ada    director   26000
+// > Bob    manager    10000
+// > Cy     engineer    7000
+// > Di     engineer    5700
+// > Ed     intern      1000
+// > Flo    employee    3000
+// > payroll: 52700
+// > Ada: runs the company
+// > Bob: manages people
+// > Cy: Cy writes Aion
+// > Di: Di writes C
+// > Ed: no special role
+// > Flo: no special role
+// > 12 reports, null Aion
+// > director  Ada
+// > employee  Flo
+// > engineer  Cy, Di
+// > intern    Ed
+// > manager   Bob
+// > Manager(name=Bob, salary=6000, reports=4) Intern(name=Ed, salary=1000)

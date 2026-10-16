@@ -1,0 +1,100 @@
+// Missing values: types that may be null end in `?`, and the compiler makes you deal with the null.
+// Covers `?.`, `?:`, `!!`, smart casts, and null-returning library functions.
+//
+//   aion examples/nullability.aion
+
+// A function that cannot always answer returns `T?`.
+fn parseAge(text: String) -> Int? {
+    age := text.toIntOrNull()
+    if age == null || age < 0 || age > 150 { return null }
+    return age
+}
+
+fn describe(text: String) -> String {
+    age := parseAge(text)
+    // After this check the compiler knows `age` is not null.
+    if age == null { return "'$text' is not a valid age" }
+    return "'$text' is ${age + 1} next year"
+}
+println(describe("41"))
+println(describe("abc"))
+println(describe("-3"))
+
+// The elvis operator `?:` supplies a fallback.
+println(parseAge("30") ?: -1, parseAge("x") ?: -1)
+
+// `!!` says "I am sure this is not null" and stops the program if it is.
+println(parseAge("7")!! * 6)
+
+// Safe calls: `?.` does nothing when the left side is null, and the result is itself optional.
+type Address(city: String, zip: String?)
+type Person(name: String, address: Address?)
+
+people := [
+    Person("Ann", Address("Oslo", "0150")),
+    Person("Bob", Address("Rome", null)),
+    Person("Cy", null),
+]
+for p in people {
+    city := p.address?.city
+    zipLength := p.address?.zip?.length()
+    println(p.name.padRight(4), city, zipLength, p.address?.city?.upper() ?: "(unknown)")
+}
+
+// Collections give nulls instead of failing: getOrNull, firstOrNull, find.
+ages := {"ann": 31, "bob": 25}
+println(ages.getOrNull("ann"), ages.getOrNull("zed"), ages.getOr("zed", 0))
+println([3, 1, 2].firstOrNull(), List<Int>().firstOrNull(), [5, 6, 7].find { it > 5 }, [5, 6, 7].find { it > 9 })
+
+// A walk along a chain that may end: a linked list.
+type Node(value: Int, next: Node?)
+list := Node(1, Node(2, Node(3, null)))
+
+total := 0
+node: Node? = list
+while node != null {
+    total += node.value
+    node = node.next
+}
+println("sum of the list:", total)
+
+fn lengthOf(start: Node?) -> Int {
+    if start == null { return 0 }
+    return 1 + lengthOf(start.next)
+}
+println("length:", lengthOf(list), lengthOf(null))
+
+// Optional numbers work too, and compare by value.
+a: Int? = 5
+b: Int? = null
+println(a == 5, a == null, b == null, b ?: 0, (a ?: 0) + (b ?: 0))
+
+// The last element of something that might be empty, three ways.
+words := List<String>()
+println(words.lastOrNull() ?: "(none)")
+words.add("one")
+println(words.lastOrNull() ?: "(none)")
+last := words.lastOrNull()
+println(if last != null { last.upper() } else { "(none)" })
+
+// `try` turns a failure into a value you can fall back from.
+text := try { "12x".toIntOr(0) / 0 } catch e { -1 }
+println("division by zero became:", text)
+
+// > '41' is 42 next year
+// > 'abc' is not a valid age
+// > '-3' is not a valid age
+// > 30 -1
+// > 42
+// > Ann  Oslo 4 OSLO
+// > Bob  Rome null ROME
+// > Cy   null null (unknown)
+// > 31 null 0
+// > 3 null 6 null
+// > sum of the list: 6
+// > length: 3 0
+// > true false true 0 5
+// > (none)
+// > one
+// > ONE
+// > division by zero became: -1

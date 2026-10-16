@@ -1,0 +1,103 @@
+// Interfaces: describe what a type can do, and any type that can do it qualifies - there is no "implements".
+// Dispatch happens at run time, so a list can hold different kinds of shape.
+//
+//   aion examples/interfaces.aion
+
+import math
+
+interface Shape {
+    fn area() -> Float
+    fn perimeter() -> Float
+    fn name() -> String
+}
+
+type Circle(radius: Float) {
+    fn area() = math.pi * radius * radius
+    fn perimeter() = 2.0 * math.pi * radius
+    fn name() = "circle"
+}
+
+type Rectangle(width: Float, height: Float) {
+    fn area() = width * height
+    fn perimeter() = 2.0 * (width + height)
+    fn name() = if width == height { "square" } else { "rectangle" }
+}
+
+type Triangle(a: Float, b: Float, c: Float) {
+    fn perimeter() = a + b + c
+    // Heron's formula
+    fn area() -> Float {
+        s := perimeter() / 2.0
+        return math.sqrt(s * (s - a) * (s - b) * (s - c))
+    }
+    fn name() = "triangle"
+}
+
+// Works on anything that satisfies Shape.
+fn describe(shape: Shape) -> String =
+    "${shape.name().padRight(9)} area ${shape.area().format(2).padLeft(7)}  perimeter ${shape.perimeter().format(2).padLeft(6)}"
+
+shapes: List<Shape> = [Circle(1.5), Rectangle(3.0, 4.0), Triangle(3.0, 4.0, 5.0), Rectangle(2.0, 2.0)]
+for shape in shapes { println(describe(shape)) }
+
+total := 0.0
+for shape in shapes { total += shape.area() }
+println("total area:", total.format(3))
+
+largest := shapes.sortedBy { it.area() }.last()
+println("largest:", largest.name())
+println("by perimeter:", shapes.sortedBy { it.perimeter() }.map { it.name() }.join(" < "))
+println("round things:", shapes.count { it.name() == "circle" })
+
+// Interfaces can be small, and one type can satisfy several of them.
+interface Named { fn name() -> String }
+interface Priced { fn price() -> Float }
+
+type Book(title: String, cost: Float) {
+    fn name() = title
+    fn price() = cost
+}
+type Coffee(size: String) {
+    fn name() = "coffee ($size)"
+    fn price() = if size == "large" { 3.5 } else { 2.5 }
+}
+type Tip(amount: Float) {
+    fn price() = amount          // priced, but has no name
+}
+
+fn label(item: Named) = "<${item.name()}>"
+fn cost(items: List<Priced>) -> Float {
+    sum := 0.0
+    for item in items { sum += item.price() }
+    return sum
+}
+
+book := Book("Dune", 9.99)
+println(label(book), label(Coffee("large")))
+basket: List<Priced> = [book, Coffee("small"), Tip(1.0)]
+println("basket costs", cost(basket).format(2))
+
+// An interface value prints through the real type's own toString, and can still be handled as that type.
+type Dog(name: String) { fn speak() = "Woof" }
+type Cat(name: String) { fn speak() = "Meow" }
+interface Speaker { fn speak() -> String }
+pets: List<Speaker> = [Dog("Rex"), Cat("Tom")]
+println(pets)
+for pet in pets {
+    kind := if pet is Dog { "a dog" } else if pet is Cat { "a cat" } else { "something else" }
+    println("${pet.speak()} from $kind")
+}
+
+// > circle    area    7.07  perimeter   9.42
+// > rectangle area   12.00  perimeter  14.00
+// > triangle  area    6.00  perimeter  12.00
+// > square    area    4.00  perimeter   8.00
+// > total area: 29.069
+// > largest: rectangle
+// > by perimeter: square < circle < triangle < rectangle
+// > round things: 1
+// > <Dune> <coffee (large)>
+// > basket costs 13.49
+// > [Dog(name=Rex), Cat(name=Tom)]
+// > Woof from a dog
+// > Meow from a cat

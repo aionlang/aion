@@ -1,0 +1,92 @@
+// Numbers: Int and Float, conversions, rounding and formatting, wrap-around, bit tricks and the math module.
+//
+//   aion examples/numbers.aion
+
+import math
+
+// Int is a 64-bit whole number; Float is a 64-bit decimal number.  Mixing them gives a Float.
+println(7 / 2, 7 % 2, -7 / 2, -7 % 2, 7 / 2.0, 2 + 3 * 4, (2 + 3) * 4)
+println(10 / 4, 10.0 / 4, 10 / 4 * 1.0, 10 * 1.0 / 4)
+
+// Conversions are explicit.
+x := 3.99
+println(x.toInt(), x.round(), x.floor(), x.ceil(), (-x).toInt(), (-x).round(), (-x).floor(), 5.toFloat() / 2.0)
+println("3.14".toFloatOrNull(), "1e3".toFloatOr(0.0), "12abc".toIntOrNull(), "  42 ".trim().toIntOrNull(), "ff".parseInt(16), "-101".parseInt(2))
+
+// Formatting.
+pi := math.pi
+println(pi, pi.format(2), pi.format(0), pi.roundTo(4), 1234567.891.format(1), 0.1 + 0.2, (0.1 + 0.2).format(2))
+println(255.toHex(), 255.toBinary(), 255.toRadix(8), 255.toRadix(36), "item".padRight(8) + "|", "42".padLeft(8, "0"))
+println(1_000_000, 0xFF, 0b1011, 0o17, 1e6, 2.5e-3)
+
+// Int arithmetic wraps around on overflow, silently; use Float or the bigint example when you need more room.
+biggest := 9223372036854775807
+println(biggest, biggest + 1, biggest * 2, -biggest - 2)
+
+// Division by zero: an Int panics, a Float gives infinity or NaN.
+println(1.0 / 0.0, -1.0 / 0.0, (0.0 / 0.0).isNaN(), (1.0 / 0.0).isInfinite(), try { 1 / 0 } catch e { -1 })
+
+// Helpers.
+println((-5).abs(), 5.sign(), (-2.5).abs(), 3.min(9), 3.max(9), 15.clamp(0, 10), 2.pow(10), 2.pow(62))
+println("gcd:", 48.gcd(18), " lcm:", 48 * 18 / 48.gcd(18), " even:", 10 % 2 == 0)
+
+// The math module.
+println(math.sqrt(2.0), math.cbrt(27.0).round(), math.pow(2.0, 0.5), math.hypot(3.0, 4.0))
+println(math.sin(math.pi / 2.0), math.cos(0.0), math.atan2(1.0, 1.0) * 4.0, math.exp(1.0), math.log(math.e), math.log10(1000.0), math.log2(1024.0))
+println(math.floor(2.7), math.ceil(2.1), math.round(2.5), math.trunc(-2.7), math.abs(-3.5), math.max(3, 7), math.fmin(2.5, 1.5))
+println("90 degrees =", math.toRadians(90.0).format(4), "radians; pi radians =", math.toDegrees(math.pi), "degrees")
+
+// Bit operations are methods on Int.
+a := 0b1100
+b := 0b1010
+println("and", a.and(b), " or", a.or(b), " xor", a.xor(b), " not", a.inv(), " shl", a.shl(2), " shr", a.shr(2))
+println("-16 shr 2 =", (-16).shr(2), " ushr 60 =", (-16).ushr(60))
+
+fn popcount(n: Int) -> Int {
+    count := 0
+    rest := n
+    while rest != 0 {
+        count += rest.and(1)
+        rest = rest.ushr(1)
+    }
+    return count
+}
+println("bits set:", popcount(255), popcount(1024), popcount(0), popcount(-1))
+println("is power of two:", [1, 6, 16, 100, 1024].map { it > 0 && it.and(it - 1) == 0 })
+
+// Gray code: neighbouring numbers differ in exactly one bit.
+gray := List<String>()
+for i in 0..8 { gray.add(i.xor(i.shr(1)).toBinary().padLeft(3, "0")) }
+println("gray code:", gray.join(" "))
+
+// Packing three small numbers into one Int, and taking them out again.
+packed := 200.shl(16).or(100.shl(8)).or(50)
+println("packed:", packed.toHex(), "-> r", packed.shr(16).and(255), "g", packed.shr(8).and(255), "b", packed.and(255))
+
+// Floating point is approximate: compare with a tolerance, not with ==.
+sum := 0.0
+for i in 0..10 { sum += 0.1 }
+println(sum == 1.0, (sum - 1.0).abs() < 0.000001, sum)
+
+// > 3 1 -3 -1 3.5 14 20
+// > 2 2.5 2 2.5
+// > 3 4 3 4 -3 -4 -4 2.5
+// > 3.14 1000 null 42 255 -5
+// > 3.141592653589793 3.14 3 3.1416 1234567.9 0.30000000000000004 0.30
+// > ff 11111111 377 73 item    | 00000042
+// > 1000000 255 11 15 1000000 0.0025
+// > 9223372036854775807 -9223372036854775808 -2 9223372036854775807
+// > inf -inf true true -1
+// > 5 1 2.5 3 9 10 1024 4611686018427387904
+// > gcd: 6  lcm: 144  even: true
+// > 1.4142135623730951 3 1.4142135623730951 5
+// > 1 1 3.141592653589793 2.718281828459045 1 3 10
+// > 2 3 3 -2 3.5 7 1.5
+// > 90 degrees = 1.5708 radians; pi radians = 180 degrees
+// > and 8  or 14  xor 6  not -13  shl 48  shr 3
+// > -16 shr 2 = -4  ushr 60 = 15
+// > bits set: 8 1 0 64
+// > is power of two: [true, false, true, false, true]
+// > gray code: 000 001 011 010 110 111 101 100
+// > packed: c86432 -> r 200 g 100 b 50
+// > false true 0.9999999999999999

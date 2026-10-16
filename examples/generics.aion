@@ -1,0 +1,145 @@
+// Generics: write a type or function once, use it with any type.  A stack, a queue built from two stacks,
+// a pair, a generic function with a constraint, and a generic interface.
+//
+//   aion examples/generics.aion
+
+// A last-in, first-out stack of anything.
+type Stack<T> {
+    items: List<T> = List<T>()
+
+    fn push(item: T) { items.add(item) }
+    fn pop() -> T? = if items.isEmpty() { null } else { items.pop() }
+    fn peek() -> T? = items.lastOrNull()
+    fn size() = items.size()
+    fn isEmpty() = items.isEmpty()
+    fn toString() = "Stack(${items.join(", ")})"
+}
+
+// A first-in, first-out queue from two stacks: push on one, pull from the other.
+type Queue<T> {
+    inbox: Stack<T> = Stack<T>()
+    outbox: Stack<T> = Stack<T>()
+
+    fn enqueue(item: T) { inbox.push(item) }
+    fn dequeue() -> T? {
+        if outbox.isEmpty() {
+            while !inbox.isEmpty() { outbox.push(inbox.pop()!!) }
+        }
+        return outbox.pop()
+    }
+    fn size() = inbox.size() + outbox.size()
+}
+
+type Pair<A, B>(first: A, second: B) {
+    fn swap() -> Pair<B, A> = Pair(second, first)
+    fn toString() = "($first, $second)"
+}
+
+// Type arguments are inferred from the call.
+fn zip<A, B>(xs: List<A>, ys: List<B>) -> List<Pair<A, B>> {
+    out := List<Pair<A, B>>()
+    for i in 0..xs.size().min(ys.size()) { out.add(Pair(xs[i], ys[i])) }
+    return out
+}
+
+// A constraint says what the type must be able to do: here, compare itself with another of its kind.
+fn largest<T: Comparable<T>>(items: List<T>) -> T? {
+    if items.isEmpty() { return null }
+    best := items[0]
+    for item in items {
+        if item.compareTo(best) > 0 { best = item }
+    }
+    return best
+}
+
+fn countWhere<T>(items: List<T>, test: (T) -> Bool) -> Int {
+    count := 0
+    for item in items {
+        if test(item) { count += 1 }
+    }
+    return count
+}
+
+// A generic interface: anything with a matching `next()` is a Source, with no "implements" needed.
+interface Source<T> {
+    fn next() -> T?
+}
+
+type Countdown(start: Int) {
+    current: Int = start
+    fn next() -> Int? {
+        if current <= 0 { return null }
+        current -= 1
+        return current + 1
+    }
+}
+
+type Words(text: String) {
+    parts: List<String> = text.split(" ")
+    at: Int = 0
+    fn next() -> String? {
+        if at >= parts.size() { return null }
+        at += 1
+        return parts[at - 1]
+    }
+}
+
+fn drain<T>(source: Source<T>) -> List<T> {
+    out := List<T>()
+    item := source.next()
+    while item != null {
+        out.add(item)
+        item = source.next()
+    }
+    return out
+}
+
+s := Stack<Int>()
+for n in [10, 20, 30] { s.push(n) }
+println(s, "peek", s.peek(), "pop", s.pop(), "->", s, "size", s.size())
+println("empty stack pop:", Stack<String>().pop())
+
+words := Stack<String>()
+for w in "to be or not".split(" ") { words.push(w) }
+reversed := List<String>()
+while !words.isEmpty() { reversed.add(words.pop()!!) }
+println("reversed:", reversed.join(" "))
+
+q := Queue<String>()
+for name in ["ann", "bob", "cy"] { q.enqueue(name) }
+println("dequeue:", q.dequeue(), q.dequeue(), "- still waiting:", q.size())
+q.enqueue("di")
+println("then:", q.dequeue(), q.dequeue(), q.dequeue(), "(empty now)")
+
+p := Pair("age", 31)
+println(p, p.swap(), p.swap().swap(), "first:", p.first, "second:", p.second + 1)
+println(zip(["a", "b", "c"], [1, 2, 3]).join(" "))
+println(zip([1.5, 2.5], ['x', 'y', 'z']).join(" "))
+
+println("largest:", largest([3, 9, 4]), largest(["pear", "zebra", "apple"]), largest([2.5, 1.5]), largest(List<Int>()))
+println("count:", countWhere([1, 2, 3, 4, 5, 6]) { it % 3 == 0 }, countWhere(["a", "bb", "cc"]) { it.length() == 2 })
+
+// (A type argument that cannot be worked out from the argument is written out: drain<Int>(…).)
+println("drain a countdown:", drain<Int>(Countdown(5)).join(" "))
+println("drain words:", drain<String>(Words("generic interfaces are structural")).join(" | "))
+
+// Generic types nest.
+registry := Map<String, Stack<Pair<String, Int>>>()
+registry["scores"] = Stack<Pair<String, Int>>()
+registry["scores"].push(Pair("ann", 91))
+registry["scores"].push(Pair("bob", 78))
+println(registry["scores"], registry["scores"].peek()?.first)
+
+// > Stack(10, 20, 30) peek 30 pop 30 -> Stack(10, 20) size 2
+// > empty stack pop: null
+// > reversed: not or be to
+// > dequeue: ann bob - still waiting: 1
+// > then: cy di null (empty now)
+// > (age, 31) (31, age) (age, 31) first: age second: 32
+// > (a, 1) (b, 2) (c, 3)
+// > (1.5, x) (2.5, y)
+// > largest: 9 zebra 2.5 null
+// > count: 2 2
+// > drain a countdown: 5 4 3 2 1
+// > drain words: generic | interfaces | are | structural
+// > Stack((ann, 91), (bob, 78)) bob

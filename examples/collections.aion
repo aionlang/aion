@@ -1,0 +1,110 @@
+// Collections: List, Map, Set and Array, with literals, slicing, iteration and the usual operations.
+//
+//   aion examples/collections.aion
+
+// Lists grow; use a literal or the constructor.
+fruits := ["apple", "banana", "cherry"]
+fruits.add("date")
+fruits.addAll(["elderberry", "fig"])
+println(fruits, "size", fruits.size(), "first", fruits.first(), "last", fruits.last())
+println("index 2:", fruits[2], " slice [1..3]:", fruits[1..3], " from 4:", fruits[4..], " first three:", fruits.take(3), " without three:", fruits.drop(3))
+fruits[0] = "avocado"
+removed := fruits.removeAt(1)
+println("after changes:", fruits, "- removed", removed, "- popped", fruits.pop(), "- now", fruits.size(), "items")
+println("contains cherry:", "cherry" in fruits, " indexOf date:", fruits.indexOf("date"), " reversed:", fruits.reversed())
+
+// Transforming: map, filter, fold, any, all, sorting.
+nums := [5, 3, 8, 1, 9, 2, 7]
+println("doubled", nums.map { it * 2 }, "| big", nums.filter { it > 4 }, "| sum", nums.fold(0) { a, b -> a + b })
+println("sorted", nums.sorted(), "| descending", nums.sortedDescending(), "| max", nums.maxOrNull(), "min", nums.minOrNull())
+println("sorted by distance from 5:", nums.sortedBy { (it - 5).abs() })
+println("any even:", nums.any { it % 2 == 0 }, " all positive:", nums.all { it > 0 }, " count > 4:", nums.count { it > 4 })
+
+// Maps pair keys with values and remember the order of insertion.
+stock := {"apples": 12, "pears": 0, "plums": 7}
+stock["kiwis"] = 30
+stock["pears"] = stock["pears"] + 5
+println(stock, "size", stock.size())
+println("apples:", stock["apples"], " missing:", stock.getOrNull("limes"), " with default:", stock.getOr("limes", 0), " has plums:", "plums" in stock)
+stock.remove("plums")
+println("keys:", stock.keys(), " values:", stock.values())
+for entry in stock { println("  ${entry.key.padRight(7)} ${entry.value}") }
+biggest := stock.entries().sortedBy { it.value }.last()
+println("best stocked:", biggest.key, "with", biggest.value)
+
+// Counting and grouping are the two jobs maps do most.
+sentence := "one fish two fish red fish blue fish"
+counts := Map<String, Int>()
+for word in sentence.split(" ") { counts[word] = counts.getOr(word, 0) + 1 }
+println(counts)
+
+byLength := Map<Int, List<String>>()
+for word in sentence.split(" ") {
+    if !(word.length() in byLength) { byLength[word.length()] = List<String>() }
+    byLength[word.length()].add(word)
+}
+for length in byLength.keys().sorted() { println("  length $length:", byLength[length]) }
+
+// Sets hold each value once.
+seen := Set<Int>()
+duplicates := List<Int>()
+for n in [3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5] {
+    if !seen.add(n) { duplicates.add(n) }
+}
+println("distinct:", seen.toList().sorted(), " repeated values:", duplicates, " contains 9:", 9 in seen)
+evens := setOf([2, 4, 6, 8])
+small := setOf([1, 2, 3, 4])
+println("both:", evens.toList().filter { it in small }, " only evens:", evens.toList().filter { !(it in small) })
+
+// Lists of lists make a grid.
+grid := List<List<Int>>()
+for r in 0..3 {
+    row := List<Int>()
+    for c in 0..4 { row.add(r * 4 + c) }
+    grid.add(row)
+}
+for row in grid { println(row.map { it.toString().padLeft(2) }.join(" ")) }
+transposed := List<List<Int>>()
+for c in 0..4 { transposed.add(grid.map { it[c] }) }
+diagonal := 0
+for i in 0..3 { diagonal += grid[i][i] }
+println("column 2:", transposed[2], " diagonal sum:", diagonal)
+
+// Arrays are fixed-size and fast: good for numbers you index heavily.
+squares := Array(10, 0)
+for i in 0..10 { squares[i] = i * i }
+println("array:", squares.size(), "elements, squares[7] =", squares[7])
+
+// Sorting your own types with a comparison function.
+type Version(major: Int, minor: Int) {
+    fn toString() = "v$major.$minor"
+}
+versions := [Version(1, 10), Version(1, 2), Version(0, 9), Version(2, 0)]
+println(versions.sortedWith { a, b -> if a.major != b.major { a.major - b.major } else { a.minor - b.minor } })
+
+// > [apple, banana, cherry, date, elderberry, fig] size 6 first apple last fig
+// > index 2: cherry  slice [1..3]: [banana, cherry]  from 4: [elderberry, fig]  first three: [apple, banana, cherry]  without three: [date, elderberry, fig]
+// > after changes: [avocado, cherry, date, elderberry, fig] - removed banana - popped fig - now 4 items
+// > contains cherry: true  indexOf date: 2  reversed: [elderberry, date, cherry, avocado]
+// > doubled [10, 6, 16, 2, 18, 4, 14] | big [5, 8, 9, 7] | sum 35
+// > sorted [1, 2, 3, 5, 7, 8, 9] | descending [9, 8, 7, 5, 3, 2, 1] | max 9 min 1
+// > sorted by distance from 5: [5, 3, 7, 8, 2, 1, 9]
+// > any even: true  all positive: true  count > 4: 4
+// > {apples: 12, pears: 5, plums: 7, kiwis: 30} size 4
+// > apples: 12  missing: null  with default: 0  has plums: true
+// > keys: [apples, pears, kiwis]  values: [12, 5, 30]
+// >   apples  12
+// >   pears   5
+// >   kiwis   30
+// > best stocked: kiwis with 30
+// > {one: 1, fish: 4, two: 1, red: 1, blue: 1}
+// >   length 3: [one, two, red]
+// >   length 4: [fish, fish, fish, blue, fish]
+// > distinct: [1, 2, 3, 4, 5, 6, 9]  repeated values: [1, 5, 3, 5]  contains 9: true
+// > both: [2, 4]  only evens: [6, 8]
+// >  0  1  2  3
+// >  4  5  6  7
+// >  8  9 10 11
+// > column 2: [2, 6, 10]  diagonal sum: 15
+// > array: 10 elements, squares[7] = 49
+// > [v0.9, v1.2, v1.10, v2.0]

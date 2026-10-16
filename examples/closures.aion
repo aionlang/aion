@@ -1,0 +1,124 @@
+// Functions are values: lambdas, closures that remember variables, higher-order functions, and a dispatch table.
+//
+//   aion examples/closures.aion
+
+import math
+
+// A lambda: `{ parameters -> body }`.  With one parameter you can just say `it`.
+double := { x: Int -> x * 2 }
+square: (Int) -> Int = { it * it }     // `it` needs to know the parameter type, so say what the variable is
+fn apply(f: (Int) -> Int, x: Int) -> Int = f(x)
+
+println(double(21), apply(square, 7), apply({ it + 100 }, 1))
+
+// A trailing lambda goes after the parentheses.
+fn repeatTimes(n: Int, action: (Int) -> Unit) {
+    for i in 0..n { action(i) }
+}
+repeatTimes(3) { println("round $it") }
+
+// Closures remember the variables around them, and can change them.
+fn counter() -> () -> Int {
+    count := 0
+    return {
+        count += 1
+        count
+    }
+}
+a := counter()
+b := counter()
+println(a(), a(), a(), "| the other counter starts again:", b())
+
+fn adder(n: Int) -> (Int) -> Int = { x -> x + n }
+addFive := adder(5)
+println("addFive(10) =", addFive(10), " adder(1)(2) =", adder(1)(2))
+
+// Combining functions.
+fn compose<A, B, C>(f: (A) -> B, g: (B) -> C) -> (A) -> C = { x -> g(f(x)) }
+
+shout := compose({ s: String -> s.upper() }, { s: String -> s + "!" })
+lengthOfShout := compose(shout, { s: String -> s.length() })
+println(shout("hello"), lengthOfShout("hello"))
+
+// Turn a function of two arguments into a chain of one-argument functions.
+fn curry(f: (Int, Int) -> Int) -> (Int) -> (Int) -> Int = { a -> { b -> f(a, b) } }
+add := curry({ x, y -> x + y })
+println("curried add:", add(3)(4))
+
+// A generic memoiser: wraps any Int → Int function and remembers its answers.
+fn memoize(f: (Int) -> Int) -> (Int) -> Int {
+    seen := Map<Int, Int>()
+    return { n ->
+        known := seen.getOrNull(n)
+        if known != null {
+            known
+        } else {
+            value := f(n)
+            seen[n] = value
+            value
+        }
+    }
+}
+evaluations := 0
+slowSquare := { n: Int ->
+    evaluations += 1
+    n * n
+}
+fastSquare := memoize(slowSquare)
+println(fastSquare(12), fastSquare(12), fastSquare(12), "- computed", evaluations, "time")
+
+// Higher-order functions on lists.
+numbers := [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+println("squares:      ", numbers.map { it * it }.join(" "))
+println("even:         ", numbers.filter { it % 2 == 0 }.join(" "))
+println("sum:          ", numbers.fold(0) { total, n -> total + n })
+println("product:      ", numbers.reduce { a, b -> a * b })
+println("any > 9:      ", numbers.any { it > 9 }, " all > 0:", numbers.all { it > 0 }, " count odd:", numbers.count { it % 2 == 1 })
+println("first > 4:    ", numbers.find { it > 4 }, " first > 99:", numbers.find { it > 99 })
+numbers.forEach { n -> if n % 5 == 0 { println("multiple of five: $n") } }
+
+// A table of named operations.
+operations := Map<String, (Float, Float) -> Float>()
+operations["add"] = { x, y -> x + y }
+operations["mul"] = { x, y -> x * y }
+operations["pow"] = { x, y -> math.pow(x, y) }
+for name in ["add", "mul", "pow", "nope"] {
+    op := operations.getOrNull(name)
+    if op == null {
+        println(name, "-> unknown operation")
+    } else {
+        println(name, "->", op(3.0, 4.0))
+    }
+}
+
+// Closures capture variables, not values: all three see the same `total`.
+total := 0
+adders := List<() -> Unit>()
+for i in 1..=3 {
+    adders.add { total += i * 10 }
+}
+for f in adders { f() }
+println("total after running three closures:", total)
+
+// > 42 49 101
+// > round 0
+// > round 1
+// > round 2
+// > 1 2 3 | the other counter starts again: 1
+// > addFive(10) = 15  adder(1)(2) = 3
+// > HELLO! 6
+// > curried add: 7
+// > 144 144 144 - computed 1 time
+// > squares:       1 4 9 16 25 36 49 64 81 100
+// > even:          2 4 6 8 10
+// > sum:           55
+// > product:       3628800
+// > any > 9:       true  all > 0: true  count odd: 5
+// > first > 4:     5  first > 99: null
+// > multiple of five: 5
+// > multiple of five: 10
+// > add -> 7
+// > mul -> 12
+// > pow -> 81
+// > nope -> unknown operation
+// > total after running three closures: 60

@@ -1,0 +1,125 @@
+// Tasks and channels: many things in flight at once, taking turns on one thread.  A task runs until it waits
+// (for a sleep, a channel, another task), so there are no data races and no locks.
+//
+//   aion examples/tasks.aion
+
+// `launch` starts a task and returns a Job; `join()` waits for it.
+job := launch {
+    println("  the task starts")
+    sleep(20)
+    println("  the task finishes")
+}
+println("main: launched, now waiting")
+job.join()
+println("main: the task is done:", job.isDone())
+
+// `async` is a task with a result; `await()` waits for the value.
+fn slowSquare(n: Int) -> Int {
+    sleep(10)
+    return n * n
+}
+squares := List<Task<Int>>()
+for n in 1..=5 { squares.add(async { slowSquare(n) }) }
+total := 0
+for t in squares { total += t.await() }
+println("sum of squares computed side by side:", total)
+
+// Sleeps decide the order in which tasks wake up.
+println()
+for ms in [60, 20, 40] {
+    launch {
+        sleep(ms)
+        println("woke after $ms ms")
+    }
+}
+waitAll()
+
+// A channel passes values between tasks.  This producer and consumer never share a variable.
+println()
+numbers := Channel<Int>(3)          // room for three values; send waits when it is full
+launch {
+    for i in 1..=6 { numbers.send(i * i) }
+    numbers.close()
+}
+received := List<Int>()
+while true {
+    n := numbers.receive()
+    if n == null { break }          // null: the channel was closed and is empty
+    received.add(n)
+}
+println("received:", received.join(" "))
+
+// A pipeline of stages, each a task, connected by channels.
+fn stage(input: Channel<Int>, output: Channel<Int>, work: (Int) -> Int) {
+    launch {
+        while true {
+            n := input.receive()
+            if n == null { break }
+            output.send(work(n))
+        }
+        output.close()
+    }
+}
+source := Channel<Int>(2)
+doubled := Channel<Int>(2)
+plusOne := Channel<Int>(2)
+stage(source, doubled) { it * 2 }
+stage(doubled, plusOne) { it + 1 }
+launch {
+    for i in 1..=5 { source.send(i) }
+    source.close()
+}
+println("pipeline:", plusOne.drain().join(" "))
+
+// A pool of workers sharing a job queue; the results come back on another channel.
+println()
+jobs := Channel<Int>(10)
+results := Channel<String>(10)
+for id in 1..=3 {
+    launch {
+        while true {
+            n := jobs.receive()
+            if n == null { break }
+            sleep(5)
+            results.send("job $n -> ${n * n * n} (worker $id)")
+        }
+    }
+}
+for n in 1..=9 { jobs.send(n) }
+jobs.close()
+got := List<String>()
+for i in 1..=9 { got.add(results.receive()!!) }
+// which worker took which job depends on timing, so show only the results
+println(got.map { it.substring(0, it.indexOf(" (")) }.sorted().join(", "))
+
+// Tasks can wait for each other: the main program gathers a few results.
+fn fetch(name: String, delay: Int) -> String {
+    sleep(delay)
+    return "$name (after $delay ms)"
+}
+a := async { fetch("alpha", 30) }
+b := async { fetch("beta", 10) }
+c := async { fetch("gamma", 20) }
+println("gathered in order asked:", a.await(), "|", b.await(), "|", c.await())
+
+// Mistakes are reported: waiting for something that can never happen is a deadlock.
+stuck := Channel<Int>()
+outcome := try { stuck.receive(); "got something" } catch e { "caught: $e" }
+println(outcome)
+
+// > main: launched, now waiting
+// >   the task starts
+// >   the task finishes
+// > main: the task is done: true
+// > sum of squares computed side by side: 55
+// >
+// > woke after 20 ms
+// > woke after 40 ms
+// > woke after 60 ms
+// >
+// > received: 1 4 9 16 25 36
+// > pipeline: 3 5 7 9 11
+// >
+// > job 1 -> 1, job 2 -> 8, job 3 -> 27, job 4 -> 64, job 5 -> 125, job 6 -> 216, job 7 -> 343, job 8 -> 512, job 9 -> 729
+// > gathered in order asked: alpha (after 30 ms) | beta (after 10 ms) | gamma (after 20 ms)
+// > caught: deadlock: every task is waiting and none can continue

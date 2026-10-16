@@ -1,0 +1,142 @@
+// Text: strings and characters, the methods you will use every day, and a handful of classic exercises -
+// palindromes, anagrams, a Caesar cipher, run-length encoding and Roman numerals.
+//
+//   aion examples/strings.aion
+
+text := "The quick brown fox jumps over the lazy dog"
+
+// Basics: strings are immutable UTF-8 text; length() counts bytes, charCount() counts characters.
+println(text.length(), text.upper(), text.lower())
+println(text.contains("fox"), text.startsWith("The"), text.endsWith("cat"), text.indexOf("quick"), text.indexOf("cat"))
+println(text.substring(4, 9), "|", text[4..9], "|", text[..3], "|", text[40..])
+println("  padded  ".trim() + "|", "ab".repeat(3), "7".padLeft(3, "0"), "x".padRight(4, ".") + "|")
+println("héllo wörld".length(), "héllo wörld".charCount(), "héllo".chars().map { it.upper().toString() }.join(""))
+
+// Interpolation puts any value or expression into a string.
+name := "Aion"
+version := 3
+println("$name v$version: ${name.length()} letters, next is v${version + 1}")
+
+// Splitting and joining.
+words := text.split(" ")
+println(words.size(), "words; longest:", words.sortedBy { it.length() }.last(), "; joined with dashes:", words.take(3).join("-"))
+println("a,b,,c".split(","), "no commas".split(","), "line one\nline two\r\nline three".lines())
+println("replace:", text.replace("o", "0"), "|", "2024-03-15".replace("-", "/"))
+
+// Characters: a Char is a single code point.  Walk a string with a `for` loop.
+vowels := 0
+for c in text.lower() {
+    if c == 'a' || c == 'e' || c == 'i' || c == 'o' || c == 'u' { vowels += 1 }
+}
+println("vowels:", vowels, " letters:", text.chars().count { it.isLetter() }, " spaces:", text.chars().count { it.isWhitespace() })
+println('a'.code(), 'a' + 2, ('a' + 25).upper(), 'Z'.lower(), '7'.digitValue(), 97.toChar(), 'é'.upper())
+
+// A character range, and the alphabet built from it.
+alphabet := StringBuilder()
+for c in 'a'..='z' { alphabet.appendChar(c) }
+println(alphabet)
+
+// Palindromes: ignore case and anything that is not a letter.
+fn isPalindrome(s: String) -> Bool {
+    letters := s.chars().filter { it.isLetter() }.map { it.lower() }
+    for i in 0..letters.size() / 2 {
+        if letters[i] != letters[letters.size() - 1 - i] { return false }
+    }
+    return true
+}
+for phrase in ["A man, a plan, a canal: Panama", "Was it a car or a cat I saw?", "Hello, world"] {
+    println(isPalindrome(phrase), "-", phrase)
+}
+
+// Anagrams: the same letters in a different order.
+fn sortedLetters(s: String) -> String {
+    return s.lower().chars().filter { it.isLetter() }.sorted().map { it.toString() }.join("")
+}
+println(sortedLetters("Listen") == sortedLetters("Silent"), sortedLetters("Dormitory") == sortedLetters("dirty room"), sortedLetters("abc") == sortedLetters("abd"))
+
+// A Caesar cipher: shift every letter, keep case, leave other characters alone.
+fn caesar(s: String, shift: Int) -> String {
+    out := StringBuilder()
+    for c in s {
+        if c.isLetter() && c.code() < 128 {
+            base := if c.isUpper() { 'A' } else { 'a' }
+            out.appendChar(base + ((c - base) + shift + 26) % 26)
+        } else {
+            out.appendChar(c)
+        }
+    }
+    return out.toString()
+}
+secret := caesar("Attack at Dawn!", 3)
+println(secret, "->", caesar(secret, -3))
+
+// Run-length encoding: "aaabcc" becomes "a3b1c2".
+fn encode(s: String) -> String {
+    out := StringBuilder()
+    chars := s.chars()
+    i := 0
+    while i < chars.size() {
+        j := i
+        while j < chars.size() && chars[j] == chars[i] { j += 1 }
+        out.appendChar(chars[i])
+        out.append("${j - i}")
+        i = j
+    }
+    return out.toString()
+}
+println(encode("aaabccddddd"), encode("abc"), encode(""))
+
+// Roman numerals, from a table.
+fn roman(n: Int) -> String {
+    values := [1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1]
+    symbols := ["M", "CM", "D", "CD", "C", "XC", "L", "XL", "X", "IX", "V", "IV", "I"]
+    out := StringBuilder()
+    rest := n
+    for i in 0..values.size() {
+        while rest >= values[i] {
+            out.append(symbols[i])
+            rest -= values[i]
+        }
+    }
+    return out.toString()
+}
+println([4, 9, 14, 40, 90, 400, 1994, 2024, 3999].map { roman(it) }.join(" "))
+
+// Counting characters with a Map, then showing the top three.
+counts := Map<Char, Int>()
+for c in text.lower() {
+    if c.isLetter() { counts[c] = counts.getOr(c, 0) + 1 }
+}
+top := counts.entries().sortedWith { a, b -> if a.value != b.value { b.value - a.value } else { a.key.code() - b.key.code() } }
+println("most common letters:", top.take(3).map { "${it.key}=${it.value}" }.join(" "))
+
+// Multi-line text: triple quotes keep the line breaks; raw strings keep backslashes.
+poem := """
+Roses are red,
+Violets are blue,
+"""
+println(poem.lines().size(), "lines;", poem.lines().map { it.length() }.join(","), "characters each")
+println(r"C:\new\table", "vs", "C:\\new\\table")
+
+// > 43 THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG the quick brown fox jumps over the lazy dog
+// > true true false 4 -1
+// > quick | quick | The | dog
+// > padded| ababab 007 x...|
+// > 13 11 HÉLLO
+// > Aion v3: 4 letters, next is v4
+// > 9 words; longest: jumps ; joined with dashes: The-quick-brown
+// > [a, b, , c] [no commas] [line one, line two, line three]
+// > replace: The quick br0wn f0x jumps 0ver the lazy d0g | 2024/03/15
+// > vowels: 11  letters: 35  spaces: 8
+// > 97 c Z z 7 a É
+// > abcdefghijklmnopqrstuvwxyz
+// > true - A man, a plan, a canal: Panama
+// > true - Was it a car or a cat I saw?
+// > false - Hello, world
+// > true true false
+// > Dwwdfn dw Gdzq! -> Attack at Dawn!
+// > a3b1c2d5 a1b1c1
+// > IV IX XIV XL XC CD MCMXCIV MMXXIV MMMCMXCIX
+// > most common letters: o=4 e=3 h=2
+// > 2 lines; 14,17 characters each
+// > C:\new\table vs C:\new\table

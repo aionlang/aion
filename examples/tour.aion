@@ -1,0 +1,85 @@
+#!/usr/bin/env aion
+// A quick tour of Aion: everything on this page is explained in docs/language.md, and every feature has
+// a bigger example in this folder.  Run it with:  aion examples/tour.aion
+
+// ── Variables and types ─────────────────────────────────────────
+name := "Aion"            // `:=` declares a variable; the type is inferred
+year: Int = 2026          // or write the type yourself
+pi := 3.14159             // Float
+ready := true             // Bool
+initial := 'A'            // Char
+println("$name, $year, $pi, $ready, $initial")
+year += 1                 // variables can be reassigned
+
+// ── Control flow ────────────────────────────────────────────────
+// `if` and `when` are expressions, so they can produce a value.
+size := if year > 2030 { "far" } else { "near" }
+grade := when 78 {
+    in 90..100 -> "A"
+    in 70..89 -> "B"
+    else -> "C"
+}
+println(size, grade)
+
+for i in 1..=3 { print("$i;") }       // 1..=3 includes 3, 1..3 stops before it
+println()
+n := 10
+while n > 1 { n = if n % 2 == 0 { n / 2 } else { 3 * n + 1 } }
+println("reached", n)
+
+// ── Functions ───────────────────────────────────────────────────
+fn square(x: Int) -> Int = x * x                       // one-expression body
+fn greet(who: String, punctuation: String = "!") {     // default argument
+    println("Hello, $who$punctuation")
+}
+greet("world")
+greet(punctuation: "?", who: "named arguments")        // arguments can be named, in any order
+println(square(12))
+
+// ── Types ───────────────────────────────────────────────────────
+// The constructor parameters are also the fields.
+type Point(x: Int, y: Int) {
+    fn distanceTo(other: Point) = ((x - other.x).abs() + (y - other.y).abs())
+    fn toString() = "($x, $y)"
+}
+origin := Point(0, 0)
+corner := Point(3, 4)
+println(origin, corner, "taxicab distance", corner.distanceTo(origin))
+
+// Add methods to existing types.
+fn String.shout() = upper() + "!"
+println("quiet".shout())
+
+// ── Collections and lambdas ─────────────────────────────────────
+scores := {"ann": 91, "bob": 78, "cy": 85}
+passed := scores.entries().filter { it.value >= 80 }.map { it.key }
+println("passed:", passed.join(", "))
+numbers := [4, 8, 15, 16, 23, 42]
+println(numbers.map { it * 2 }, numbers.fold(0) { sum, n -> sum + n })
+
+// ── Missing values ──────────────────────────────────────────────
+age := scores.getOrNull("dan")      // Int? - might be null
+println(age ?: -1, scores.getOrNull("ann")!! + 1)
+
+// ── Errors ──────────────────────────────────────────────────────
+safe := try { 10 / (year - year) } catch e { 0 }
+println("a division by zero became $safe")
+
+// ── Standard library ────────────────────────────────────────────
+import math
+println(math.sqrt(2.0).format(4), "7".toIntOr(0) + 1, "a-b-c".split("-").size())
+
+// > Aion, 2026, 3.14159, true, A
+// > near B
+// > 1;2;3;
+// > reached 1
+// > Hello, world!
+// > Hello, named arguments?
+// > 144
+// > (0, 0) (3, 4) taxicab distance 7
+// > QUIET!
+// > passed: ann, cy
+// > [8, 16, 30, 32, 46, 84] 108
+// > -1 92
+// > a division by zero became 0
+// > 1.4142 8 3

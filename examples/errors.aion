@@ -1,0 +1,134 @@
+// When things go wrong: `panic`, catching with `try`/`catch`, `defer` for cleanup, and the two styles of
+// reporting trouble (return null for "expected", panic for "should never happen").
+//
+//   aion examples/errors.aion
+
+// Expected problems are values: return null (or a message) and let the caller decide.
+fn safeDivide(a: Int, b: Int) -> Int? = if b == 0 { null } else { a / b }
+println(safeDivide(10, 2), safeDivide(1, 0))
+
+// Programmer errors stop the program with a message...
+fn withdraw(balance: Int, amount: Int) -> Int {
+    if amount > balance { panic("insufficient funds: balance $balance, wanted $amount") }
+    return balance - amount
+}
+
+// ...unless somebody catches it.  `try { ... } catch e { ... }` is an expression.
+result := try { withdraw(100, 30) } catch e { -1 }
+println("withdraw 30:", result)
+result = try { withdraw(100, 300) } catch e { -1 }
+println("withdraw 300:", result)
+
+message := try {
+    withdraw(5, 10)
+    "fine"
+} catch e {
+    "caught: $e"
+}
+println(message)
+
+// The built-in failures can be caught the same way.
+fn attempt(action: () -> Unit) -> String = try {
+    action()
+    "no problem"
+} catch e {
+    "caught: $e"
+}
+println(attempt { [1, 2, 3][10] })
+println(attempt { 10 / (3 - 3) })
+println(attempt { "abc".substring(2, 9) })
+nothing: Int? = null
+println(attempt { nothing!! })
+println(attempt { Map<String, Int>()["missing"] })
+println(attempt { println("this one is fine") })
+
+// `defer` schedules cleanup for when the enclosing block ends - however it ends.
+fn process(name: String, fail: Bool) -> String {
+    println("  open $name")
+    defer println("  close $name")
+    if fail { panic("$name broke") }
+    println("  working on $name")
+    return "$name done"
+}
+println(process("first", false))
+println(try { process("second", true) } catch e { "recovered: $e" })
+
+// Several defers run last-in, first-out, like unwinding a stack.
+fn layers() {
+    defer println("  unwound layer 1")
+    defer println("  unwound layer 2")
+    defer println("  unwound layer 3")
+    println("  doing the work")
+}
+layers()
+
+// Defer inside a loop runs at the end of each pass.
+for i in 1..=2 {
+    defer println("  end of pass $i")
+    println("  pass $i")
+}
+
+// A retry loop: try something that fails the first few times.
+attempts := 0
+fn flaky() -> String {
+    attempts += 1
+    if attempts < 3 { panic("attempt $attempts failed") }
+    return "worked on attempt $attempts"
+}
+outcome := "gave up"
+for round in 1..=5 {
+    got := try { flaky() } catch e {
+        println("  retrying after: $e")
+        ""
+    }
+    if got != "" {
+        outcome = got
+        break
+    }
+}
+println(outcome)
+
+// Validate input with early returns, collecting every problem rather than stopping at the first.
+fn validate(name: String, age: Int, email: String) -> List<String> {
+    problems := List<String>()
+    if name.trim().isEmpty() { problems.add("name is empty") }
+    if age < 0 || age > 150 { problems.add("age $age is out of range") }
+    if !email.contains("@") { problems.add("email '$email' has no @") }
+    return problems
+}
+for row in [["Ann", "31", "ann@x.org"], ["", "200", "nobody"]] {
+    problems := validate(row[0], row[1].toIntOr(0), row[2])
+    println(if problems.isEmpty() { "valid" } else { problems.join("; ") })
+}
+
+// > 5 null
+// > withdraw 30: 70
+// > withdraw 300: -1
+// > caught: insufficient funds: balance 5, wanted 10
+// > caught: index 10 is out of bounds for size 3
+// > caught: division by zero
+// > caught: substring(2, 9) is out of range for length 3
+// > caught: unexpected null value
+// > caught: no such key: missing
+// > this one is fine
+// > no problem
+// >   open first
+// >   working on first
+// >   close first
+// > first done
+// >   open second
+// >   close second
+// > recovered: second broke
+// >   doing the work
+// >   unwound layer 3
+// >   unwound layer 2
+// >   unwound layer 1
+// >   pass 1
+// >   end of pass 1
+// >   pass 2
+// >   end of pass 2
+// >   retrying after: attempt 1 failed
+// >   retrying after: attempt 2 failed
+// > worked on attempt 3
+// > valid
+// > name is empty; age 200 is out of range; email 'nobody' has no @
