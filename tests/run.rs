@@ -627,7 +627,10 @@ fn check_example(path: &Path, entry: &Path, project: bool) -> Result<(), String>
     if !out.status.success() {
         return Err(format!("{name} exited with {:?}:\n{}", out.status.code(), stderr(&out)));
     }
-    let actual = stdout(&out);
+    // spaces at the end of a line do not count (editors strip them from the comments)
+    let tidy = |text: &str| text.lines().map(|l| l.trim_end().to_string()).collect::<Vec<_>>().join("\n");
+    let actual = tidy(&stdout(&out));
+    let expected = tidy(&expected);
     if actual != expected {
         let (a, e): (Vec<&str>, Vec<&str>) = (actual.lines().collect(), expected.lines().collect());
         let at = a.iter().zip(&e).position(|(x, y)| x != y).unwrap_or(a.len().min(e.len()));
