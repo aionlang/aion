@@ -40,11 +40,13 @@ struct Parser<'a> {
     no_brace: bool,
     /// How many temporaries the parser has introduced, to keep their names apart.
     temps: usize,
+    /// After `is` / `as`: a `?` followed by an expression is the conditional operator, not `T?`.
+    question_is_ternary: bool,
 }
 
 impl<'a> Parser<'a> {
     fn new(file: u32, src: &'a str, base: usize) -> Result<Self> {
-        Ok(Parser { file, src, base, toks: lex(file, src, base)?, pos: 0, ignore_nl: false, no_brace: false, temps: 0 })
+        Ok(Parser { file, src, base, toks: lex(file, src, base)?, pos: 0, ignore_nl: false, no_brace: false, temps: 0, question_is_ternary: false })
     }
 
     // ── token plumbing ──────────────────────────────────────────
@@ -112,11 +114,43 @@ impl<'a> Parser<'a> {
 
     /// A type that may be followed by `?`.
     fn nullable(&mut self, ty: TypeRef) -> TypeRef {
-        if self.peek() == Some(Token::Question) {
+        if self.peek() == Some(Token::Question) && !(self.question_is_ternary && self.expression_follows_question()) {
             let q = self.bump().span;
             let span = ty.span.to(q);
             return TypeRef { kind: TypeKind::Nullable(Box::new(ty)), span };
         }
+        ty
+    }
+
+    /// Does the `?` ahead have an expression after it, on the same line, as in `x is Dog ? 1 : 2`?
+    fn expression_follows_question(&self) -> bool {
+        let Some(next) = self.toks.get(self.pos + 1) else { return false };
+        !next.nl
+            && matches!(
+                next.kind,
+                Token::Int
+                    | Token::Float
+                    | Token::Char
+                    | Token::Str
+                    | Token::RawStr
+                    | Token::Ident
+                    | Token::LParen
+                    | Token::LBracket
+                    | Token::Minus
+                    | Token::Bang
+                    | Token::True
+                    | Token::False
+                    | Token::Null
+                    | Token::If
+                    | Token::When
+            )
+    }
+
+    /// The type after `is` or `as`.
+    fn type_after_is(&mut self) -> Result<TypeRef> {
+        let saved = std::mem::replace(&mut self.question_is_ternary, true);
+        let ty = self.type_ref();
+        self.question_is_ternary = saved;
         ty
     }
 
@@ -887,7 +921,7 @@ impl<'a> Parser<'a> {
                 if negated_is {
                     self.bump();
                 }
-                let ty = self.type_ref()?;
+                let ty = self.type_after_is()?;
                 let span = lhs.span.to(ty.span);
                 lhs = Expr { kind: ExprKind::Is { value: Box::new(lhs), ty, negated: negated_is }, span };
                 continue;
@@ -898,7 +932,7 @@ impl<'a> Parser<'a> {
                 }
                 self.bump();
                 let safe = self.eat(Token::Question);
-                let ty = self.type_ref()?;
+                let ty = self.type_after_is()?;
                 let span = lhs.span.to(ty.span);
                 lhs = Expr { kind: ExprKind::Cast { value: Box::new(lhs), ty, safe }, span };
                 continue;
@@ -1803,6 +1837,9 @@ mod tests {
         assert!(matches!(parse_expr("a ?: b").kind, ExprKind::Elvis(..)));
         assert!(matches!(parse_expr("a ? b ?: c : d").kind, ExprKind::If { .. }));
         assert!(Parser::new(0, "a ? b", 0).and_then(|mut p| p.expr()).is_err());
+        // `T?` after `is` is still a nullable type unless an expression follows the `?`
+        assert!(matches!(parse_expr("a is Dog ? 1 : 2").kind, ExprKind::If { .. }));
+        assert!(matches!(parse_expr("a is Dog? && b").kind, ExprKind::Binary(BinOp::And, ..)));
     }
 
     #[test]

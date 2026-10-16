@@ -18,3 +18,10 @@ println(age > 18
     ? "multi"
     : "line")
 println(1 + 2 > 2 ? 10 * 2 : 5)
+
+// after `is` and `as`, a `?` followed by an expression is the conditional, not a nullable type
+open type Animal(name: String)
+type Dog(name: String) : Animal(name)
+pet: Animal = Dog("rex")
+println(pet is Dog ? "dog" : "other")
+println(pet !is Dog ? "other" : "dog")
