@@ -1,0 +1,45 @@
+// The map of the game, read from data/world.json.
+
+import fs
+import json
+
+type Room(id: String, name: String, description: String) {
+    exits: Map<String, String> = Map<String, String>()
+    items: List<String> = List<String>()
+    // direction -> the item needed to go that way
+    locks: Map<String, String> = Map<String, String>()
+}
+
+type World(start: String, goal: String) {
+    rooms: Map<String, Room> = Map<String, Room>()
+}
+
+// Read the world file.  Null (and `problem`) if it is missing or malformed.
+problem := ""
+fn load(file: String) -> World? {
+    text := fs.readText(file)
+    if text == null {
+        problem = "cannot read $file: ${fs.lastError()}"
+        return null
+    }
+    doc := json.parse(text)
+    if doc == null {
+        problem = "$file is not valid JSON: ${json.lastError()}"
+        return null
+    }
+    world := World(doc.getString("start"), doc.getString("goal"))
+    for entry in doc.get("rooms")?.items() ?: [] {
+        room := Room(entry.getString("id"), entry.getString("name"), entry.getString("description"))
+        exits := entry.get("exits")
+        for direction in exits?.keys() ?: [] { room.exits[direction] = exits!!.getString(direction) }
+        for item in entry.get("items")?.items() ?: [] { room.items.add(item.asString() ?: "") }
+        locks := entry.get("locked")
+        for direction in locks?.keys() ?: [] { room.locks[direction] = locks!!.getString(direction) }
+        world.rooms[room.id] = room
+    }
+    if !(world.start in world.rooms) {
+        problem = "the start room '${world.start}' does not exist"
+        return null
+    }
+    return world
+}

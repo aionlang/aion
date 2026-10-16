@@ -1,0 +1,63 @@
+// geometry - points, distances, polygons and convex hulls.
+//
+// This file is what `import geometry` loads.  The shapes live in shapes.aion: `import geometry.shapes`.
+
+import math
+
+type Point(x: Float, y: Float) {
+    fn plus(other: Point) = Point(x + other.x, y + other.y)
+    fn minus(other: Point) = Point(x - other.x, y - other.y)
+    fn scaled(factor: Float) = Point(x * factor, y * factor)
+    fn distanceTo(other: Point) = math.hypot(x - other.x, y - other.y)
+    fn toString() = "(${x.roundTo(3)}, ${y.roundTo(3)})"
+}
+
+fn point(x: Float, y: Float) -> Point = Point(x, y)
+
+// The average of some points; null for none.
+fn centroid(points: List<Point>) -> Point? {
+    if points.isEmpty() { return null }
+    sum := Point(0.0, 0.0)
+    for p in points { sum = sum.plus(p) }
+    return sum.scaled(1.0 / points.size().toFloat())
+}
+
+// Which way do a→b→c turn?  Positive: counter-clockwise, negative: clockwise, zero: a straight line.
+fn turn(a: Point, b: Point, c: Point) -> Float = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+
+// The area of a polygon given its corners in order (the shoelace formula).
+fn polygonArea(corners: List<Point>) -> Float {
+    twice := 0.0
+    for i in 0..corners.size() {
+        a := corners[i]
+        b := corners[(i + 1) % corners.size()]
+        twice += a.x * b.y - b.x * a.y
+    }
+    return twice.abs() / 2.0
+}
+
+fn perimeter(corners: List<Point>) -> Float {
+    total := 0.0
+    for i in 0..corners.size() { total += corners[i].distanceTo(corners[(i + 1) % corners.size()]) }
+    return total
+}
+
+// The smallest convex polygon around the points (Andrew's monotone chain), counter-clockwise.
+fn convexHull(points: List<Point>) -> List<Point> {
+    sorted := points.sortedWith { a, b -> if a.x != b.x { if a.x < b.x { -1 } else { 1 } } else if a.y < b.y { -1 } else if a.y > b.y { 1 } else { 0 } }
+    if sorted.size() < 3 { return sorted }
+    lower := List<Point>()
+    for p in sorted {
+        while lower.size() >= 2 && turn(lower[lower.size() - 2], lower[lower.size() - 1], p) <= 0.0 { lower.pop() }
+        lower.add(p)
+    }
+    upper := List<Point>()
+    for p in sorted.reversed() {
+        while upper.size() >= 2 && turn(upper[upper.size() - 2], upper[upper.size() - 1], p) <= 0.0 { upper.pop() }
+        upper.add(p)
+    }
+    lower.pop()
+    upper.pop()
+    lower.addAll(upper)
+    return lower
+}

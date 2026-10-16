@@ -1,0 +1,29 @@
+// How tasks look on the screen.
+
+import task
+from task import Task
+
+fn line(t: Task) -> String {
+    box := if t.done { "[x]" } else { "[ ]" }
+    return "$box ${t.id.toString().padLeft(2)}  ${t.text.padRight(24)} ${task.priorityName(t.priority)}"
+}
+
+// Open tasks first, then by priority, then by number.
+fn table(tasks: List<Task>) -> String {
+    if tasks.isEmpty() { return "  nothing to do" }
+    ordered := tasks.sortedWith { a, b ->
+        if a.done != b.done {
+            if a.done { 1 } else { -1 }
+        } else if a.priority != b.priority {
+            a.priority - b.priority
+        } else {
+            a.id - b.id
+        }
+    }
+    return ordered.map { "  " + line(it) }.join("\n")
+}
+
+fn summary(tasks: List<Task>) -> String {
+    open := tasks.count { !it.done }
+    return "${tasks.size()} tasks, $open open, ${tasks.size() - open} done"
+}

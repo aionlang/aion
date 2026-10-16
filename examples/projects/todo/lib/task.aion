@@ -1,0 +1,27 @@
+// A to-do item, and how it is turned into JSON and back.
+
+import json
+
+type Task(id: Int, text: String, done: Bool = false, priority: Int = 2) {
+    fn toJson() -> json.Json {
+        return json.object()
+            .put("id", json.int(id))
+            .put("text", json.string(text))
+            .put("done", json.bool(done))
+            .put("priority", json.int(priority))
+    }
+}
+
+// Rebuild a task from a JSON object; null if a field is missing or has the wrong type.
+fn fromJson(doc: json.Json) -> Task? {
+    id := doc.get("id")?.asInt()
+    text := doc.get("text")?.asString()
+    if id == null || text == null { return null }
+    return Task(id, text, doc.getBool("done"), doc.getInt("priority", 2))
+}
+
+fn priorityName(priority: Int) -> String = when priority {
+    1 -> "high"
+    2 -> "normal"
+    else -> "low"
+}

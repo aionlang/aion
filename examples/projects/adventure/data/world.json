@@ -1,0 +1,42 @@
+{
+  "start": "cellar",
+  "goal": "treasure",
+  "rooms": [
+    {
+      "id": "cellar",
+      "name": "Cellar",
+      "description": "A damp cellar. Stone steps lead up.",
+      "exits": { "up": "kitchen" },
+      "items": ["lamp"]
+    },
+    {
+      "id": "kitchen",
+      "name": "Kitchen",
+      "description": "A kitchen with a cold stove. A trapdoor in the floor opens to the cellar; a doorway leads east.",
+      "exits": { "down": "cellar", "east": "hall" },
+      "items": ["key", "bread"]
+    },
+    {
+      "id": "hall",
+      "name": "Great Hall",
+      "description": "A long hall hung with faded banners. A heavy oak door stands to the north.",
+      "exits": { "west": "kitchen", "north": "library", "east": "garden" },
+      "items": [],
+      "locked": { "north": "key" }
+    },
+    {
+      "id": "library",
+      "name": "Library",
+      "description": "Shelves climb into the dark. On a reading desk, something glitters.",
+      "exits": { "south": "hall" },
+      "items": ["treasure", "book"]
+    },
+    {
+      "id": "garden",
+      "name": "Garden",
+      "description": "An overgrown garden, bright after the hall.",
+      "exits": { "west": "hall" },
+      "items": ["flower"]
+    }
+  ]
+}

@@ -1,0 +1,48 @@
+// Using a package: `geometry` is a dependency declared in aion.project.  `import geometry` loads its lib.aion,
+// `import geometry.shapes` its shapes.aion.
+//
+//   cd examples/projects/geometry-demo && aion
+
+import geometry
+import geometry.shapes
+import math
+
+p := geometry.point(1.0, 2.0)
+q := geometry.point(4.0, 6.0)
+println("distance from $p to $q:", p.distanceTo(q))
+println("midpoint:", p.plus(q).scaled(0.5))
+
+// Shapes from the package, all satisfying its Shape interface.
+all: List<shapes.Shape> = [
+    shapes.Circle(geometry.point(0.0, 0.0), 2.0),
+    shapes.Rectangle(geometry.point(0.0, 0.0), 3.0, 4.0),
+    shapes.regular(6, 2.0),
+    shapes.regular(3, 1.0),
+]
+for shape in all {
+    println(shape.name().padRight(22), "area", shape.area().format(3).padLeft(7), "  perimeter", shape.perimeter().format(3).padLeft(7))
+}
+println("largest:", all.sortedBy { it.area() }.last().name())
+
+// The convex hull of a scatter of points (a sunflower pattern: the golden angle spreads them evenly).
+scatter := List<geometry.Point>()
+for i in 0..60 {
+    angle := i.toFloat() * 2.399963
+    radius := math.sqrt(i.toFloat())
+    scatter.add(geometry.point(radius * math.cos(angle), radius * math.sin(angle)))
+}
+hull := geometry.convexHull(scatter)
+println("${scatter.size()} points, ${hull.size()} on the hull; hull area ${geometry.polygonArea(hull).format(2)}, perimeter ${geometry.perimeter(hull).format(2)}")
+println("centroid of the points:", geometry.centroid(scatter))
+println("hull corners:", hull.take(4).join(" "), "...")
+
+// > distance from (1, 2) to (4, 6): 5
+// > midpoint: (2.5, 4)
+// > circle                 area  12.566   perimeter  12.566
+// > rectangle              area  12.000   perimeter  14.000
+// > polygon with 6 corners area  10.392   perimeter  12.000
+// > polygon with 3 corners area   1.299   perimeter   5.196
+// > largest: circle
+// > 60 points, 13 on the hull; hull area 158.98, perimeter 45.60
+// > centroid of the points: (-0.075, 0.011)
+// > hull corners: (-7.486, -1.722) (-5.158, -5.234) (-1.47, -6.844) (1.043, -7.477) ...

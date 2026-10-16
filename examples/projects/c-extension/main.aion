@@ -1,0 +1,47 @@
+// Calling C from Aion: a project that compiles its own C file (native/bits.c) into the program.  The
+// aion.project lists it under `c = [...]`; lib/native.aion declares the functions; here we just use them.
+//
+//   cd examples/projects/c-extension && aion
+
+import native
+
+// popcount in C against the same thing written in Aion.
+fn popcountInAion(n: Int) -> Int {
+    count := 0
+    rest := n
+    while rest != 0 {
+        count += rest.and(1)
+        rest = rest.ushr(1)
+    }
+    return count
+}
+agree := true
+for n in [0, 1, 7, 255, 1024, 123456789, -1, 9223372036854775807] {
+    if native.popcount(n) != popcountInAion(n) { agree = false }
+}
+println("popcount(255) =", native.popcount(255), "| popcount(-1) =", native.popcount(-1), "| C and Aion agree:", agree)
+
+// Text goes in and comes out as an Aion String (the C side copies it with aion_string).
+println(native.reverseText("Hello, Aion!"), "|", native.reverseText("héllo wörld ✓"), "|", native.reverseText("").length())
+
+// Bytes: checksums and a toy cipher.
+println("adler32 of 'Wikipedia':", native.adler32Text("Wikipedia"), "(known value: 11e60398)")
+secret := native.xor("attack at dawn".toBytes(), "k3y".toBytes())
+println("encrypted:", secret.toHex())
+println("decrypted:", native.xor(secret, "k3y".toBytes()).toText())
+
+// Heavy loops belong in C: this counts the primes below two million.
+println("primes below 2,000,000:", native.countPrimes(2000000))
+println("is 2^31 - 1 prime?", native.isPrime(2147483647), "| 2^31 + 1?", native.isPrime(2147483649))
+
+// Floats work too, and the C code can use libm (linked with `link = ["m"]`).
+println("length of (1, 2, 2):", native.length3(1.0, 2.0, 2.0), "| of (3, 4, 12):", native.length3(3.0, 4.0, 12.0))
+
+// > popcount(255) = 8 | popcount(-1) = 64 | C and Aion agree: true
+// > !noiA ,olleH | ✓ dlröw olléh | 0
+// > adler32 of 'Wikipedia': 11e60398 (known value: 11e60398)
+// > encrypted: 0a470d0a50124b520d4b57181c5d
+// > decrypted: attack at dawn
+// > primes below 2,000,000: 148933
+// > is 2^31 - 1 prime? true | 2^31 + 1? false
+// > length of (1, 2, 2): 3 | of (3, 4, 12): 13

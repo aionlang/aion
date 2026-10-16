@@ -1,0 +1,41 @@
+// Shapes with a common interface.  `import geometry.shapes` from a program that depends on this package.
+
+import math
+import lib
+from lib import Point
+
+interface Shape {
+    fn name() -> String
+    fn area() -> Float
+    fn perimeter() -> Float
+}
+
+type Circle(center: Point, radius: Float) {
+    fn name() = "circle"
+    fn area() = math.pi * radius * radius
+    fn perimeter() = 2.0 * math.pi * radius
+    fn contains(p: Point) = center.distanceTo(p) <= radius
+}
+
+type Rectangle(corner: Point, width: Float, height: Float) {
+    fn name() = if width == height { "square" } else { "rectangle" }
+    fn area() = width * height
+    fn perimeter() = 2.0 * (width + height)
+    fn contains(p: Point) = p.x >= corner.x && p.x <= corner.x + width && p.y >= corner.y && p.y <= corner.y + height
+}
+
+type Polygon(corners: List<Point>) {
+    fn name() = "polygon with ${corners.size()} corners"
+    fn area() = lib.polygonArea(corners)
+    fn perimeter() = lib.perimeter(corners)
+}
+
+// A regular polygon with `sides` corners on a circle.
+fn regular(sides: Int, radius: Float) -> Polygon {
+    corners := List<Point>()
+    for i in 0..sides {
+        angle := 2.0 * math.pi * i.toFloat() / sides.toFloat()
+        corners.add(Point(radius * math.cos(angle), radius * math.sin(angle)))
+    }
+    return Polygon(corners)
+}

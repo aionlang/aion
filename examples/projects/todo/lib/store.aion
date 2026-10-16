@@ -1,0 +1,65 @@
+// The list of tasks and the file it is kept in.
+
+import fs
+import json
+import task
+from task import Task
+
+type Store(path: String) {
+    tasks: List<Task> = List<Task>()
+    nextId: Int = 1
+
+    // Read the file if there is one.  A missing file is an empty list; a damaged one is an error.
+    fn load() -> Bool {
+        text := fs.readText(path)
+        if text == null { return true }
+        doc := json.parse(text)
+        if doc == null || doc.kind() != "array" { return false }
+        tasks.clear()
+        for item in doc.items() {
+            t := task.fromJson(item)
+            if t == null { return false }
+            tasks.add(t)
+            nextId = nextId.max(t.id + 1)
+        }
+        return true
+    }
+
+    fn save() -> Bool {
+        list := json.array()
+        for t in tasks { list.add(t.toJson()) }
+        return fs.writeText(path, list.pretty() + "\n")
+    }
+
+    fn add(text: String, priority: Int = 2) -> Task {
+        t := Task(nextId, text, false, priority)
+        nextId += 1
+        tasks.add(t)
+        return t
+    }
+
+    fn find(id: Int) -> Task? = tasks.find { it.id == id }
+
+    fn complete(id: Int) -> Bool {
+        t := find(id)
+        if t == null { return false }
+        t.done = true
+        return true
+    }
+
+    fn remove(id: Int) -> Bool {
+        t := find(id)
+        if t == null { return false }
+        tasks.removeAt(tasks.indexOf(t))
+        return true
+    }
+
+    // Delete the finished tasks; says how many there were.
+    fn clearDone() -> Int {
+        before := tasks.size()
+        kept := tasks.filter { !it.done }
+        tasks.clear()
+        tasks.addAll(kept)
+        return before - tasks.size()
+    }
+}

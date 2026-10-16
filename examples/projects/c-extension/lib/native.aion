@@ -1,0 +1,13 @@
+// The C functions of native/bits.c, declared for Aion.  `extern fn name(parameters) -> Type = "c_symbol"`
+// is the whole binding; ordinary Aion functions around them give a friendlier face.
+
+extern fn popcount(n: Int) -> Int = "bits_popcount"
+extern fn isPrime(n: Int) -> Bool = "bits_is_prime"
+extern fn countPrimes(limit: Int) -> Int = "bits_count_primes"
+extern fn reverseText(s: String) -> String = "bits_reverse_text"
+extern fn adler32(data: Bytes) -> Int = "bits_adler32"
+extern fn xor(data: Bytes, key: Bytes) -> Bytes = "bits_xor"
+extern fn length3(x: Float, y: Float, z: Float) -> Float = "bits_length3"
+
+// An ordinary Aion function built on the C one.
+fn adler32Text(text: String) -> String = adler32(text.toBytes()).toHex().padLeft(8, "0")

@@ -1,0 +1,41 @@
+// Tests for the geometry package: run with  aion tests/check.aion  (from the package folder).
+// Inside its own package the library is just `lib` and the shapes are `shapes`; a program that depends
+// on the package says `import geometry` and `import geometry.shapes` instead.
+// Each check reports itself when it fails.
+
+import lib
+import shapes
+
+failures := 0
+fn check(name: String, ok: Bool) {
+    if !ok {
+        failures += 1
+        println("FAILED:", name)
+    }
+}
+fn near(a: Float, b: Float) = (a - b).abs() < 0.000001
+
+p := lib.point(3.0, 4.0)
+check("distance to origin", near(p.distanceTo(lib.point(0.0, 0.0)), 5.0))
+check("plus and scaled", p.plus(p).scaled(0.5).toString() == p.toString())
+check("centroid", lib.centroid([lib.point(0.0, 0.0), lib.point(4.0, 0.0), lib.point(2.0, 6.0)])!!.toString() == "(2, 2)")
+check("centroid of nothing", lib.centroid(List<lib.Point>()) == null)
+
+square := [lib.point(0.0, 0.0), lib.point(2.0, 0.0), lib.point(2.0, 2.0), lib.point(0.0, 2.0)]
+check("polygon area", near(lib.polygonArea(square), 4.0))
+check("perimeter", near(lib.perimeter(square), 8.0))
+check("orientation", lib.turn(lib.point(0.0, 0.0), lib.point(1.0, 0.0), lib.point(1.0, 1.0)) > 0.0)
+
+cloud := square
+cloud.add(lib.point(1.0, 1.0))
+cloud.add(lib.point(0.5, 1.5))
+check("hull drops inner points", lib.convexHull(cloud).size() == 4)
+
+check("circle area", near(shapes.Circle(lib.point(0.0, 0.0), 1.0).area(), 3.141592653589793))
+check("square is a square", shapes.Rectangle(lib.point(0.0, 0.0), 2.0, 2.0).name() == "square")
+check("regular hexagon", near(shapes.regular(6, 1.0).area(), 3.0 * 1.7320508075688772 / 2.0))
+check("contains", shapes.Circle(lib.point(0.0, 0.0), 1.0).contains(lib.point(0.5, 0.5)))
+
+println(if failures == 0 { "all geometry checks passed" } else { "$failures check(s) failed" })
+
+// > all geometry checks passed

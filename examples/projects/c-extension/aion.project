@@ -1,0 +1,5 @@
+name = "c-extension"
+version = "0.1.0"
+# C files compiled into the program, and system libraries to link with (-lm).
+c = ["native/bits.c"]
+link = ["m"]

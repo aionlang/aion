@@ -1,0 +1,68 @@
+// The rules: where the player is, what they carry, and what each command does.
+
+import world
+from world import World, Room
+
+type Game(world: World) {
+    here: String = world.start
+    inventory: List<String> = List<String>()
+    moves: Int = 0
+    finished: Bool = false
+
+    fn room() -> Room = world.rooms[here]
+
+    fn describe() -> String {
+        r := room()
+        lines := ["== ${r.name} ==", r.description]
+        if !r.items.isEmpty() { lines.add("You see: " + r.items.join(", ") + ".") }
+        lines.add("Exits: " + r.exits.keys().join(", ") + ".")
+        return lines.join("\n")
+    }
+
+    // Run one command line and say what happens.
+    fn step(line: String) -> String {
+        words := line.trim().lower().split(" ").filter { !it.isEmpty() }
+        if words.isEmpty() { return "Say something." }
+        verb := words[0]
+        target := words.drop(1).join(" ")
+        moves += 1
+
+        if verb == "look" { return describe() }
+        if verb == "inventory" || verb == "i" {
+            return if inventory.isEmpty() { "You carry nothing." } else { "You carry: " + inventory.join(", ") + "." }
+        }
+        if verb == "go" || world.rooms[here].exits.containsKey(verb) {
+            direction := if verb == "go" { target } else { verb }
+            return go(direction)
+        }
+        if verb == "take" {
+            r := room()
+            if !(target in r.items) { return "There is no $target here." }
+            r.items.removeAt(r.items.indexOf(target))
+            inventory.add(target)
+            if target == world.goal {
+                finished = true
+                return "You take the $target. You win, in $moves moves!"
+            }
+            return "Taken: $target."
+        }
+        if verb == "drop" {
+            if !(target in inventory) { return "You do not have $target." }
+            inventory.removeAt(inventory.indexOf(target))
+            room().items.add(target)
+            return "Dropped: $target."
+        }
+        moves -= 1
+        return "I do not understand '$line'. Try: look, go <direction>, take <item>, drop <item>, inventory, quit."
+    }
+
+    fn go(direction: String) -> String {
+        r := room()
+        next := r.exits.getOrNull(direction)
+        if next == null { return "You cannot go $direction from here." }
+        needed := r.locks.getOrNull(direction)
+        if needed != null && !(needed in inventory) { return "The way $direction is locked. Perhaps a $needed would help." }
+        here = next
+        return describe()
+    }
+}

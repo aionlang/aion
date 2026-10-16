@@ -1,0 +1,78 @@
+// A tiny text adventure.  The map is data (data/world.json), the rules are in lib/game.aion, and this file is
+// the loop that reads commands from the keyboard.  Run it from this folder:
+//
+//   cd examples/projects/adventure && aion
+//
+// The test suite plays this walkthrough:
+// stdin: look
+// stdin: take lamp
+// stdin: dance
+// stdin: up
+// stdin: east
+// stdin: north
+// stdin: west
+// stdin: take key
+// stdin: take bread
+// stdin: drop bread
+// stdin: inventory
+// stdin: east
+// stdin: north
+// stdin: take treasure
+
+import game
+import os
+import world
+
+w := world.load("data/world.json")
+if w == null {
+    eprintln(world.problem)
+    os.exit(1)
+}
+
+g := game.Game(w!!)      // os.exit never returns, but the compiler cannot tell, so say "not null" with !!
+println(g.describe())
+while !g.finished {
+    print("> ")
+    line := readLine()
+    if line == null || line.trim() == "quit" {
+        println()
+        println("Bye after ${g.moves} moves.")
+        break
+    }
+    println(g.step(line))
+}
+
+// > == Cellar ==
+// > A damp cellar. Stone steps lead up.
+// > You see: lamp.
+// > Exits: up.
+// > > == Cellar ==
+// > A damp cellar. Stone steps lead up.
+// > You see: lamp.
+// > Exits: up.
+// > > Taken: lamp.
+// > > I do not understand 'dance'. Try: look, go <direction>, take <item>, drop <item>, inventory, quit.
+// > > == Kitchen ==
+// > A kitchen with a cold stove. A trapdoor in the floor opens to the cellar; a doorway leads east.
+// > You see: key, bread.
+// > Exits: down, east.
+// > > == Great Hall ==
+// > A long hall hung with faded banners. A heavy oak door stands to the north.
+// > Exits: west, north, east.
+// > > The way north is locked. Perhaps a key would help.
+// > > == Kitchen ==
+// > A kitchen with a cold stove. A trapdoor in the floor opens to the cellar; a doorway leads east.
+// > You see: key, bread.
+// > Exits: down, east.
+// > > Taken: key.
+// > > Taken: bread.
+// > > Dropped: bread.
+// > > You carry: lamp, key.
+// > > == Great Hall ==
+// > A long hall hung with faded banners. A heavy oak door stands to the north.
+// > Exits: west, north, east.
+// > > == Library ==
+// > Shelves climb into the dark. On a reading desk, something glitters.
+// > You see: treasure, book.
+// > Exits: south.
+// > > You take the treasure. You win, in 13 moves!

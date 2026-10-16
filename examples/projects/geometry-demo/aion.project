@@ -1,0 +1,6 @@
+name = "geometry-demo"
+version = "0.1.0"
+
+[dependencies]
+# A local package; a published one would be  geometry = { git = "https://github.com/you/geometry", tag = "v1.0.0" }
+geometry = { path = "../geometry" }

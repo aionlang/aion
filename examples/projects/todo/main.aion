@@ -1,0 +1,122 @@
+// A to-do list for the command line, kept in a JSON file.  A project with several modules in lib/.
+//
+//   aion add "write the report"           add a task (--priority 1 for high, 3 for low)
+//   aion list                             show the tasks
+//   aion done 2                           mark task 2 finished
+//   aion remove 2                         delete task 2
+//   aion clear                            delete all finished tasks
+//   aion -- --file other.json list        use another file (default: todo.json)
+//
+// Run with no arguments it plays a short demonstration in a temporary folder:   aion
+
+import cli
+import fs
+import path
+import render
+import store
+
+fn command(s: store.Store, words: List<String>, priority: Int) -> String {
+    verb := words.firstOrNull() ?: "list"
+    rest := words.drop(1)
+    if verb == "add" {
+        if rest.isEmpty() { return "add what?" }
+        t := s.add(rest.join(" "), priority)
+        return "added #${t.id}: ${t.text}"
+    }
+    if verb == "list" { return render.table(s.tasks) + "\n" + render.summary(s.tasks) }
+    if verb == "done" || verb == "remove" {
+        id := rest.firstOrNull()?.toIntOrNull()
+        if id == null { return "$verb needs a task number" }
+        ok := if verb == "done" { s.complete(id) } else { s.remove(id) }
+        return if ok { "$verb #$id" } else { "no task #$id" }
+    }
+    if verb == "clear" { return "removed ${s.clearDone()} finished task(s)" }
+    return "unknown command '$verb' (try add, list, done, remove, clear)"
+}
+
+p := cli.parser("todo", "A to-do list in a JSON file.")
+p.option("file", "f", "where the tasks are kept", "todo.json")
+p.option("priority", "p", "priority for add: 1 high, 2 normal, 3 low", "2")
+p.rest("command", "add <text> | list | done <n> | remove <n> | clear")
+
+// Load the file, run one command, save the file.
+fn execute(a: cli.Args) -> String {
+    s := store.Store(a.get("file"))
+    if !s.load() { return "${a.get("file")} is not a valid to-do file" }
+    result := command(s, a.rest(), a.getInt("priority", 2))
+    s.save()
+    return result
+}
+
+if !args().isEmpty() {
+    a := p.parseOrExit(args())
+    println(execute(a))
+} else {
+    // The demonstration: a scripted session against a temporary file, using exactly the code above.
+    folder := fs.makeTempDir("todo-demo-")!!
+    defer fs.removeAll(folder)
+    file := path.join(folder, "todo.json")
+    session := [
+        "add buy milk", "add -p 1 write the report", "add call mum", "list", "done 1", "done 9",
+        "remove 3", "add tidy desk", "list", "clear", "list", "frobnicate",
+    ]
+    for line in session {
+        println("$ todo " + line)
+        words := ["--file", file]
+        words.addAll(line.split(" "))
+        a := p.parse(words)!!
+        println(execute(a))
+    }
+    println()
+    println("the file now contains:")
+    print(fs.readText(file)!!)
+}
+
+// > $ todo add buy milk
+// > added #1: buy milk
+// > $ todo add -p 1 write the report
+// > added #2: write the report
+// > $ todo add call mum
+// > added #3: call mum
+// > $ todo list
+// >   [ ]  2  write the report         high
+// >   [ ]  1  buy milk                 normal
+// >   [ ]  3  call mum                 normal
+// > 3 tasks, 3 open, 0 done
+// > $ todo done 1
+// > done #1
+// > $ todo done 9
+// > no task #9
+// > $ todo remove 3
+// > remove #3
+// > $ todo add tidy desk
+// > added #3: tidy desk
+// > $ todo list
+// >   [ ]  2  write the report         high
+// >   [ ]  3  tidy desk                normal
+// >   [x]  1  buy milk                 normal
+// > 3 tasks, 2 open, 1 done
+// > $ todo clear
+// > removed 1 finished task(s)
+// > $ todo list
+// >   [ ]  2  write the report         high
+// >   [ ]  3  tidy desk                normal
+// > 2 tasks, 2 open, 0 done
+// > $ todo frobnicate
+// > unknown command 'frobnicate' (try add, list, done, remove, clear)
+// >
+// > the file now contains:
+// > [
+// >   {
+// >     "id": 2,
+// >     "text": "write the report",
+// >     "done": false,
+// >     "priority": 1
+// >   },
+// >   {
+// >     "id": 3,
+// >     "text": "tidy desk",
+// >     "done": false,
+// >     "priority": 2
+// >   }
+// > ]
