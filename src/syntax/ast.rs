@@ -31,9 +31,22 @@ pub struct Module {
     pub items: Vec<Item>,
 }
 
+/// How an import path is anchored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportBase {
+    /// `import a.b`: a dependency, the standard library, or a file in this package.
+    Bare,
+    /// `import @a.b`: from the root folder of this package.
+    Root,
+    /// `import .a` (0), `import ..a` (1): the folder of the importing file, that many folders up.
+    Relative(u32),
+}
+
 /// `import math`, `import utils as u`, `from sockets import TcpListener, TcpStream`
 #[derive(Debug, Clone)]
 pub struct Import {
+    /// Where `path` starts: a bare name, the package root (`@a.b`), or a folder relative to this file.
+    pub base: ImportBase,
     pub path: Vec<Ident>,
     /// `from <path> import a, b` — the names to bring in (the module itself isn't bound).
     pub names: Option<Vec<Ident>>,

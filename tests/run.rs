@@ -157,6 +157,34 @@ fn a_panic_prints_the_calls_that_led_to_it_unless_told_not_to() {
     assert!(!quiet.contains("    at "), "{quiet}");
 }
 
+#[test]
+fn folders_are_packages_and_imports_can_start_at_the_root_or_the_current_folder() {
+    let root = scratch("folders");
+    write(&root.join("util.aion"), "fn double(n: Int) = n * 2\n");
+    write(&root.join("shapes/lib.aion"), "import .circle\nimport @util\nfn name() = \"shapes\"\nfn big(n: Int) = util.double(circle.area(n))\n");
+    write(&root.join("shapes/circle.aion"), "fn area(r: Int) = r * r * 3\n");
+    write(&root.join("shapes/deep/x.aion"), "from ..circle import area\nfrom @util import double\nfn go() = double(area(1))\n");
+    write(&root.join("only/only.aion"), "fn hi() = \"only\"\n");
+    write(
+        &root.join("main.aion"),
+        "import shapes\nimport shapes.circle\nimport shapes.deep.x as dx\nimport only\n\
+         println(shapes.name(), shapes.big(2), circle.area(2), dx.go(), only.hi())\n",
+    );
+    let out = aion_in(&root, &["main.aion"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "shapes 24 12 6 only\n");
+
+    // a relative import cannot climb out of the package
+    write(&root.join("pkg/aion.project"), "name = \"pkg\"\n");
+    write(&root.join("pkg/main.aion"), "import ...util\n");
+    let out = aion_in(&root.join("pkg"), &[]);
+    assert!(stderr(&out).contains("cannot leave the package"), "{}", stderr(&out));
+    write(&root.join("nope.aion"), "import @missing.thing\n");
+    let out = aion_in(&root, &["nope.aion"]);
+    assert!(stderr(&out).contains("cannot find module `missing.thing`"), "{}", stderr(&out));
+    assert!(stderr(&out).contains("the package root"), "{}", stderr(&out));
+}
+
 // ── projects & dependencies ─────────────────────────────────────────
 
 /// A scratch directory unique to one test.

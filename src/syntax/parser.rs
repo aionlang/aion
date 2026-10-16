@@ -339,7 +339,7 @@ impl<'a> Parser<'a> {
 
     fn import(&mut self) -> Result<Import> {
         let start = self.bump().span;
-        let path = self.import_path()?;
+        let (base, path) = self.import_path()?;
         let alias = if self.at_word("as") {
             self.bump();
             Some(self.ident()?)
@@ -347,13 +347,13 @@ impl<'a> Parser<'a> {
             None
         };
         self.eat(Token::Semi);
-        Ok(Import { span: start.to(self.prev_span()), path, names: None, alias })
+        Ok(Import { span: start.to(self.prev_span()), base, path, names: None, alias })
     }
 
     /// `from a.b import x, y`
     fn import_from(&mut self) -> Result<Import> {
         let start = self.bump().span;
-        let path = self.import_path()?;
+        let (base, path) = self.import_path()?;
         self.expect(Token::Import)?;
         let mut names = vec![self.ident()?];
         while self.peek() == Some(Token::Comma) {
@@ -361,16 +361,33 @@ impl<'a> Parser<'a> {
             names.push(self.ident()?);
         }
         self.eat(Token::Semi);
-        Ok(Import { span: start.to(self.prev_span()), path, names: Some(names), alias: None })
+        Ok(Import { span: start.to(self.prev_span()), base, path, names: Some(names), alias: None })
     }
 
-    fn import_path(&mut self) -> Result<Vec<Ident>> {
+    /// `a.b`, `@a.b` (from the package root), `.a` / `..a` (relative to this file's folder).
+    fn import_path(&mut self) -> Result<(ImportBase, Vec<Ident>)> {
+        let base = if self.eat(Token::At) {
+            ImportBase::Root
+        } else if matches!(self.peek(), Some(Token::Dot | Token::DotDot)) {
+            let mut dots = 0;
+            loop {
+                match self.peek() {
+                    Some(Token::Dot) => dots += 1,
+                    Some(Token::DotDot) => dots += 2,
+                    _ => break,
+                }
+                self.bump();
+            }
+            ImportBase::Relative(dots - 1)
+        } else {
+            ImportBase::Bare
+        };
         let mut path = vec![self.ident()?];
         while self.peek() == Some(Token::Dot) && !self.nl() {
             self.bump();
             path.push(self.ident()?);
         }
-        Ok(path)
+        Ok((base, path))
     }
 
     /// Is the next token the identifier `word` (a keyword only in context)?
@@ -380,10 +397,22 @@ impl<'a> Parser<'a> {
 
     /// `from` starts an import only as `from <path> import`.
     fn at_from_import(&self) -> bool {
-        if self.text(self.toks[self.pos]) != "from" || self.peek_at(1) != Some(Token::Ident) {
+        if self.text(self.toks[self.pos]) != "from" {
             return false;
         }
-        let mut i = 2;
+        // `from @a.b import`, `from ..a import`: skip the prefix
+        let mut i = 1;
+        if self.peek_at(i) == Some(Token::At) {
+            i += 1;
+        } else {
+            while matches!(self.peek_at(i), Some(Token::Dot | Token::DotDot)) {
+                i += 1;
+            }
+        }
+        if self.peek_at(i) != Some(Token::Ident) {
+            return false;
+        }
+        i += 1;
         while self.peek_at(i) == Some(Token::Dot) && self.peek_at(i + 1) == Some(Token::Ident) {
             i += 2;
         }
@@ -1935,6 +1964,24 @@ mod tests {
         let err = |src: &str| Parser::new(0, src, 0).and_then(|mut p| p.expr()).unwrap_err().message;
         assert!(err("\"\"\"never closed").contains("unterminated"));
         assert!(err("r\"\"\"never closed").contains("unterminated"));
+    }
+
+    #[test]
+    fn import_paths_can_start_at_the_root_or_be_relative() {
+        let m = module("import a.b\nimport @a.b\nimport .a\nimport ..a.b as x\nfrom @pkg.m import f\nfrom ...m import g\n");
+        let bases: Vec<_> = m.imports.iter().map(|i| (i.base, i.path.len())).collect();
+        assert_eq!(
+            bases,
+            [
+                (ImportBase::Bare, 2),
+                (ImportBase::Root, 2),
+                (ImportBase::Relative(0), 1),
+                (ImportBase::Relative(1), 2),
+                (ImportBase::Root, 2),
+                (ImportBase::Relative(2), 1)
+            ]
+        );
+        assert!(m.imports[4].names.is_some());
     }
 
     #[test]

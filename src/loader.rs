@@ -138,7 +138,10 @@ impl Loader<'_> {
 
     fn resolve(&mut self, imp: &ast::Import, dir: Option<&Path>, pkg: usize) -> Result<Vec<ResolvedImport>> {
         let segs: Vec<&str> = imp.path.iter().map(|i| i.name.as_str()).collect();
-        let (module, consumed) = self.find_module(&segs, imp, dir, pkg)?;
+        let (module, consumed) = match imp.base {
+            ast::ImportBase::Bare => self.find_module(&segs, imp, dir, pkg)?,
+            base => self.find_anchored(base, &segs, imp, dir, pkg)?,
+        };
         let alias = imp.alias.as_ref().map_or_else(|| segs[consumed - 1].to_string(), |a| a.name.clone());
         let make = |alias, symbol| ResolvedImport { module, alias, symbol, span: imp.span };
 
@@ -161,6 +164,44 @@ impl Loader<'_> {
 
     /// Load the module an import names.  Returns its index and how many leading
     /// path segments formed the module path (any remainder names an item in it).
+    /// `import @a.b` (from the package root) and `import .a` / `..a` (from this file's folder, going up).
+    fn find_anchored(
+        &mut self,
+        base: ast::ImportBase,
+        segs: &[&str],
+        imp: &ast::Import,
+        dir: Option<&Path>,
+        pkg: usize,
+    ) -> Result<(usize, usize)> {
+        let root = self.packages[pkg].root.clone();
+        let (start, shown) = match base {
+            ast::ImportBase::Relative(up) => {
+                let mut start = dir.map(Path::to_path_buf).unwrap_or_else(|| root.clone());
+                for _ in 0..up {
+                    start = start.parent().map(Path::to_path_buf).unwrap_or(start);
+                }
+                let inside = std::fs::canonicalize(&start)
+                    .ok()
+                    .zip(std::fs::canonicalize(&root).ok())
+                    .is_none_or(|(s, r)| s.starts_with(r));
+                if !inside {
+                    return Err(Diagnostic::new("a relative import cannot leave the package", imp.span)
+                        .hint(format!("the package starts at {}", root.display())));
+                }
+                (start, "relative to this file")
+            }
+            _ => (root, "the package root"),
+        };
+        match find_entry(&start, segs) {
+            Some((path, n)) => Ok((self.load_file(&path, pkg)?, n)),
+            None => Err(Diagnostic::new(format!("cannot find module `{}`", segs.join(".")), imp.span).hint(format!(
+                "looked for {rel}.aion and {rel}/lib.aion in {} ({shown})",
+                start.display(),
+                rel = segs.join("/")
+            ))),
+        }
+    }
+
     fn find_module(&mut self, segs: &[&str], imp: &ast::Import, dir: Option<&Path>, pkg: usize) -> Result<(usize, usize)> {
         // `std.math` / `aion.math`: explicitly the standard library.
         if matches!(segs[0], "std" | "aion") {
@@ -171,10 +212,8 @@ impl Loader<'_> {
         }
         if let Some(dir) = dir {
             // A file next to the importer wins…
-            for n in (1..=segs.len()).rev() {
-                if let Some(path) = self.find_file(&segs[..n], dir, pkg) {
-                    return Ok((self.load_file(&path, pkg)?, n));
-                }
+            if let Some((path, n)) = self.find_file(segs, dir, pkg) {
+                return Ok((self.load_file(&path, pkg)?, n));
             }
             // …then a declared dependency…
             if let Some(&dep) = self.packages[pkg].deps.get(segs[0]) {
@@ -192,10 +231,10 @@ impl Loader<'_> {
     fn find_in_package(&mut self, dep: usize, segs: &[&str], imp: &ast::Import) -> Result<(usize, usize)> {
         let rest = &segs[1..];
         let root = self.packages[dep].root.clone();
-        for n in (1..=rest.len()).rev() {
-            if let Some(path) = self.find_file(&rest[..n], &root, dep) {
-                return Ok((self.load_file(&path, dep)?, 1 + n));
-            }
+        if !rest.is_empty()
+            && let Some((path, n)) = self.find_file(rest, &root, dep)
+        {
+            return Ok((self.load_file(&path, dep)?, 1 + n));
         }
         match self.packages[dep].lib.clone() {
             Some(lib) if lib.is_file() && rest.len() <= 1 => Ok((self.load_file(&lib, dep)?, 1)),
@@ -240,7 +279,13 @@ impl Loader<'_> {
         }
         let text = std::fs::read_to_string(path)
             .map_err(|e| Diagnostic::general(format!("cannot read {}: {e}", path.display())))?;
-        let stem = path.file_stem().map_or("module".into(), |s| s.to_string_lossy().into_owned());
+        let mut stem = path.file_stem().map_or("module".into(), |s| s.to_string_lossy().into_owned());
+        // a folder package's `lib.aion` is named after the folder
+        if stem == "lib"
+            && let Some(folder) = path.parent().and_then(|p| std::fs::canonicalize(p).ok()).and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        {
+            stem = folder;
+        }
         self.add(key, &path.display().to_string(), &text, stem, path.parent().map(Path::to_path_buf), pkg)
     }
 
@@ -258,9 +303,8 @@ impl Loader<'_> {
         dirs
     }
 
-    fn find_file(&self, segs: &[&str], dir: &Path, pkg: usize) -> Option<PathBuf> {
-        let rel = format!("{}.aion", segs.join("/"));
-        self.search_dirs(dir, pkg).into_iter().map(|d| d.join(&rel)).find(|p| p.is_file())
+    fn find_file(&self, segs: &[&str], dir: &Path, pkg: usize) -> Option<(PathBuf, usize)> {
+        self.search_dirs(dir, pkg).into_iter().find_map(|d| find_entry(&d, segs))
     }
 
     fn not_found(&self, segs: &[&str], dir: Option<&Path>, pkg: usize, span: Span) -> Diagnostic {
@@ -276,4 +320,22 @@ impl Loader<'_> {
         Diagnostic::new(format!("cannot find module `{}`", segs.join(".")), span)
             .hint(format!("looked in:\n  {}", places.join("\n  ")))
     }
+}
+
+/// The module `segs` names below `base`: the longest prefix that is a file `a/b.aion`, or a folder
+/// `a/b/` whose entry is `lib.aion` (else `b.aion` inside it).  Returns the file and how many
+/// segments it consumed.
+fn find_entry(base: &Path, segs: &[&str]) -> Option<(PathBuf, usize)> {
+    (1..=segs.len()).rev().find_map(|n| {
+        let dir = segs[..n].iter().fold(base.to_path_buf(), |p, s| p.join(s));
+        let file = dir.with_extension("aion");
+        if file.is_file() {
+            return Some((file, n));
+        }
+        ["lib.aion".to_string(), format!("{}.aion", segs[n - 1])]
+            .iter()
+            .map(|f| dir.join(f))
+            .find(|p| p.is_file())
+            .map(|p| (p, n))
+    })
 }

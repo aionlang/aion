@@ -92,6 +92,8 @@ pub enum Token {
     DotDotEq,
     #[token(".")]
     Dot,
+    #[token("@")]
+    At,
     #[token(";")]
     Semi,
     #[token(",")]
@@ -199,6 +201,7 @@ impl Token {
             Token::DotDot => "`..`",
             Token::DotDotEq => "`..=`",
             Token::Dot => "`.`",
+            Token::At => "`@`",
             Token::Semi => "`;`",
             Token::Comma => "`,`",
             Token::Question => "`?`",
