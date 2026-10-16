@@ -1,0 +1,71 @@
+// `data type` is a type whose instances are compared by value: `equals`, `hashCode`, `copy` and the parts
+// for `a, b := point` are written for you.  Plus `?: return`, to leave early when a value is missing.
+//
+//   aion examples/data_types.aion
+
+data type Point(x: Int, y: Int)
+data type Item(name: String, price: Int, tags: List<String> = [])
+
+a := Point(2, 3)
+b := Point(2, 3)
+println(a, a == b, a != Point(3, 2))           // compared by value, not by identity
+moved := a.copy(x: 10)                         // a copy with some parts changed
+println(moved, a)
+x, y := moved                                  // taken apart like a tuple
+println("x=$x y=$y")
+
+// by-value equality and hashing make them good keys
+visited := Set<Point>()
+for p in [Point(0, 0), Point(1, 0), Point(0, 0), Point(1, 1), Point(1, 0)] { visited.add(p) }
+println("${visited.size()} distinct points")
+owners := Map<Point, String>()
+owners[Point(0, 0)] = "origin"
+owners[Point(5, 5)] = "far"
+println(owners[Point(0, 0)], owners.getOr(Point(1, 1), "nobody"))
+
+// a small inventory: look things up, and leave early when something is missing
+inventory := [Item("pen", 150), Item("book", 1200, ["paper", "gift"]), Item("lamp", 3500)]
+
+fn find(name: String) -> Item? = inventory.find { it.name == name }
+
+fn priceWithTax(name: String) -> Int {
+    item := find(name) ?: return -1                // no such item: leave right here
+    return item.price + item.price / 5
+}
+println(priceWithTax("book"), priceWithTax("sofa"))
+
+fn cheapest(names: List<String>) -> String {
+    best: Item? = null
+    for name in names {
+        item := find(name) ?: continue             // skip unknown names
+        if best == null || item.price < best!!.price { best = item }
+    }
+    return best?.name ?: "none"
+}
+println(cheapest(["lamp", "sofa", "pen"]), cheapest(["sofa"]))
+
+fn total(names: List<String>) -> Int {
+    sum := 0
+    for name in names {
+        sum += (find(name) ?: break).price         // stop at the first unknown name
+    }
+    return sum
+}
+println(total(["pen", "book", "sofa", "lamp"]))
+
+// either branch of an `if` or `? :` may leave instead of giving a value
+fn describe(n: Int) -> String {
+    sign := n > 0 ? "positive" : n < 0 ? "negative" : return "zero"
+    return "$sign number"
+}
+println(describe(4), describe(-4), describe(0))
+
+// > Point(x=2, y=3) true true
+// > Point(x=10, y=3) Point(x=2, y=3)
+// > x=10 y=3
+// > 3 distinct points
+// > origin nobody
+// > 1440 -1
+// > pen none
+// > 1350
+// > positive number negative number zero
