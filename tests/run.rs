@@ -575,3 +575,108 @@ fn packages_can_bundle_c_code() {
         assert!(!out.status.success() && stderr(&out).contains(message), "{value}: {}", stderr(&out));
     }
 }
+
+// ── examples ────────────────────────────────────────────────────────
+
+/// The lines of a comment block such as `// stdin: text`, joined by line breaks.
+fn directive(source: &str, key: &str) -> Option<String> {
+    let prefix = format!("// {key}:");
+    let lines: Vec<&str> = source.lines().filter_map(|l| l.strip_prefix(prefix.as_str())).map(str::trim_start).collect();
+    (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+/// What an example says it prints: its trailing `// > ` lines.
+fn expected_output(source: &str) -> Option<String> {
+    let lines: Vec<&str> =
+        source.lines().filter_map(|l| l.strip_prefix("// >").map(|rest| rest.strip_prefix(' ').unwrap_or(rest))).collect();
+    (!lines.is_empty()).then(|| lines.join("\n") + "\n")
+}
+
+/// Run one example (a file, or a project folder) in its own directory and compare with what it promises.
+fn check_example(path: &Path, entry: &Path, project: bool) -> Result<(), String> {
+    let source = std::fs::read_to_string(entry).map_err(|e| format!("cannot read {}: {e}", entry.display()))?;
+    let dir = if project { path } else { path.parent().unwrap() };
+    let args: Vec<String> = directive(&source, "args").map(|a| a.split_whitespace().map(String::from).collect()).unwrap_or_default();
+    let name = path.strip_prefix(env!("CARGO_MANIFEST_DIR")).unwrap_or(path).display().to_string();
+
+    let Some(expected) = expected_output(&source) else {
+        // no promised output (a server, or something too slow to run): it must at least compile
+        let out = Command::new(env!("CARGO_BIN_EXE_aion"))
+            .arg("emit-ir")
+            .arg(entry)
+            .current_dir(dir)
+            .env("AION_CACHE", test_cache())
+            .output()
+            .unwrap();
+        return if out.status.success() { Ok(()) } else { Err(format!("{name} does not compile:\n{}", stderr(&out))) };
+    };
+
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_aion"));
+    if !project {
+        cmd.arg(entry);
+    }
+    cmd.args(&args).current_dir(dir).env("AION_CACHE", test_cache());
+    let input = directive(&source, "stdin").map(|s| s + "\n").unwrap_or_default();
+    let out = {
+        use std::io::Write;
+        cmd.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+        let mut child = cmd.spawn().unwrap();
+        child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+        child.wait_with_output().unwrap()
+    };
+    if !out.status.success() {
+        return Err(format!("{name} exited with {:?}:\n{}", out.status.code(), stderr(&out)));
+    }
+    let actual = stdout(&out);
+    if actual != expected {
+        let (a, e): (Vec<&str>, Vec<&str>) = (actual.lines().collect(), expected.lines().collect());
+        let at = a.iter().zip(&e).position(|(x, y)| x != y).unwrap_or(a.len().min(e.len()));
+        return Err(format!(
+            "{name} printed something else than it promises, from line {}:\n  expected: {:?}\n  actual:   {:?}",
+            at + 1,
+            e.get(at),
+            a.get(at)
+        ));
+    }
+    Ok(())
+}
+
+/// Every program in `examples/` ends with the output it prints (`// > ` lines); a project folder keeps them in
+/// its `main.aion`.  Running them all keeps the examples working as the language changes.
+#[test]
+fn examples_print_what_they_promise() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
+    let mut failures = Vec::new();
+    let mut checked = 0;
+    for file in sources_in(&root) {
+        checked += 1;
+        if let Err(e) = check_example(&file, &file, false) {
+            failures.push(e);
+        }
+    }
+    let mut folders: Vec<PathBuf> = std::fs::read_dir(root.join("projects"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.is_dir())
+        .collect();
+    folders.sort();
+    for folder in folders {
+        checked += 1;
+        let project = folder.join("aion.project").is_file();
+        if let Err(e) = check_example(&folder, &folder.join("main.aion"), project) {
+            failures.push(e);
+        }
+    }
+    assert!(checked >= 10, "expected to find examples, found {checked}");
+    assert!(failures.is_empty(), "{} of {checked} examples failed:\n\n{}", failures.len(), failures.join("\n\n"));
+}
+
+fn sources_in(dir: &Path) -> Vec<PathBuf> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|e| e == "aion"))
+        .collect();
+    files.sort();
+    files
+}

@@ -33,3 +33,13 @@ fn groupBy<T, K>(items: List<T>, key: (T) -> K) -> Map<K, List<T>> {
 for e in groupBy(words, { it.length() }) {
     println(e.key, "->", e.value)
 }
+
+// > 11 words, 9 distinct
+// > the 3
+// > quick 1
+// > brown 1
+// > longest: 5
+// > the+the+the
+// > 3 -> [the, fox, the, dog, the, end]
+// > 5 -> [quick, brown, jumps]
+// > 4 -> [over, lazy]

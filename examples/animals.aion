@@ -28,3 +28,7 @@ fn main() {
     println(a.bark())
     println("sqrt(2) = ${math.sqrt(2)}")
 }
+
+// > Animal(Fido, 5)
+// > Woof!
+// > sqrt(2) = 1.4142135623730951

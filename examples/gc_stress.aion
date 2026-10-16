@@ -1,30 +1,37 @@
-// GC stress test — creates many type instances and temporary strings
-// to exercise the mark-sweep collector.
+// The garbage collector under load: a million short-lived objects and strings, plus a long-lived list that
+// must survive every collection.  Nothing here frees memory by hand.
+//
+//   aion examples/gc_stress.aion
+//
+// Run it with AION_GC_STRESS=1 to collect on *every* allocation, which proves nothing is lost but is slow,
+// so give it fewer rounds:   AION_GC_STRESS=1 aion examples/gc_stress.aion 3000
 
-type Pet {
-    name: String
-    age: Int
-
-    constructor(name: String, age: Int) {
-        this.name = name
-        this.age = age
-    }
-
-    fn greet() -> String {
-        return "I'm ${this.name}, age ${this.age}"
-    }
+type Pet(name: String, age: Int) {
+    fn greet() = "I'm $name, age $age"
 }
 
-fn main() {
-    println("=== Aion GC stress test (types) ===")
-
-    i := 0
-    while (i < 1000000) {
-        p := Pet("pet_${i}", i)
-        msg := p.greet()
-        println(msg)
-        i += 1
-    }
-
-    println("=== done (1000000 Pet instances, no crash) ===")
+keep := List<Pet>()
+for i in 0..1000 {
+    keep.add(Pet("keeper_$i", i))
 }
+
+rounds := args().firstOrNull()?.toIntOrNull() ?: 1000000
+total := 0
+for i in 0..rounds {
+    p := Pet("pet_$i", i)
+    total += p.greet().length()
+    if i % (rounds / 4) == 0 { println("at $i: ${p.greet()}") }
+}
+println("greeting characters produced:", total)
+
+// the long-lived objects are still intact
+sum := 0
+for pet in keep { sum += pet.age }
+println("keepers:", keep.size(), "age sum:", sum, "last:", keep.last().greet())
+
+// > at 0: I'm pet_0, age 0
+// > at 250000: I'm pet_250000, age 250000
+// > at 500000: I'm pet_500000, age 500000
+// > at 750000: I'm pet_750000, age 750000
+// > greeting characters produced: 25777780
+// > keepers: 1000 age sum: 499500 last: I'm keeper_999, age 999

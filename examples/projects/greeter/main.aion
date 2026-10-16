@@ -2,3 +2,6 @@ import greetings
 
 println(greetings.hello("project"))
 println(greetings.excited("dependencies"))
+
+// > Hello, project
+// > Hello, dependencies!

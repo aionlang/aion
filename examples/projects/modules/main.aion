@@ -9,3 +9,7 @@ fn main() {
     greeter.shout()
     utils.farewell()
 }
+
+// > Hello from utils module!
+// > HELLO FROM LIB GREETER!
+// > Goodbye from utils module!

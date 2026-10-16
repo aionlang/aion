@@ -24,3 +24,11 @@ grade := when 87 {
 }
 println("grade:", grade)
 println(shapes)
+
+// > circle (round)
+// > square with 4 sides
+// > radius 1 area 3.141592653589793
+// > radius 2 area 12.566370614359172
+// > radius 3 area 28.274333882308138
+// > grade: B
+// > Shape(name=circle, sides=0)
