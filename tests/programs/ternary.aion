@@ -1,0 +1,20 @@
+// The conditional operator: cond ? a : b, nested, with null, inside strings and lambdas
+age := 20
+println(age > 18 ? "adult" : "youth")
+fn label(n: Int) = n < 0 ? "negative" : n == 0 ? "zero" : "positive"
+println(label(-3), label(0), label(7))
+x: Int? = null
+println(x == null ? -1 : x)
+y: Int? = 5
+println(y != null ? y + 1 : 0, (y ?: 0) > 3 ? "big" : "small")
+a := true
+println(a ? 1 : 2, !a ? 1 : 2)
+total := 10
+println("total: ${total > 5 ? "high" : "low"}")
+println([1, 2, 3].map { it % 2 == 0 ? "even" : "odd" })
+r := age > 100 ? null : "alive"
+println(r)
+println(age > 18
+    ? "multi"
+    : "line")
+println(1 + 2 > 2 ? 10 * 2 : 5)

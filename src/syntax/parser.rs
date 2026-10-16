@@ -592,7 +592,28 @@ impl<'a> Parser<'a> {
 
     // ── expressions ─────────────────────────────────────────────
 
+    /// An expression, the loosest level being the conditional `cond ? a : b` (sugar for an `if`).
     fn expr(&mut self) -> Result<Expr> {
+        let cond = self.range_expr()?;
+        if self.peek() != Some(Token::Question) {
+            return Ok(cond);
+        }
+        self.bump();
+        let then = self.expr()?;
+        self.expect(Token::Colon)?;
+        let otherwise = self.expr()?; // right-associative: `a ? b : c ? d : e`
+        let span = cond.span.to(otherwise.span);
+        Ok(Expr {
+            kind: ExprKind::If {
+                cond: Box::new(cond),
+                then: vec![Self::expr_stmt(then)],
+                otherwise: Some(vec![Self::expr_stmt(otherwise)]),
+            },
+            span,
+        })
+    }
+
+    fn range_expr(&mut self) -> Result<Expr> {
         let lhs = self.binary(1)?;
         if matches!(self.peek(), Some(Token::DotDot | Token::DotDotEq)) && !self.nl() {
             let inclusive = self.bump().kind == Token::DotDotEq;
@@ -1466,6 +1487,21 @@ mod tests {
         let err = |src: &str| Parser::new(0, src, 0).and_then(|mut p| p.expr()).unwrap_err().message;
         assert!(err("\"\"\"never closed").contains("unterminated"));
         assert!(err("r\"\"\"never closed").contains("unterminated"));
+    }
+
+    #[test]
+    fn conditional_expression() {
+        let e = parse_expr("a > 1 ? b : c ? d : e");
+        let ExprKind::If { cond, then, otherwise } = &e.kind else { panic!("expected an if, got {e:?}") };
+        assert!(matches!(cond.kind, ExprKind::Binary(BinOp::Gt, ..)));
+        assert_eq!(then.len(), 1);
+        // right-associative: the else branch is itself a conditional
+        let StmtKind::Expr(inner) = &otherwise.as_ref().unwrap()[0].kind else { panic!() };
+        assert!(matches!(inner.kind, ExprKind::If { .. }));
+        // `?:` and `?.` are still their own operators
+        assert!(matches!(parse_expr("a ?: b").kind, ExprKind::Elvis(..)));
+        assert!(matches!(parse_expr("a ? b ?: c : d").kind, ExprKind::If { .. }));
+        assert!(Parser::new(0, "a ? b", 0).and_then(|mut p| p.expr()).is_err());
     }
 
     #[test]
