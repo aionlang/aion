@@ -35,6 +35,7 @@ before them if they look like options.
 
 options:
   -O0..-O3       optimisation level (default -O2)
+  --project <p>  use this aion.project (or the folder holding it) instead of searching upward
   --no-trace     leave out the stack trace a panic prints (a little faster)
   --keep-temps   keep intermediate files
   -h, --help     show this help
@@ -57,6 +58,8 @@ struct Cli {
     command: Subcommand,
     input: Option<PathBuf>,
     output: Option<PathBuf>,
+    /// `--project`: use this project instead of searching.
+    project: Option<PathBuf>,
     opts: toolchain::Options,
     /// What follows the file: handed to the program.
     program_args: Vec<String>,
@@ -67,6 +70,7 @@ fn parse_args(args: &[String]) -> Result<Cli, String> {
     let (mut input, mut output) = (None, None);
     let mut opts = toolchain::Options { opt_level: "2".into(), keep_temps: false, trace: true };
     let mut program_args = Vec::new();
+    let mut project = None;
 
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -90,6 +94,7 @@ fn parse_args(args: &[String]) -> Result<Cli, String> {
             "-o" => output = Some(PathBuf::from(it.next().ok_or("`-o` needs a file name")?)),
             "--keep-temps" => opts.keep_temps = true,
             "--no-trace" => opts.trace = false,
+            "--project" => project = Some(PathBuf::from(it.next().ok_or("`--project` needs a path")?)),
             "-h" | "--help" => return Err(USAGE.into()),
             "-V" | "--version" => return Err(format!("aion {}", env!("CARGO_PKG_VERSION"))),
             o if o.starts_with("-O") && o.len() == 3 && o.as_bytes()[2].is_ascii_digit() => {
@@ -111,13 +116,18 @@ fn parse_args(args: &[String]) -> Result<Cli, String> {
     if !program_args.is_empty() && !matches!(command, Subcommand::Run) {
         return Err("arguments for the program only make sense when running it".into());
     }
-    Ok(Cli { command, input, output, opts, program_args })
+    Ok(Cli { command, input, output, project, opts, program_args })
 }
 
 type Failure = (Diagnostic, Option<SourceMap>);
 
 /// The entry file and the project it belongs to (if any).
-fn locate(input: Option<&Path>) -> Result<(PathBuf, Option<project::Project>), Diagnostic> {
+fn locate(input: Option<&Path>, explicit: Option<&Path>) -> Result<(PathBuf, Option<project::Project>), Diagnostic> {
+    if let Some(p) = explicit {
+        let proj = project::explicit(p)?;
+        let entry = input.map_or_else(|| proj.entry.clone(), Path::to_path_buf);
+        return Ok((entry, Some(proj)));
+    }
     match input {
         Some(file) => {
             let dir = file.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
@@ -134,6 +144,28 @@ fn locate(input: Option<&Path>) -> Result<(PathBuf, Option<project::Project>), D
     }
 }
 
+/// The `// dep:` lines of a loose script, and the lock file for them (`script.aion.lock`).
+/// A script inside a project keeps its dependencies in `aion.project`; its lines are ignored.
+fn inline_dependencies(
+    entry: &Path,
+    project: Option<&project::Project>,
+) -> Result<(Vec<project::Dependency>, Option<PathBuf>), Diagnostic> {
+    let Ok(text) = std::fs::read_to_string(entry) else { return Ok((Vec::new(), None)) };
+    let dir = entry.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let deps = project::inline_deps(&text, dir, entry)?;
+    if deps.is_empty() {
+        return Ok((deps, None));
+    }
+    if project.is_some() {
+        eprintln!("warning: the `// dep:` lines in {} are ignored: this script belongs to a project", entry.display());
+        eprintln!("hint: put them in aion.project (`aion add <source>`)");
+        return Ok((Vec::new(), None));
+    }
+    let mut lock = entry.as_os_str().to_owned();
+    lock.push(".lock");
+    Ok((deps, Some(PathBuf::from(lock))))
+}
+
 /// Generated LLVM IR plus the C sources and system libraries it must be linked with.
 struct Compiled {
     ir: String,
@@ -144,7 +176,8 @@ struct Compiled {
 /// Everything up to (but not including) invoking the C toolchain.
 fn compile(map: &mut SourceMap, entry: &Path, project: Option<&project::Project>, trace: bool) -> Result<Compiled, Failure> {
     let dir = entry.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    let packages = project::resolve(project, dir).map_err(|d| (d, None))?;
+    let (inline, lock) = inline_dependencies(entry, project).map_err(|d| (d, None))?;
+    let packages = project::resolve(project, dir, &inline, lock.as_deref()).map_err(|d| (d, None))?;
     let result = (|| {
         let loaded = loader::load(map, entry, packages)?;
         for w in &loaded.warnings {
@@ -251,16 +284,24 @@ fn run() -> Result<ExitCode, Failure> {
             return Ok(ExitCode::SUCCESS);
         }
         Subcommand::Fetch => {
-            let (_, proj) = locate(cli.input.as_deref()).map_err(general)?;
-            let proj = proj.ok_or_else(|| general(Diagnostic::general("no `aion.project` found")))?;
-            let packages = project::resolve(Some(&proj), &proj.root).map_err(general)?;
+            let (entry, proj) = locate(cli.input.as_deref(), cli.project.as_deref()).map_err(general)?;
+            let packages = match &proj {
+                Some(p) => project::resolve(Some(p), &p.root, &[], None),
+                None if cli.input.is_some() => {
+                    let (inline, lock) = inline_dependencies(&entry, None).map_err(general)?;
+                    let dir = entry.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
+                    project::resolve(None, dir, &inline, lock.as_deref())
+                }
+                None => Err(Diagnostic::general("no `aion.project` found")),
+            }
+            .map_err(general)?;
             eprintln!("{} dependenc{} ready", packages.len() - 1, if packages.len() == 2 { "y" } else { "ies" });
             return Ok(ExitCode::SUCCESS);
         }
         _ => {}
     }
 
-    let (entry, proj) = locate(cli.input.as_deref()).map_err(general)?;
+    let (entry, proj) = locate(cli.input.as_deref(), cli.project.as_deref()).map_err(general)?;
     let mut map = SourceMap::default();
     let program = compile(&mut map, &entry, proj.as_ref(), cli.opts.trace).map_err(|(d, _)| (d, Some(map)))?;
 

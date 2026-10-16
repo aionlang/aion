@@ -223,6 +223,81 @@ fn shadowing_the_standard_library_warns_and_missing_modules_name_the_project() {
     assert!(text.contains("p/aion.project") || text.contains("project:"), "{text}");
 }
 
+#[test]
+fn the_project_search_stops_before_the_home_folder() {
+    let root = scratch("home");
+    let home = root.join("home");
+    let script = |dir: &Path| {
+        write(&dir.join("x.aion"), "import nothing\n");
+        stderr(&aion_in_env(dir, &["x.aion"], &[("HOME", home.as_path())]))
+    };
+    // a project above $HOME, or in $HOME itself, is not picked up from below
+    write(&root.join("aion.project"), "name = \"outer\"\n");
+    write(&home.join("aion.project"), "name = \"mine\"\n");
+    assert!(script(&home.join("work/deep")).contains("no aion.project"));
+    // one between the script and $HOME is
+    write(&home.join("work/aion.project"), "name = \"work\"\n");
+    assert!(script(&home.join("work/deep")).contains("work/aion.project"));
+    // outside $HOME the search still goes up
+    let other = root.join("elsewhere");
+    write(&other.join("aion.project"), "name = \"e\"\n");
+    write(&other.join("sub/x.aion"), "import nothing\n");
+    let text = stderr(&aion_in_env(&other.join("sub"), &["x.aion"], &[("HOME", home.as_path())]));
+    assert!(text.contains("elsewhere/aion.project"), "{text}");
+    // --project overrides the search
+    let text = stderr(&aion_in_env(&home.join("work/deep"), &["--project", home.to_str().unwrap(), "x.aion"], &[("HOME", home.as_path())]));
+    assert!(text.contains("home/aion.project"), "{text}");
+}
+
+#[test]
+fn a_script_can_declare_dependencies_in_its_header() {
+    if Command::new("git").arg("--version").output().is_err() {
+        eprintln!("skipping: git is not installed");
+        return;
+    }
+    let root = scratch("inline");
+    write(&root.join("tools/lib.aion"), "fn tool() = \"a tool\"\n");
+    write(
+        &root.join("a.aion"),
+        "#!/usr/bin/env aion\n// dep: tools = ./tools\nimport tools\nprintln(tools.tool())\n",
+    );
+    let out = aion_in(&root, &["a.aion"]);
+    assert_eq!(stdout(&out), "a tool\n", "{}", stderr(&out));
+
+    // a git dependency is pinned in `<script>.lock`
+    let repo = root.join("lib_repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let git = |dir: &Path, args: &[&str]| {
+        let ok = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(ok, "git {args:?} failed");
+    };
+    git(&repo, &["init", "-q"]);
+    write(&repo.join("lib.aion"), "fn version() = \"1.0\"\n");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "one"]);
+    git(&repo, &["tag", "v1"]);
+    write(
+        &root.join("b.aion"),
+        &format!("// dep: lib = file://{}@v1\nimport lib\nprintln(lib.version())\n", repo.display()),
+    );
+    let out = aion_in(&root, &["b.aion"]);
+    assert_eq!(stdout(&out), "1.0\n", "{}", stderr(&out));
+    assert!(std::fs::read_to_string(root.join("b.aion.lock")).unwrap().contains("lib_repo"), "no lock file");
+
+    // inside a project the lines are ignored, with a warning
+    write(&root.join("p/aion.project"), "name = \"p\"\n");
+    write(&root.join("p/main.aion"), "// dep: tools = ../tools\nprintln(1)\n");
+    let out = aion_in(&root.join("p"), &[]);
+    assert!(stderr(&out).contains("belongs to a project"), "{}", stderr(&out));
+}
+
 // ── projects & dependencies ─────────────────────────────────────────
 
 /// A scratch directory unique to one test.
@@ -246,6 +321,16 @@ fn aion_in(dir: &Path, args: &[&str]) -> Output {
         .env("AION_CACHE", test_cache())
         .output()
         .unwrap()
+}
+
+/// Like [`aion_in`], with extra environment variables.
+fn aion_in_env(dir: &Path, args: &[&str], env: &[(&str, &Path)]) -> Output {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_aion"));
+    cmd.args(args).current_dir(dir).env("AION_CACHE", test_cache());
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    cmd.output().unwrap()
 }
 
 fn stdout(o: &Output) -> String {

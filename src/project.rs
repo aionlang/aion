@@ -94,10 +94,32 @@ pub fn valid_library(name: &str) -> bool {
         && name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '+' | '.'))
 }
 
-/// Find the nearest `aion.project` in `start` or its ancestors.
+/// Find the nearest `aion.project` in `start` or its ancestors, never looking at or above the home folder
+/// (a stray `~/aion.project` must not capture every script below it).
 pub fn find(start: &Path) -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from);
+    find_from(start, home.as_deref())
+}
+
+pub fn find_from(start: &Path, home: Option<&Path>) -> Option<PathBuf> {
     let start = std::fs::canonicalize(start).ok()?;
-    start.ancestors().map(|d| d.join(FILE_NAME)).find(|p| p.is_file())
+    let home = home.and_then(|h| std::fs::canonicalize(h).ok());
+    let below_home = home.as_ref().is_some_and(|h| start.starts_with(h) && start != *h);
+    start
+        .ancestors()
+        .take_while(|d| !(below_home && Some(*d) == home.as_deref()))
+        .filter(|d| d.parent().is_some() || *d == start)
+        .map(|d| d.join(FILE_NAME))
+        .find(|p| p.is_file())
+}
+
+/// `--project`: an `aion.project` file, or the folder that holds it.
+pub fn explicit(path: &Path) -> Result<Project> {
+    let file = if path.is_dir() { path.join(FILE_NAME) } else { path.to_path_buf() };
+    if !file.is_file() {
+        return Err(Diagnostic::general(format!("no {FILE_NAME} at {}", path.display())));
+    }
+    load(&file)
 }
 
 pub fn load(file: &Path) -> Result<Project> {
@@ -196,12 +218,90 @@ pub fn load(file: &Path) -> Result<Project> {
     Ok(Project { root, name, entry, lib, link, c, deps })
 }
 
+// ── dependencies written in a script ────────────────────────────────
+
+const GIT_HOSTS: [&str; 4] = ["github.com", "gitlab.com", "codeberg.org", "bitbucket.org"];
+
+/// Read a dependency source as written after `aion add` or in a `// dep:` line: a path
+/// (`../utils`), or a git repository with an optional `@ref` (`github.com/me/http@v1.2`,
+/// `https://host/x.git@branch:dev`).  Relative paths are taken from `base`.
+pub fn parse_source(spec: &str, base: &Path) -> std::result::Result<Source, String> {
+    let spec = spec.trim();
+    if spec.is_empty() {
+        return Err("expected a path or a git repository".into());
+    }
+    if spec.starts_with("./") || spec.starts_with("../") || spec.starts_with('/') || spec == "." || spec == ".." {
+        return Ok(Source::Path(base.join(spec)));
+    }
+    if let Some(rest) = spec.strip_prefix("~/") {
+        let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).ok_or("cannot find your home folder")?;
+        return Ok(Source::Path(PathBuf::from(home).join(rest)));
+    }
+    // `@ref` is the part after the last `@` that follows the last `/` (so `git@host:x/y` is safe)
+    let slash = spec.rfind('/').map_or(0, |i| i + 1);
+    let (url, spec_ref) = match spec[slash..].rfind('@') {
+        Some(at) => (&spec[..slash + at], Some(&spec[slash + at + 1..])),
+        None => (spec, None),
+    };
+    let url = if url.contains("://") || url.starts_with("git@") {
+        url.to_string()
+    } else if GIT_HOSTS.iter().any(|h| url.starts_with(&format!("{h}/"))) {
+        format!("https://{url}")
+    } else {
+        return Err(format!("`{spec}` is neither a path (./x, ../x) nor a git repository (github.com/user/repo)"));
+    };
+    let git_ref = match spec_ref {
+        None => GitRef::Default,
+        Some("") => return Err("empty `@` reference".into()),
+        Some(r) => match r.split_once(':') {
+            Some(("tag", v)) => GitRef::Tag(v.into()),
+            Some(("branch", v)) => GitRef::Branch(v.into()),
+            Some(("rev", v)) => GitRef::Rev(v.into()),
+            _ => GitRef::Tag(r.into()),
+        },
+    };
+    Ok(Source::Git { url, spec: git_ref })
+}
+
+/// `// dep: name = source` lines in the leading comments of a script.
+pub fn inline_deps(text: &str, script_dir: &Path, file: &Path) -> Result<Vec<Dependency>> {
+    let mut deps = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with("#!") {
+            continue;
+        }
+        let Some(comment) = t.strip_prefix("//") else { break };
+        let Some(body) = comment.trim().strip_prefix("dep:") else { continue };
+        let here = |m: String| Diagnostic::general(format!("{}:{}: {m}", file.display(), i + 1));
+        let Some((name, source)) = body.split_once('=') else {
+            return Err(here("expected `// dep: name = source`".into()));
+        };
+        let name = name.trim();
+        if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return Err(here(format!("`{name}` is not a usable dependency name")));
+        }
+        let source = parse_source(source, script_dir).map_err(here)?;
+        deps.push(Dependency { name: name.to_string(), source });
+    }
+    Ok(deps)
+}
+
 // ── resolving dependencies ──────────────────────────────────────────
 
 /// Fetch every dependency (cloning git ones) and build the package list.
 /// Package 0 is the program itself; `entry_dir` is used when there is no project.
-pub fn resolve(project: Option<&Project>, entry_dir: &Path) -> Result<Vec<Package>> {
+///
+/// `extra` are a loose script's inline dependencies and `lock` where their pins live
+/// (default: `aion.lock` in the root).
+pub fn resolve(
+    project: Option<&Project>,
+    entry_dir: &Path,
+    extra: &[Dependency],
+    lock: Option<&Path>,
+) -> Result<Vec<Package>> {
     let root = project.map_or_else(|| entry_dir.to_path_buf(), |p| p.root.clone());
+    let lock_path = lock.map_or_else(|| root.join(LOCK_NAME), Path::to_path_buf);
     let mut r = Resolver {
         packages: vec![Package {
             root: root.clone(),
@@ -212,15 +312,16 @@ pub fn resolve(project: Option<&Project>, entry_dir: &Path) -> Result<Vec<Packag
             deps: HashMap::new(),
         }],
         by_root: HashMap::new(),
-        lock: Lock::read(&root.join(LOCK_NAME)),
+        lock: Lock::read(&lock_path),
         lock_changed: false,
     };
     r.by_root.insert(std::fs::canonicalize(&root).unwrap_or(root.clone()), 0);
     if let Some(p) = project {
         r.add_deps(0, &p.deps)?;
     }
+    r.add_deps(0, extra)?;
     if r.lock_changed {
-        r.lock.write(&root.join(LOCK_NAME))?;
+        r.lock.write(&lock_path)?;
     }
     Ok(r.packages)
 }
@@ -485,6 +586,33 @@ fn unquote_string(s: &str) -> std::result::Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn dependency_sources_are_read_from_short_forms() {
+        let base = Path::new("/work");
+        let git = |spec: &str| match parse_source(spec, base).unwrap() {
+            Source::Git { url, spec } => (url, spec),
+            Source::Path(p) => panic!("expected git, got {p:?}"),
+        };
+        assert_eq!(git("github.com/me/http"), ("https://github.com/me/http".into(), GitRef::Default));
+        assert_eq!(git("github.com/me/http@v1.2"), ("https://github.com/me/http".into(), GitRef::Tag("v1.2".into())));
+        assert_eq!(git("https://h.io/x.git@branch:dev"), ("https://h.io/x.git".into(), GitRef::Branch("dev".into())));
+        assert_eq!(git("git@github.com:me/x.git"), ("git@github.com:me/x.git".into(), GitRef::Default));
+        assert_eq!(git("git@github.com:me/x.git@rev:abc"), ("git@github.com:me/x.git".into(), GitRef::Rev("abc".into())));
+        assert!(matches!(parse_source("../utils", base).unwrap(), Source::Path(p) if p == Path::new("/work/../utils")));
+        assert!(parse_source("http", base).is_err());
+        assert!(parse_source("github.com/me/x@", base).is_err());
+    }
+
+    #[test]
+    fn dep_lines_are_read_from_the_header_only() {
+        let text = "#!/usr/bin/env aion\n\n// A tool.\n// dep: http = github.com/me/http@v1\n// dep: utils = ../utils\nprintln(1)\n// dep: late = ../late\n";
+        let deps = inline_deps(text, Path::new("/w"), Path::new("t.aion")).unwrap();
+        let names: Vec<&str> = deps.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["http", "utils"]);
+        let err = inline_deps("// dep: oops\n", Path::new("/w"), Path::new("t.aion")).unwrap_err();
+        assert!(err.message.contains("t.aion:1: expected `// dep: name = source`"), "{}", err.message);
+    }
+
     use super::*;
 
     #[test]
