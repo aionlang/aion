@@ -199,10 +199,13 @@ example of generic types.
 | Type | Creation | Members |
 |------|----------|---------|
 | `Array<T>` | `Array(n, fill)`, `Array<T>(n)` | `size()`, `get(i)`, `set(i, v)`, `clear(i)` (reset a slot to the zero value); `a[i]` |
-| `List<T>` | `List<T>()`, `[a, b]` | `size() isEmpty() get set add addAll removeAt pop clear first last contains indexOf copy reversed take drop`; `getOrNull firstOrNull lastOrNull find` (return `T?`); `forEach map filter fold reduce any all count sortedWith join toString` |
+| `List<T>` | `List<T>()`, `[a, b]` | `size() isEmpty() get set add addAll removeAt pop clear first last contains indexOf copy reversed take drop`; `getOrNull firstOrNull lastOrNull find` (return `T?`); `forEach map filter fold reduce any all count sortedWith join toString`; `plus` (`xs + ys`), `zip(other)` (a list of pairs), `component1()` … `component5()` |
 | `Map<K, V>` | `Map<K, V>()`, `{k: v}` | `size() isEmpty() get set containsKey contains getOr getOrNull remove clear keys values entries forEach toString`; `m[k]`, `m[k] = v`; loops over its `Entry`s |
-| `Entry<K, V>` | | `key`, `value` |
+| `Entry<K, V>` | | `key`, `value`, `component1()`, `component2()` |
+| `Tuple2<A, B>` … `Tuple5` | `(a, b)`, type `(A, B)` | `first second third fourth fifth`, `componentN()`, value `equals` / `hashCode` ([tuples](language.md#tuples-and-destructuring)) |
 | `Set<T>` | `Set<T>()`, `setOf(list)` | `size() isEmpty() contains add remove clear toList toString` |
+
+`enumerate(xs)` is a list of `(index, element)` pairs: `for i, x in enumerate(xs)`.
 
 A `Map` and a `Set` remember insertion order.  `List.sortedWith(compare)` takes a
 function returning a negative, zero or positive `Int` and is a stable insertion

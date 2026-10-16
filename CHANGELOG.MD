@@ -97,6 +97,19 @@ migration notes at the end of this section.
   dispatch to the real kind's method (they called the parent's before).
 - **Packages.** `link = ["sqlite3"]` and `c = ["native/x.c"]` in `aion.project` (system libraries
   and bundled C code); `// link: name` in stdlib modules. See docs/packages.md.
+- **Conditional operator.** `age >= 18 ? "adult" : "youth"` (sugar for `if`, nests to the right,
+  works after `is` / `as`: `x is Dog ? 1 : 2`).
+- **Operators on your own types.** `a + b`, `-`, `*`, `/`, `%` call `plus minus times div rem`,
+  unary `-` calls `unaryMinus`, `< <= > >=` use `compareTo`; `+=` and friends follow, and `open`
+  methods dispatch on the real type. `List` gained `+`.
+- **Tuples and destructuring.** `(1, "one")` of type `(Int, String)` (two to five elements, compared and
+  hashed by value), `a, b := pair`, `(a, (b, c)) := …`, `_`, `a, b = b, a` (also fields and elements),
+  `for (k, v) in …` / `for k, v in …`, through `component1()`, `component2()`, … which tuples, `Entry`
+  and `List` have. Parenthesised types group: `((Int) -> Int)?`. Library: `zip`, `enumerate`.
+- **Defaults, varargs, nested functions.** Default arguments can be any expression and use the
+  parameters before them (`h: Int = w`, `into: List<Int> = []`), `vararg xs: Int` with `*xs` to
+  spread a list into a call or a list literal (`[0, *xs]`), functions declared inside functions
+  (closures that can return and call themselves), and function-typed variables that call themselves.
 
 ### Examples
 `examples/` now holds over forty programs — algorithms (Fibonacci, primes, sorting, big numbers,

@@ -68,6 +68,7 @@ From loosest to tightest binding:
 
 | Operators          | Operands                                              |
 |--------------------|-------------------------------------------------------|
+| `c ? a : b`        | Bool condition; the value of `a` or of `b`            |
 | `a..b`  `a..=b`    | Int ranges, only in `for` and after `in`              |
 | `\|\|`             | Bool                                                  |
 | `&&`               | Bool                                                  |
@@ -81,6 +82,19 @@ From loosest to tightest binding:
 
 `&&` and `||` short-circuit.  Mixing `Int` and `Float` computes in `Float`.
 Integer division by zero stops the program with a panic.
+
+`c ? a : b` is the conditional operator, sugar for `if c { a } else { b }`.  It nests to the
+right (`a ? b : c ? d : e`) and both branches must have the same type, or one may be `null`.
+After `is` or `as`, a `?` that has an expression after it is the conditional, not a nullable
+type: `x is Dog ? 1 : 2` works, and `x is Dog? && y` is still a test for `Dog?`.
+
+```aion
+age := 20
+label := age >= 18 ? "adult" : "youth"
+println(label)                                    // adult
+fn kind(n: Int) = n < 0 ? "negative" : n == 0 ? "zero" : "positive"
+println(kind(-3), kind(0), kind(8))               // negative zero positive
+```
 
 Integers can be written in decimal, `0xFF` hex, `0b1010` binary or `0o17` octal, with
 `_` between digits (`1_000_000`), and floats take an exponent (`1.5e-3`).  Bit
@@ -157,7 +171,8 @@ println(greet("Bob", greeting: "Hi"))           // Hi, Bob!
 println(greet(greeting: "Yo", name: "Cy"))      // named arguments, any order
 ```
 
-* Parameters need types; defaults must be literals (or `null`, for an optional parameter such as `title: String? = null`).
+* Parameters need types.  A default is any expression (see [below](#defaults-varargs-and-nested-functions)),
+  including `null` for an optional parameter such as `title: String? = null`.
 * After a named argument, all following arguments must be named.  Arguments are
   evaluated in the order they are written.
 * `= expr` infers the return type; write `-> Type` to state it.  With a block
@@ -168,6 +183,64 @@ println(greet(greeting: "Yo", name: "Cy"))      // named arguments, any order
 
 `Unit` names "no value" and is only valid as a return type, mainly in function
 types: `(Int) -> Unit`.
+
+### Defaults, varargs and nested functions
+
+```aion
+// defaults can be any expression, and can use the parameters before them
+fn box(w: Int, h: Int = w, area: Int = w * h) = "$w x $h = $area"
+println(box(3), box(3, 4), box(2, area: 7))     // 3 x 3 = 9 3 x 4 = 12 2 x 2 = 7
+
+fn collect(item: Int, into: List<Int> = []) -> List<Int> {
+    into.add(item)
+    return into
+}
+println(collect(1), collect(2))                 // [1] [2]: a new list for every call
+
+// vararg: any number of arguments, a List inside
+
+fn sum(vararg xs: Int) = xs.fold(0) { acc, x -> acc + x }
+fn log(level: String, vararg parts: String) = println("[$level] " + parts.join())
+nums := [10, 20, 30]
+println(sum(), sum(1, 2, 3), sum(*nums), sum(1, *nums))   // 0 6 60 61
+log("info", "started", "ok")                              // [info] started, ok
+println([0, *nums, 40])                                   // [0, 10, 20, 30, 40]
+
+// a function inside a function sees its variables, and can call itself with `->`
+fn describe(n: Int) -> String {
+    fn label(x: Int) -> String = x % 2 == 0 ? "even" : "odd"
+    fn fact(k: Int) -> Int {
+        if k <= 1 { return 1 }
+        return k * fact(k - 1)
+    }
+    return "${label(n)}, ${fact(n)}"
+}
+println(describe(5))                                      // odd, 120
+
+fn counter() -> () -> Int {
+    n := 0
+    fn next() -> Int {
+        n += 1
+        return n
+    }
+    return next
+}
+c := counter()
+c()
+println(c())                                              // 2
+```
+
+* A **default** is worked out at each call, from the parameters before it (and, in a method, the
+  fields).  A list default is therefore fresh every time.
+* A **`vararg`** parameter must be last and has no default; leaving it out gives an empty list.
+  `*xs` passes the items of a list one by one, in a call or in a list literal.  Generic
+  functions, methods and `constructor`s can take one (a primary constructor list cannot).
+  Pass a list without `*` and the compiler reminds you to spread it.
+* A **nested function** is a variable holding a closure, so it sees (and can change) the
+  variables around it and can be returned.  To call itself it needs `-> Type` written out; two
+  nested functions cannot call each other, and they take no defaults, `vararg` or type
+  parameters.  A variable with a function type can call itself too:
+  `fib: (Int) -> Int = { n -> n < 2 ? n : fib(n - 1) + fib(n - 2) }`.
 
 ## Strings
 
@@ -261,6 +334,41 @@ println(c.show())                            // hits=1
   it may be null (see [Nullability](#nullability)); a plain `Type` is still not
   checked against being unset.
 * A type can extend an `open` type; see [Inheritance](#inheritance).
+
+## Operators on your own types
+
+An operator on an object calls a method of the type, so any type can join in:
+
+| Written | Calls |
+|---------|-------|
+| `a + b` `a - b` `a * b` `a / b` `a % b` | `a.plus(b)` `minus` `times` `div` `rem` |
+| `-a` | `a.unaryMinus()` |
+| `a < b` `a <= b` `a > b` `a >= b` | `a.compareTo(b)` compared with 0 |
+| `a == b` | `a.equals(b)` (see below), `a += b` is `a = a + b` |
+
+```aion
+type Money(cents: Int) {
+    fn plus(o: Money) = Money(cents + o.cents)
+    fn minus(o: Money) = Money(cents - o.cents)
+    fn times(k: Int) = Money(cents * k)
+    fn unaryMinus() = Money(-cents)
+    fn compareTo(o: Money) = cents - o.cents
+    fn equals(o: Money) = cents == o.cents
+    fn toString() = "$${cents / 100}.${cents % 100}"
+}
+
+a := Money(250)
+b := Money(175)
+println(a + b, a - b, a * 3, (-a).cents)   // $4.25 $0.75 $7.50 -250
+println(a > b, a <= b, a == Money(250))    // true false true
+total := Money(0)
+for m in [a, b, a] { total += m }          // += uses plus
+println(total)                             // $6.75
+```
+
+`compareTo` returns a negative, zero or positive `Int`, as in [`Comparable`](#constraints-on-type-parameters).
+The method on the left operand is used, and an `open` method is looked up on the real type at run
+time.  An operator without a matching method says which one to write.
 
 ## Characters
 
@@ -513,6 +621,59 @@ println(distance[Point(1, 0)], Point(5, 5) in distance)       // 1 false
 `==` uses `equals` when both sides are that type (null is only equal to null);
 `hashOf(p)` uses `hashCode` (combine fields with `hashOf(field)` and arithmetic).  Indexing past the end stops the program with
 `index 5 is out of bounds for size 3`; a missing map key with `no such key: …`.
+
+## Tuples and destructuring
+
+A few values travel together as a **tuple**: `(1, "one")` has the type `(Int, String)`.  Tuples have
+two to five elements (`first`, `second`, `third`, `fourth`, `fifth`), print as `(1, one)`, and compare
+and hash by value, so they work as `Map` keys and `Set` members.  For more, declare a `type`.
+
+`a, b := e` takes a value apart through its `component1()`, `component2()`, … methods, which
+tuples, map `Entry`s and the first elements of a `List` have, and your own types can add:
+
+```aion
+fn minmax(xs: List<Int>) -> (Int, Int) {
+    lo := xs[0]
+    hi := xs[0]
+    for x in xs {
+        if x < lo { lo = x }
+        if x > hi { hi = x }
+    }
+    return (lo, hi)
+}
+
+lo, hi := minmax([3, 1, 4, 1, 5])          // takes the pair apart
+println(lo, hi)                            // 1 5
+pair := (1, "one")
+println(pair, pair.first, pair.second)     // (1, one) 1 one
+
+x, y := 1, 2
+x, y = y, x                                // swap
+println(x, y)                              // 2 1
+
+(a, (b, c)) := (1, (2, 3))                 // nested; `_` skips a part
+_, second := (10, 20)
+println(a, b, c, second)                   // 1 2 3 20
+
+ages := {"ann": 31, "bob": 25}
+for (name, age) in ages.entries() { println("$name is $age") }
+
+names := ["ann", "bob"]
+for i, name in enumerate(names) { println("$i: $name") }
+for n, age in names.zip([31, 25]) { println(n, age) }
+
+seen := Set<(Int, Int)>()                  // tuples compare by value
+seen.add((1, 2))
+println((1, 2) in seen, (2, 1) in seen)    // true false
+```
+
+* `a, b := …`, `(a, b) := …` and nested `(a, (b, c)) := …` declare names; `_` skips a part.
+* `a, b = b, a` assigns; with several values on the right, all are worked out first, so this swaps.
+  Targets can be fields and elements: `xs[i], xs[j] = xs[j], xs[i]`.
+* `for (k, v) in …` and `for k, v in …` take each element apart.
+* In types, a parenthesised type is just grouping, so an optional function is
+  `((Int) -> Int)?` and an optional pair is `(Int, Int)?`.
+* The compiler writes tuples as the library types `Tuple2` … `Tuple5`.
 
 ## Nullability
 
