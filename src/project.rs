@@ -75,6 +75,8 @@ impl GitRef {
 #[derive(Debug)]
 pub struct Package {
     pub root: PathBuf,
+    /// The package's `aion.project`, if it has one.
+    pub manifest: Option<PathBuf>,
     /// The module `import <dependency-name>` loads.
     pub lib: Option<PathBuf>,
     /// System libraries this package's C code needs.
@@ -203,6 +205,7 @@ pub fn resolve(project: Option<&Project>, entry_dir: &Path) -> Result<Vec<Packag
     let mut r = Resolver {
         packages: vec![Package {
             root: root.clone(),
+            manifest: project.map(|p| p.root.join(FILE_NAME)),
             lib: project.and_then(|p| p.lib.clone()),
             link: project.map(|p| p.link.clone()).unwrap_or_default(),
             c: project.map(|p| p.c.clone()).unwrap_or_default(),
@@ -248,7 +251,8 @@ impl Resolver {
                     let idx = self.packages.len();
                     let link = sub.as_ref().map(|p| p.link.clone()).unwrap_or_default();
                     let c = sub.as_ref().map(|p| p.c.clone()).unwrap_or_default();
-                    self.packages.push(Package { root: dir.clone(), lib, link, c, deps: HashMap::new() });
+                    let manifest = sub.as_ref().map(|_| dir.join(FILE_NAME));
+                    self.packages.push(Package { root: dir.clone(), manifest, lib, link, c, deps: HashMap::new() });
                     self.by_root.insert(dir, idx);
                     if let Some(sub) = sub {
                         self.add_deps(idx, &sub.deps)?;

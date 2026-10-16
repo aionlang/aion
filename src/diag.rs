@@ -54,18 +54,25 @@ pub struct Diagnostic {
     pub message: String,
     pub span: Option<Span>,
     pub hint: Option<String>,
+    /// Reported but not fatal.
+    pub warning: bool,
 }
 
 pub type Result<T> = std::result::Result<T, Diagnostic>;
 
 impl Diagnostic {
     pub fn new(message: impl Into<String>, span: Span) -> Self {
-        Diagnostic { message: message.into(), span: Some(span), hint: None }
+        Diagnostic { message: message.into(), span: Some(span), hint: None, warning: false }
+    }
+
+    /// Something worth saying that does not stop the build.
+    pub fn warning(message: impl Into<String>, span: Span) -> Self {
+        Diagnostic { warning: true, ..Diagnostic::new(message, span) }
     }
 
     /// An error that is not tied to a place in the source.
     pub fn general(message: impl Into<String>) -> Self {
-        Diagnostic { message: message.into(), span: None, hint: None }
+        Diagnostic { message: message.into(), span: None, hint: None, warning: false }
     }
 
     pub fn hint(mut self, hint: impl Into<String>) -> Self {
@@ -75,7 +82,7 @@ impl Diagnostic {
 
     /// Render in the familiar `file:line:col` + source excerpt format.
     pub fn render(&self, map: &SourceMap) -> String {
-        let mut out = format!("error: {}\n", self.message);
+        let mut out = format!("{}: {}\n", if self.warning { "warning" } else { "error" }, self.message);
         if let Some(span) = self.span {
             let file = map.file(span.file);
             let start = (span.start as usize).min(file.text.len());

@@ -147,6 +147,9 @@ fn compile(map: &mut SourceMap, entry: &Path, project: Option<&project::Project>
     let packages = project::resolve(project, dir).map_err(|d| (d, None))?;
     let result = (|| {
         let loaded = loader::load(map, entry, packages)?;
+        for w in &loaded.warnings {
+            eprint!("{}", w.render(map));
+        }
         let program = sema::analyze(&loaded, map, trace)?;
         Ok::<_, Diagnostic>(Compiled { ir: codegen::emit(&program), c_sources: loaded.c_sources, libs: loaded.libs })
     })();

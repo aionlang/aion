@@ -48,6 +48,8 @@ pub struct Loaded {
     pub c_sources: Vec<(String, String)>,
     /// System libraries to link: the packages' `link` settings and the `// link:` lines of stdlib modules.
     pub libs: Vec<String>,
+    /// Things worth a mention that do not stop the build.
+    pub warnings: Vec<Diagnostic>,
 }
 
 /// `packages[0]` is the program itself; the rest are its (transitive) dependencies.
@@ -63,6 +65,7 @@ pub fn load(map: &mut SourceMap, entry: &Path, packages: Vec<Package>) -> Result
         stack: Vec::new(),
         c_sources: Vec::new(),
         libs: Vec::new(),
+        warnings: Vec::new(),
         packages,
     };
     for lib in loader.packages.iter().flat_map(|p| p.link.clone()).collect::<Vec<_>>() {
@@ -87,7 +90,7 @@ pub fn load(map: &mut SourceMap, entry: &Path, packages: Vec<Package>) -> Result
     let stem = entry.file_stem().map_or("main".into(), |s| s.to_string_lossy().into_owned());
     loader.add(key.display().to_string(), &entry.display().to_string(), &text, stem, Some(entry_dir), 0)?;
 
-    Ok(Loaded { modules: loader.modules, c_sources: loader.c_sources, libs: loader.libs })
+    Ok(Loaded { modules: loader.modules, c_sources: loader.c_sources, libs: loader.libs, warnings: loader.warnings })
 }
 
 struct Loader<'a> {
@@ -98,6 +101,7 @@ struct Loader<'a> {
     stack: Vec<String>,
     c_sources: Vec<(String, String)>,
     libs: Vec<String>,
+    warnings: Vec<Diagnostic>,
     packages: Vec<Package>,
 }
 
@@ -213,6 +217,12 @@ impl Loader<'_> {
         if let Some(dir) = dir {
             // A file next to the importer wins…
             if let Some((path, n)) = self.find_file(segs, dir, pkg) {
+                if embedded::stdlib_module(segs[0]).is_some() {
+                    self.warnings.push(Diagnostic::warning(
+                        format!("`{}` shadows the standard library module `{}`", path.display(), segs[0]),
+                        imp.span,
+                    ));
+                }
                 return Ok((self.load_file(&path, pkg)?, n));
             }
             // …then a declared dependency…
@@ -317,8 +327,12 @@ impl Loader<'_> {
             places.push(format!("dependencies ({})", deps.join(", ")));
         }
         places.push(format!("the standard library ({})", embedded::stdlib_names().join(", ")));
+        let project = match &self.packages[pkg].manifest {
+            Some(m) => format!("project: {}", m.display()),
+            None => "no aion.project (running as a single script)".to_string(),
+        };
         Diagnostic::new(format!("cannot find module `{}`", segs.join(".")), span)
-            .hint(format!("looked in:\n  {}", places.join("\n  ")))
+            .hint(format!("looked in:\n  {}\n{project}", places.join("\n  ")))
     }
 }
 

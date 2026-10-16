@@ -185,6 +185,44 @@ fn folders_are_packages_and_imports_can_start_at_the_root_or_the_current_folder(
     assert!(stderr(&out).contains("the package root"), "{}", stderr(&out));
 }
 
+#[test]
+fn names_starting_with_an_underscore_are_private_to_their_file() {
+    let root = scratch("private");
+    write(
+        &root.join("lib.aion"),
+        "fn _hidden() = 1\nfn shown() = _hidden() + 1\ntype _Node(x: Int)\n_count := 5\nfn count() = _count\n",
+    );
+    let run = |body: &str| {
+        write(&root.join("t.aion"), &format!("import lib\n{body}\n"));
+        aion_in(&root, &["t.aion"])
+    };
+    let ok = run("println(lib.shown(), lib.count())");
+    assert_eq!(stdout(&ok), "2 5\n", "{}", stderr(&ok));
+    for body in ["println(lib._hidden())", "x := lib._Node(1)", "println(lib._count)", "lib._count = 3"] {
+        let out = run(body);
+        assert!(stderr(&out).contains("is private to module `lib`"), "{body}: {}", stderr(&out));
+    }
+    write(&root.join("t.aion"), "from lib import _hidden\n");
+    assert!(stderr(&aion_in(&root, &["t.aion"])).contains("is private to module `lib`"));
+}
+
+#[test]
+fn shadowing_the_standard_library_warns_and_missing_modules_name_the_project() {
+    let root = scratch("shadow");
+    write(&root.join("math.aion"), "fn sqrt(x: Float) = 42.0\n");
+    write(&root.join("main.aion"), "import math\nprintln(math.sqrt(1.0))\n");
+    let out = aion_in(&root, &["main.aion"]);
+    assert_eq!(stdout(&out), "42\n", "{}", stderr(&out));
+    assert!(stderr(&out).contains("warning: `math.aion` shadows the standard library module `math`"), "{}", stderr(&out));
+
+    write(&root.join("n.aion"), "import nothing\n");
+    assert!(stderr(&aion_in(&root, &["n.aion"])).contains("no aion.project (running as a single script)"));
+    write(&root.join("p/aion.project"), "name = \"p\"\n");
+    write(&root.join("p/main.aion"), "import nothing\n");
+    let text = stderr(&aion_in(&root.join("p"), &[]));
+    assert!(text.contains("p/aion.project") || text.contains("project:"), "{text}");
+}
+
 // ── projects & dependencies ─────────────────────────────────────────
 
 /// A scratch directory unique to one test.
