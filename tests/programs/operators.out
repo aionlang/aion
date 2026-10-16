@@ -1,0 +1,9 @@
+(4, 6) (2, 2) (2, 4) (1.5, 2) (-1, -2) (6, 8)
+true true false true true true
+(8, 12)
+(6, 8)
+13.45 EUR true error: cannot add EUR and USD
+[(1, 0), (0, 2), (3, 4)] (3, 4)
+(4, 6) (4, 6)
+[1, 2, 9] [1, 2, 3, 4, 5]
+Base(6) Base(12) Base(2)

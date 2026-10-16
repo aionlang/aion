@@ -1,0 +1,66 @@
+// Operators on your own types call methods: + plus, - minus, * times, / div, % rem, unary - unaryMinus,
+// and < <= > >= use compareTo.  (== uses equals, [] uses get/set, `in` uses contains.)
+import math
+
+type Vec(x: Float, y: Float) {
+    fn plus(o: Vec) = Vec(x + o.x, y + o.y)
+    fn minus(o: Vec) = Vec(x - o.x, y - o.y)
+    fn times(k: Float) = Vec(x * k, y * k)
+    fn div(k: Float) = Vec(x / k, y / k)
+    fn unaryMinus() = Vec(-x, -y)
+    fn length() = math.sqrt(x * x + y * y)
+    fn compareTo(o: Vec) -> Int = if length() < o.length() { -1 } else if length() > o.length() { 1 } else { 0 }
+    fn toString() = "($x, $y)"
+}
+
+a := Vec(1.0, 2.0)
+b := Vec(3.0, 4.0)
+println(a + b, b - a, a * 2.0, b / 2.0, -a, a + b * 2.0 - a)
+println(a < b, a <= b, a > b, a >= a, b > a, a == a)
+
+// Compound assignment works through the same methods.
+v := Vec(0.0, 0.0)
+v += a
+v += b
+v *= 2.0
+println(v)
+
+// A built-in type on the left needs an extension method.
+fn Float.times(v: Vec) = v * this
+println(2.0 * b)
+
+// Money that cannot be added by accident to a different currency: the operator is just a method.
+type Money(cents: Int, currency: String) {
+    fn plus(o: Money) -> Money {
+        if currency != o.currency { panic("cannot add $currency and ${o.currency}") }
+        return Money(cents + o.cents, currency)
+    }
+    fn compareTo(o: Money) = cents - o.cents
+    fn toString() = "${cents / 100}.${(cents % 100).toString().padLeft(2, "0")} $currency"
+}
+total := Money(1050, "EUR") + Money(295, "EUR")
+println(total, total > Money(1000, "EUR"), try { (total + Money(1, "USD")).toString() } catch e { "error: $e" })
+
+// Sorting and max work with compareTo-based ordering too, and other methods can use the operators.
+vecs := [Vec(3.0, 4.0), Vec(1.0, 0.0), Vec(0.0, 2.0)]
+println(vecs.sorted(), vecs.maxOrNull())
+sum := Vec(0.0, 0.0)
+for item in vecs { sum = sum + item }
+println(sum, vecs.fold(Vec(0.0, 0.0)) { acc, item -> acc + item })
+
+// Lists add up with + (a new list).
+xs := [1, 2]
+ys := xs + [3] + [4, 5]
+xs += [9]
+println(xs, ys)
+
+// Subtypes use the parent's operators, and an override is honoured.
+open type Base(n: Int) {
+    open fn plus(o: Base) = Base(n + o.n)
+    fn toString() = "Base($n)"
+}
+type Doubler(n: Int) : Base(n) {
+    override fn plus(o: Base) = Base((n + o.n) * 2)
+}
+items: List<Base> = [Base(1), Doubler(5)]
+println(items[0] + items[1], items[1] + items[0], items[0] + items[0])

@@ -1,0 +1,3 @@
+// error: give it a method `unaryMinus()`
+type V(x: Int)
+println(-V(1))

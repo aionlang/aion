@@ -457,6 +457,12 @@ type List<T> {
     fn addAll(other: List<T>) {
         for x in other { add(x) }
     }
+    // `a + b` is a new list holding the elements of both.
+    fn plus(other: List<T>) -> List<T> {
+        out := copy()
+        out.addAll(other)
+        return out
+    }
     fn removeAt(index: Int) -> T {
         checkIndex(index)
         removed := items[index]

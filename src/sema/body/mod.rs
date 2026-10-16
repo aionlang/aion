@@ -2077,8 +2077,20 @@ impl<'c, 'a> Cx<'c, 'a> {
                         mk(K::Neg(Box::new(v)), ty)
                     }
                     (ast::UnOp::Not, Ty::Bool, _) => mk(K::Not(Box::new(v)), Ty::Bool),
+                    // `-v` on your own type is `v.unaryMinus()`
+                    (ast::UnOp::Neg, Ty::Obj(t), _) if self.ck.t.ty(t).methods.contains_key("unaryMinus") => {
+                        let method = self.ck.t.ty(t).methods["unaryMinus"];
+                        let ty = v.ty;
+                        let call = self.call_values(method, Some(v), Vec::new(), e.span)?;
+                        self.virtual_on(call, ty, "unaryMinus")
+                    }
                     (ast::UnOp::Neg, other, _) => {
-                        return Err(Diagnostic::new(format!("cannot negate a {}", self.name(other)), e.span));
+                        let e = Diagnostic::new(format!("cannot negate a {}", self.name(other)), e.span);
+                        return Err(if matches!(other, Ty::Obj(_)) {
+                            e.hint("to negate your own type, give it a method `unaryMinus()`")
+                        } else {
+                            e
+                        });
                     }
                     (ast::UnOp::Not, other, _) => {
                         return Err(Diagnostic::new(format!("`!` needs a Bool, found {}", self.name(other)), e.span));
@@ -2290,6 +2302,24 @@ impl<'c, 'a> Cx<'c, 'a> {
             return Ok(self.object_equality(op == B::Eq, equals, l, r));
         }
 
+        // Operators on your own types call methods: `a + b` is `a.plus(b)`, `a < b` is `a.compareTo(b) < 0`.
+        if let Some((method, name, compare)) = self.operator_method(op, l.ty, r.ty) {
+            let ty = l.ty;
+            let call = self.call_values(method, Some(l), vec![(r, span)], span)?;
+            let call = self.virtual_on(call, ty, name);
+            if !compare {
+                return Ok(call);
+            }
+            let order = self.coerce(call, Ty::Int, span)?;
+            let against = match op {
+                B::Lt => hir::BinOp::Lt,
+                B::Le => hir::BinOp::Le,
+                B::Gt => hir::BinOp::Gt,
+                _ => hir::BinOp::Ge,
+            };
+            return Ok(mk(K::Binary(against, Box::new(order), Box::new(mk(K::Int(0), Ty::Int))), Ty::Bool));
+        }
+
         // Mixed Int/Float arithmetic and comparison happens in Float.
         let (l, r) = match (l.ty, r.ty) {
             (Ty::Int, Ty::Float) => (mk(K::IntToFloat(Box::new(l)), Ty::Float), r),
@@ -2359,13 +2389,51 @@ impl<'c, 'a> Cx<'c, 'a> {
                 (if op == B::Eq { hir::BinOp::Eq } else { hir::BinOp::Ne }, Ty::Bool)
             }
             _ => {
-                return Err(Diagnostic::new(
-                    format!("cannot apply `{}` to {} values", op.symbol(), self.name(l.ty)),
-                    span,
-                ));
+                let e = Diagnostic::new(format!("cannot apply `{}` to {} values", op.symbol(), self.name(l.ty)), span);
+                return Err(match (l.ty, Self::operator_name(op)) {
+                    (Ty::Obj(_), Some((name, _))) => e.hint(format!(
+                        "to use `{}` on your own types, give the type a method `{name}`",
+                        op.symbol()
+                    )),
+                    _ => e,
+                });
             }
         };
         Ok(mk(K::Binary(hop, Box::new(l), Box::new(r)), result))
+    }
+
+    /// The method an operator stands for on an object, and whether it is an ordering (`compareTo`).
+    fn operator_name(op: ast::BinOp) -> Option<(&'static str, bool)> {
+        use ast::BinOp as B;
+        Some(match op {
+            B::Add => ("plus", false),
+            B::Sub => ("minus", false),
+            B::Mul => ("times", false),
+            B::Div => ("div", false),
+            B::Rem => ("rem", false),
+            B::Lt | B::Le | B::Gt | B::Ge => ("compareTo", true),
+            _ => return None,
+        })
+    }
+
+    /// For `l op r` where `l` is an object (or a built-in type with an extension method and `r` is an object):
+    /// the method that implements the operator.
+    fn operator_method(&self, op: ast::BinOp, l: Ty, r: Ty) -> Option<(FnId, &'static str, bool)> {
+        let (name, compare) = Self::operator_name(op)?;
+        let method = match l {
+            Ty::Obj(t) => {
+                let info = self.ck.t.ty(t);
+                if info.iface.is_some() || info.array_elem.is_some() {
+                    return None;
+                }
+                info.methods.get(name).copied()
+            }
+            Ty::Int | Ty::Float | Ty::Str | Ty::Char | Ty::Bool | Ty::Bytes if matches!(r, Ty::Obj(_)) => {
+                self.ck.ext_method(l, name)
+            }
+            _ => None,
+        }?;
+        Some((method, name, compare))
     }
 
     /// For a type that can be null: the type without the null, and whether it is a real
