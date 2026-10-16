@@ -112,7 +112,7 @@ See **[docs/architecture.md](docs/architecture.md)** for the details.
 | | |
 |---|---|
 | [docs/language.md](docs/language.md) | the language: syntax, types, lambdas, modules |
-| [docs/projects.md](docs/projects.md) | `aion.project`, dependencies, the build cache |
+| [docs/projects.md](docs/projects.md) | scripts and projects, `aion add`, `// dep:` lines, dependencies, the build cache |
 | [docs/packages.md](docs/packages.md) | writing, testing and publishing packages; bundling C code |
 | [docs/stdlib.md](docs/stdlib.md) | the standard library, and how to add C-backed functions with `extern fn` |
 | [docs/architecture.md](docs/architecture.md) | compiler internals, memory model, garbage collector |

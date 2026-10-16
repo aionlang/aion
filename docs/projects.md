@@ -37,9 +37,63 @@ that uses the package, so a package with its own `extern fn` bindings can call i
 | `aion`                     | run the project's entry (from the project folder or any subfolder) |
 | `aion file.aion`           | run one file; if it lies inside a project, that project's dependencies are available |
 | `aion build [-o out]`      | build an executable (named after the project by default)        |
+| `aion add <source>`        | add a dependency to the project (or a script) — see below       |
+| `aion remove <name>`       | remove one                                                      |
+| `aion update [name]`       | fetch newer commits for git dependencies (all, or one)          |
+| `aion tree [file]`         | show the dependency tree with the pinned commits                |
 | `aion fetch`               | download dependencies now (other commands do it on demand)      |
 | `aion new <name>`          | create a project                                                |
 | `aion clean`               | empty the build cache                                           |
+
+## The ladder: script → script with dependencies → project
+
+You only need as much structure as the program has.
+
+```text
+hello.aion                      one file: aion hello.aion
+tool.aion  (// dep: lines)      one file that uses other people's code
+myapp/aion.project + main.aion  several files, a name, dependencies, native code
+```
+
+**Scripts with dependencies.**  Put `// dep:` lines in the first comment lines of the script (after an
+optional `#!` line); no project or folder is needed.  Git repositories are fetched into the cache and pinned
+in `tool.aion.lock` next to the script.
+
+```text
+#!/usr/bin/env aion
+// dep: http  = github.com/someone/http@v1.2
+// dep: utils = ../utils
+import http
+import utils
+```
+
+A source is a path (`./x`, `../x`, `/abs`, `~/x`) or a git repository: `github.com/user/repo`
+(also `gitlab.com`, `codeberg.org`, `bitbucket.org`), a full `https://…`, `ssh://…` or `git@host:…` URL,
+optionally followed by `@REF`: `@v1.2` (a tag, branch or commit), or `@tag:v1.2`, `@branch:dev`,
+`@rev:9fceb02`.  Only the entry script's header is read, and inside a project the lines are ignored
+(with a warning) — use `aion.project` there.
+
+**Managing dependencies.**
+
+```text
+aion add github.com/someone/http@v1.2      # into the project found here or above
+aion add ../utils --as tools               # a path; --as picks the import name
+aion add github.com/me/x --branch dev      # --tag / --branch / --rev
+aion add github.com/me/x --script tool.aion   # into the script's header instead
+aion remove http
+aion update          # or: aion update http
+aion tree
+```
+
+`aion add` writes to the nearest `aion.project` — in the current folder without asking; if it is further
+up it asks `Use it? [Y/n]`; if there is none it asks whether to create one here (or you pass `--script`).
+Without a terminal, or with `--yes`, it never asks and takes those defaults, and it always says what it did.
+The name defaults to the repository or folder name (without `.git` and a leading `aion-`).  After editing it
+fetches the dependency; if that fails the file is put back as it was.
+
+**Which project?**  The nearest `aion.project` in the script's folder or above — but the search stops
+before your home folder (`$HOME`), so a stray `~/aion.project` never captures unrelated scripts.
+`--project <file-or-folder>` names one explicitly.
 
 ## Dependencies
 
@@ -70,6 +124,8 @@ from utils import shout, pad
 `aion.project`, else `lib.aion`, else `<dependency-name>.aion` in its root.  The
 name you import by is the name in *your* `[dependencies]`, not the one the
 library calls itself.
+
+A dependency can be any folder: `import utils.strings.pad` also finds `utils/strings/pad/lib.aion`.
 
 Name lookup for `import x` tries, in order: a file beside the importing file (or in
 `lib/`, or the project root), then a declared dependency, then the standard

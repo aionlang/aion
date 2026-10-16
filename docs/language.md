@@ -1170,10 +1170,17 @@ import std.math            // …explicitly (aion.math works too)
 * `import m` makes `m.name(...)` and `m.variable` available, and a type of the module can be
   written `m.Type` wherever a type is expected (`fn show(d: time.DateTime)`,
   `x: List<json.Json>`).
-* An import is looked up as a file beside the importing file (or in its `lib/`
+* **Folders are packages.**  `import shapes` loads `shapes/lib.aion` (or `shapes/shapes.aion`) and
+  `import shapes.circle` loads `shapes/circle.aion`; there is no `package` keyword.  Two prefixes
+  anchor an import: `import @util` starts at the package's root folder, and `import .circle` /
+  `import ..shared.util` start at the importing file's folder / its parent (a relative import cannot
+  leave the package).  They work with `from … import` and `as` too.
+* A top-level name starting with `_` (`fn _helper()`, `type _Node`, `_cache := …`) is **private to its
+  file**: other modules cannot use it (`_` alone and the prelude's `__x` helpers are exempt).
+* A bare import is looked up as a file beside the importing file (or in its `lib/`
   folder, or the project root), then among the project's
   [dependencies](projects.md), then in the standard library.  A local file
-  therefore shadows a standard-library module of the same name.
+  therefore shadows a standard-library module of the same name (with a warning).
 * A module's top-level statements run once, before the importing program, in
   dependency order.  Its variables are visible to importers as `m.name`, and can
   be assigned (`m.label = "x"`).

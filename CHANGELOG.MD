@@ -106,6 +106,12 @@ migration notes at the end of this section.
   hashed by value), `a, b := pair`, `(a, (b, c)) := …`, `_`, `a, b = b, a` (also fields and elements),
   `for (k, v) in …` / `for k, v in …`, through `component1()`, `component2()`, … which tuples, `Entry`
   and `List` have. Parenthesised types group: `((Int) -> Int)?`. Library: `zip`, `enumerate`.
+- **Packages and imports.** A folder is a package (`import shapes` loads `shapes/lib.aion`);
+  `import @util` starts at the package root, `import .circle` / `import ..shared` at the importing file;
+  names starting with `_` are private to their file; a local file that shadows a standard-library module warns.
+- **Dependencies from the command line.** `aion add <github.com/user/repo@v1 | ../path>`, `aion remove`,
+  `aion update`, `aion tree`; scripts declare dependencies in `// dep: name = source` header lines (pins in
+  `script.aion.lock`); the project search stops before `$HOME`, `--project` overrides it.
 - **Early exits as expressions.** `x ?: return -1`, `n.toIntOrNull() ?: break`, `c ? v : continue`;
   a branch of an `if` / `when` / `? :` that always leaves no longer has to match the other's type.
 - **`data type`.** `data type Point(x: Int, y: Int)` compares and hashes by value (Map keys, Sets),
