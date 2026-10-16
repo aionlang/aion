@@ -140,6 +140,23 @@ fn hello_world_via_build_and_run() {
     assert_eq!(String::from_utf8_lossy(&run.stdout), "hi from a built binary\n");
 }
 
+#[test]
+fn a_panic_prints_the_calls_that_led_to_it_unless_told_not_to() {
+    let root = scratch("trace");
+    write(&root.join("boom.aion"), "fn inner(n: Int) = [1][n]\nfn outer() = inner(5) + 1\nprintln(outer())\n");
+    let out = aion_in(&root, &["boom.aion"]);
+    let text = stderr(&out);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(text.contains("panic: index 5 is out of bounds for size 1"), "{text}");
+    assert!(text.contains("at inner (boom.aion:1)"), "{text}");
+    assert!(text.contains("at outer (boom.aion:2)"), "{text}");
+    assert!(text.contains("at <top level> (boom.aion:3)"), "{text}");
+
+    let quiet = stderr(&aion_in(&root, &["--no-trace", "boom.aion"]));
+    assert!(quiet.contains("panic: index 5"), "{quiet}");
+    assert!(!quiet.contains("    at "), "{quiet}");
+}
+
 // ── projects & dependencies ─────────────────────────────────────────
 
 /// A scratch directory unique to one test.

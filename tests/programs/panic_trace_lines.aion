@@ -1,0 +1,15 @@
+// exit: 1
+// stderr: panic_trace_lines.aion:13)
+// The line shown for each call is the line it was running: here the call inside `outer` is on line 13.
+fn inner(xs: List<Int>) -> Int {
+    return xs[3]
+}
+
+fn middle(xs: List<Int>) -> Int {
+    return inner(xs) + 1
+}
+
+fn outer() -> Int {
+    return middle([1, 2, 3]) * 2
+}
+println(outer())

@@ -1,0 +1,22 @@
+// exit: 1
+// stderr: at Account.withdraw (
+// A panic prints where it happened: the function and line, then the calls that led there.
+type Account(balance: Int) {
+    fn withdraw(amount: Int) {
+        if amount > balance {
+            panic("insufficient funds")
+        }
+        balance -= amount
+    }
+}
+
+fn process(acc: Account, amounts: List<Int>) {
+    for a in amounts {
+        acc.withdraw(a)
+    }
+}
+
+acc := Account(100)
+println("start")
+process(acc, [30, 50, 40])
+println("not reached")
