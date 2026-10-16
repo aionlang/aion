@@ -10,7 +10,7 @@ import math
 p := geometry.point(1.0, 2.0)
 q := geometry.point(4.0, 6.0)
 println("distance from $p to $q:", p.distanceTo(q))
-println("midpoint:", p.plus(q).scaled(0.5))
+println("midpoint:", (p + q).scaled(0.5))
 
 // Shapes from the package, all satisfying its Shape interface.
 all: List<shapes.Shape> = [

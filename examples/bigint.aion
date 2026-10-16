@@ -1,5 +1,6 @@
 // Arbitrary-precision arithmetic: Int is 64 bits and wraps around, so for huge numbers we build our own
-// type from a list of base-one-billion "limbs".  Shows types with methods, lists, and a bit of maths.
+// type from a list of base-one-billion "limbs".  Shows types with methods and operators (`a + b` calls `plus`,
+// `a * b` calls `times`), lists, and a bit of maths.
 //
 //   aion examples/bigint.aion
 
@@ -17,7 +18,7 @@ type BigNat {
         return total
     }
 
-    fn add(other: BigNat) -> BigNat {
+    fn plus(other: BigNat) -> BigNat {
         out := BigNat()
         carry := 0
         n := limbs.size().max(other.limbs.size())
@@ -47,7 +48,7 @@ type BigNat {
     }
 
     // Schoolbook multiplication.
-    fn mul(other: BigNat) -> BigNat {
+    fn times(other: BigNat) -> BigNat {
         cells := Array(limbs.size() + other.limbs.size() + 1, 0)
         for i in 0..limbs.size() {
             carry := 0
@@ -75,8 +76,8 @@ type BigNat {
         base := this
         e := exponent
         while e > 0 {
-            if e % 2 == 1 { result = result.mul(base) }
-            base = base.mul(base)
+            if e % 2 == 1 { result *= base }
+            base *= base
             e /= 2
         }
         return result
@@ -114,7 +115,7 @@ fn fibonacci(n: Int) -> BigNat {
     a := fromInt(0)
     b := fromInt(1)
     for i in 0..n {
-        next := a.add(b)
+        next := a + b
         a = b
         b = next
     }
@@ -135,10 +136,10 @@ println("fib(300) =                 ", fibonacci(300))
 println("fib(1000) has", fibonacci(1000).digitCount(), "digits")
 
 // Multiplying two big numbers.
-a := fromInt(10).pow(30).add(fromInt(7))
+a := fromInt(10).pow(30) + fromInt(7)
 b := fromInt(10).pow(30)
-println("(10^30 + 7) * 10^30 =       ", a.mul(b))
-println("999999999 * 999999999 =     ", fromInt(999999999).mul(fromInt(999999999)))
+println("(10^30 + 7) * 10^30 =       ", a * b)
+println("999999999 * 999999999 =     ", fromInt(999999999) * fromInt(999999999))
 
 // > 20! fits in an Int:         2432902008176640000 = 2432902008176640000
 // > 30! does not:               265252859812191058636308480000000

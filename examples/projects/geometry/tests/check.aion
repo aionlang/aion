@@ -17,7 +17,7 @@ fn near(a: Float, b: Float) = (a - b).abs() < 0.000001
 
 p := lib.point(3.0, 4.0)
 check("distance to origin", near(p.distanceTo(lib.point(0.0, 0.0)), 5.0))
-check("plus and scaled", p.plus(p).scaled(0.5).toString() == p.toString())
+check("plus and scaled", (p + p).scaled(0.5).toString() == p.toString())
 check("centroid", lib.centroid([lib.point(0.0, 0.0), lib.point(4.0, 0.0), lib.point(2.0, 6.0)])!!.toString() == "(2, 2)")
 check("centroid of nothing", lib.centroid(List<lib.Point>()) == null)
 

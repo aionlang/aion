@@ -1,5 +1,5 @@
 // Matrices: a small linear-algebra toolkit with multiplication, transpose, determinant, solving equations
-// and fast Fibonacci by matrix powers.  Shows a type with operations that return new values.
+// and fast Fibonacci by matrix powers.  Shows a type with operations that return new values, and `a * b` calling its `times` method.
 //
 //   aion examples/matrix.aion
 
@@ -126,9 +126,9 @@ a := matrix([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
 b := matrix([[7.0, 8.0], [9.0, 10.0], [11.0, 12.0]])
 println("A =\n$a")
 println("B =\n$b")
-println("A × B =\n${a.times(b)}")
+println("A × B =\n${a * b}")
 println("Aᵀ =\n${a.transpose()}")
-println("I × (A × B) = A × B:", identity(2).times(a.times(b)).toString() == a.times(b).toString())
+println("I × (A × B) = A × B:", (identity(2) * (a * b)).toString() == (a * b).toString())
 
 square := matrix([[2.0, 1.0, 1.0], [1.0, 3.0, 2.0], [1.0, 0.0, 0.0]])
 println("det =", square.determinant().roundTo(6), " det of a singular matrix =", matrix([[1.0, 2.0], [2.0, 4.0]]).determinant())
@@ -144,8 +144,8 @@ fn power(m: Matrix, n: Int) -> Matrix {
     base := m
     e := n
     while e > 0 {
-        if e % 2 == 1 { result = result.times(base) }
-        base = base.times(base)
+        if e % 2 == 1 { result *= base }
+        base *= base
         e /= 2
     }
     return result
@@ -158,7 +158,7 @@ for n in [10, 30, 50] {
 
 // Shapes that do not fit are an error: `try` turns the panic into a value.
 outcome := try {
-    a.times(a)
+    a * a
     "multiplied"
 } catch e {
     "caught: $e"

@@ -18,7 +18,7 @@ fn point(x: Float, y: Float) -> Point = Point(x, y)
 fn centroid(points: List<Point>) -> Point? {
     if points.isEmpty() { return null }
     sum := Point(0.0, 0.0)
-    for p in points { sum = sum.plus(p) }
+    for p in points { sum += p }
     return sum.scaled(1.0 / points.size().toFloat())
 }
 
