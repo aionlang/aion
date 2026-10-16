@@ -23,6 +23,8 @@ use crate::syntax::ast::{self, Ident};
 use crate::syntax::parse_module;
 
 pub struct LoadedModule {
+    /// The module's source file in the [`SourceMap`].
+    pub file: u32,
     /// Unique, symbol-safe name used as the prefix of generated symbols.
     pub name: String,
     pub ast: ast::Module,
@@ -123,7 +125,7 @@ impl Loader<'_> {
         self.stack.pop();
 
         let name = self.unique_name(&name);
-        self.modules.push(LoadedModule { name, ast, imports });
+        self.modules.push(LoadedModule { file, name, ast, imports });
         let idx = self.modules.len() - 1;
         self.by_key.insert(key, idx);
         Ok(idx)

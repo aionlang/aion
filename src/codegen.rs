@@ -29,6 +29,7 @@ use crate::sema::hir::*;
 
 const RUNTIME_DECLS: &str = "\
 @aion_frame_top = external global ptr
+@aion_trace_top = external global ptr
 declare ptr @aion_new_object(i64, i64, i64)
 declare ptr @aion_concat(ptr, ptr)
 declare ptr @aion_int_to_str(i64)
@@ -58,7 +59,7 @@ declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
 const RUNTIME_SYMBOLS: &[&str] = &[
     "aion_new_object", "aion_concat", "aion_int_to_str", "aion_float_to_str", "aion_bool_to_str",
     "aion_str_eq", "aion_str_cmp", "aion_print_str", "aion_print_char", "aion_char_to_str", "aion_print_int", "aion_print_float", "aion_print_bool",
-    "aion_panic_null", "aion_panic_div_zero", "aion_panic_index", "aion_panic_unwrap", "aion_panic_cast", "aion_set_args", "aion_array_new", "aion_hash_int", "aion_hash_str", "aion_frame_top",
+    "aion_panic_null", "aion_panic_div_zero", "aion_panic_index", "aion_panic_unwrap", "aion_panic_cast", "aion_set_args", "aion_array_new", "aion_hash_int", "aion_hash_str", "aion_frame_top", "aion_trace_top",
 ];
 
 pub fn emit(p: &Program) -> String {
@@ -187,6 +188,8 @@ const EMPTY_BYTES_DEFINITION: &str = "@aion_empty_bytes = internal constant { i6
 struct Pool {
     ids: HashMap<String, usize>,
     items: Vec<String>,
+    /// `{ name, file }` records the stack trace points at, one per traced function.
+    traces: Vec<String>,
 }
 
 impl Pool {
@@ -200,9 +203,17 @@ impl Pool {
         format!("getelementptr inbounds ({{ i64, i32, i32, i64, [{n} x i8] }}, ptr @str.{id}, i32 0, i32 4)")
     }
 
+    /// A record naming a function for stack traces; returns its global's name.
+    fn trace_record(&mut self, name: &str, file: &str) -> String {
+        let (name, file) = (self.operand(name), self.operand(file));
+        let id = self.traces.len();
+        self.traces.push(format!("@trace.{id} = private constant {{ ptr, ptr }} {{ ptr {name}, ptr {file} }}\n"));
+        format!("@trace.{id}")
+    }
+
     fn definitions(&self) -> String {
         const STATIC: u32 = 2; // must match AION_F_STATIC in runtime/aion.h
-        let mut out = String::new();
+        let mut out = self.traces.concat();
         for (id, s) in self.items.iter().enumerate() {
             let n = s.len() + 1;
             let mut bytes = String::new();
@@ -244,6 +255,8 @@ struct FnGen<'a> {
     terminated: bool,
     /// Enclosing loops as `(continue label, break label)`.
     loops: Vec<(String, String)>,
+    /// The function keeps a record in the stack trace.
+    traced: bool,
 }
 
 /// Placeholder replaced by the frame-pop sequence (or nothing) at assembly.
@@ -264,6 +277,7 @@ impl<'a> FnGen<'a> {
             cur: "entry".into(),
             terminated: false,
             loops: Vec::new(),
+            traced: f.trace.is_some(),
         }
     }
 
@@ -307,6 +321,21 @@ impl<'a> FnGen<'a> {
         params.extend(self.f.params().iter().enumerate().map(|(i, l)| format!("{} %arg{i}", ir(l.ty))));
         let mut out = format!("define {} @\"{}\"({}) {{\nentry:\n", ir(self.f.ret), self.f.symbol, params.join(", "));
 
+        if let Some(t) = &self.f.trace {
+            let record = self.pool.trace_record(&t.name, &t.file);
+            let _ = write!(
+                out,
+                "  %trace = alloca {{ ptr, ptr, i64 }}, align 8\n\
+                 \x20 %trace.prev = load ptr, ptr @aion_trace_top\n\
+                 \x20 store ptr %trace.prev, ptr %trace\n\
+                 \x20 %trace.info = getelementptr inbounds {{ ptr, ptr, i64 }}, ptr %trace, i32 0, i32 1\n\
+                 \x20 store ptr {record}, ptr %trace.info\n\
+                 \x20 %trace.line = getelementptr inbounds {{ ptr, ptr, i64 }}, ptr %trace, i32 0, i32 2\n\
+                 \x20 store i64 {line}, ptr %trace.line\n\
+                 \x20 store ptr %trace, ptr @aion_trace_top\n",
+                line = t.line,
+            );
+        }
         let n = self.nslots;
         if n > 0 {
             let _ = write!(
@@ -330,6 +359,9 @@ impl<'a> FnGen<'a> {
             if line.trim() == POP {
                 if n > 0 {
                     out.push_str("  store ptr %top, ptr @aion_frame_top\n");
+                }
+                if self.traced {
+                    out.push_str("  store ptr %trace.prev, ptr @aion_trace_top\n");
                 }
             } else {
                 out.push_str(line);
@@ -587,6 +619,11 @@ impl<'a> FnGen<'a> {
                 step.iter().for_each(|s| self.stmt(s));
                 self.term(format!("br label %{head}"));
                 self.begin(&end);
+            }
+            Stmt::Line(n) => {
+                if self.traced {
+                    self.line(format!("store i64 {n}, ptr %trace.line"));
+                }
             }
             Stmt::Break => {
                 let end = self.loops.last().expect("the checker rejects `break` outside loops").1.clone();

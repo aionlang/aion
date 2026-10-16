@@ -62,12 +62,28 @@ typedef struct AionFrame {
 
 extern AionFrame *aion_frame_top;
 
+/* Stack trace: one record per active function of the program's own code (not the standard library),
+ * on the C stack, linked through `aion_trace_top`.  `line` is kept up to date by the compiled code. */
+typedef struct AionTraceInfo {
+    const char *name;
+    const char *file;
+} AionTraceInfo;
+
+typedef struct AionTrace {
+    struct AionTrace *prev;
+    const AionTraceInfo *info;
+    int64_t line;
+} AionTrace;
+
+extern AionTrace *aion_trace_top;
+
 /* ── Per-task state (see tasks.c) ─────────────────────────────── */
 
 /* What belongs to one task and is swapped when the scheduler switches: the shadow
  * stack, the innermost `try`, and the `defer` stack. */
 typedef struct AionTaskState {
     AionFrame *frame;
+    AionTrace *trace;
     void *try_top;
     void **defers;
     size_t defer_len, defer_cap;

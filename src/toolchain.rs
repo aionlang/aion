@@ -14,6 +14,8 @@ pub struct Options {
     /// Passed through as `-O<level>`.
     pub opt_level: String,
     pub keep_temps: bool,
+    /// Keep a stack trace (function and line) for a panic to print; costs some speed on call-heavy code.
+    pub trace: bool,
 }
 
 /// Compiler executables to try, newest first.  `AION_CLANG` overrides.

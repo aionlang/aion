@@ -18,6 +18,7 @@
 #include <string.h>
 
 AionFrame *aion_frame_top = NULL;
+AionTrace *aion_trace_top = NULL;
 
 /* Module-level variables holding pointers: the compiler emits a table of their
  * addresses into every program (possibly empty). */
@@ -69,6 +70,7 @@ typedef struct TryContext {
     struct TryContext *prev;
     jmp_buf jump;
     AionFrame *frame; /* shadow stack to restore */
+    AionTrace *trace; /* stack trace to restore */
     size_t defers;    /* deferred closures to run before jumping */
 } TryContext;
 
@@ -77,6 +79,7 @@ static TryContext *try_top = NULL;
 /* Switching tasks swaps these (see tasks.c). */
 void aion_task_save(AionTaskState *s) {
     s->frame = aion_frame_top;
+    s->trace = aion_trace_top;
     s->try_top = try_top;
     s->defers = defer_stack;
     s->defer_len = defer_len;
@@ -85,6 +88,7 @@ void aion_task_save(AionTaskState *s) {
 
 void aion_task_load(const AionTaskState *s) {
     aion_frame_top = s->frame;
+    aion_trace_top = s->trace;
     try_top = s->try_top;
     defer_stack = s->defers;
     defer_len = s->defer_len;
@@ -92,6 +96,20 @@ void aion_task_load(const AionTaskState *s) {
 }
 static char panic_message[512];
 static int fatal_panic = 0;
+
+/* The functions that were running, innermost first.  A long chain (deep recursion) shows its ends. */
+static void print_trace(void) {
+    size_t n = 0;
+    for (AionTrace *t = aion_trace_top; t; t = t->prev) n++;
+    size_t i = 0;
+    for (AionTrace *t = aion_trace_top; t; t = t->prev, i++) {
+        if (n > 20 && i == 12) {
+            fprintf(stderr, "    ... %zu more calls ...\n", n - 15);
+        }
+        if (n > 20 && i >= 12 && i < n - 3) continue;
+        fprintf(stderr, "    at %s (%s:%lld)\n", t->info->name, t->info->file, (long long)t->line);
+    }
+}
 
 void aion_panic(const char *msg) {
     if (try_top) {
@@ -107,6 +125,7 @@ void aion_panic(const char *msg) {
     }
     fflush(stdout);
     fprintf(stderr, "[aion] panic: %s\n", msg);
+    print_trace();
     exit(1);
 }
 
@@ -117,6 +136,7 @@ void aion_panic(const char *msg) {
         TryContext ctx;                                                                           \
         ctx.prev = try_top;                                                                       \
         ctx.frame = aion_frame_top;                                                               \
+        ctx.trace = aion_trace_top;                                                               \
         ctx.defers = defer_len;                                                                   \
         CODE_RET raw;                                                                             \
         try_top = &ctx;                                                                           \
@@ -125,6 +145,7 @@ void aion_panic(const char *msg) {
             try_top = ctx.prev;                                                                   \
         } else {                                                                                  \
             aion_frame_top = ctx.frame;                                                           \
+            aion_trace_top = ctx.trace;                                                           \
             raw = (*(CODE_RET (**)(void *, const char *))handler)(handler, aion_string(panic_message)); \
         }                                                                                         \
         return FIX(raw);                                                                          \
@@ -141,6 +162,7 @@ void aion_try(void *body, void *handler) {
     TryContext ctx;
     ctx.prev = try_top;
     ctx.frame = aion_frame_top;
+    ctx.trace = aion_trace_top;
     ctx.defers = defer_len;
     try_top = &ctx;
     if (setjmp(ctx.jump) == 0) {
@@ -148,6 +170,7 @@ void aion_try(void *body, void *handler) {
         try_top = ctx.prev;
     } else {
         aion_frame_top = ctx.frame;
+        aion_trace_top = ctx.trace;
         call1(handler, aion_string(panic_message));
     }
 }

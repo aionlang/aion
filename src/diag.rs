@@ -42,6 +42,11 @@ impl SourceMap {
     pub fn file(&self, id: u32) -> &SourceFile {
         &self.files[id as usize]
     }
+
+    pub fn len(&self) -> usize {
+        self.files.len()
+    }
+
 }
 
 #[derive(Debug, Clone)]

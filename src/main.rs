@@ -35,6 +35,7 @@ before them if they look like options.
 
 options:
   -O0..-O3       optimisation level (default -O2)
+  --no-trace     leave out the stack trace a panic prints (a little faster)
   --keep-temps   keep intermediate files
   -h, --help     show this help
   -V, --version  show the version
@@ -64,7 +65,7 @@ struct Cli {
 fn parse_args(args: &[String]) -> Result<Cli, String> {
     let mut command = None;
     let (mut input, mut output) = (None, None);
-    let mut opts = toolchain::Options { opt_level: "2".into(), keep_temps: false };
+    let mut opts = toolchain::Options { opt_level: "2".into(), keep_temps: false, trace: true };
     let mut program_args = Vec::new();
 
     let mut it = args.iter();
@@ -88,6 +89,7 @@ fn parse_args(args: &[String]) -> Result<Cli, String> {
             "--emit-ir" => command = Some(Subcommand::EmitIr), // pre-0.2 spelling
             "-o" => output = Some(PathBuf::from(it.next().ok_or("`-o` needs a file name")?)),
             "--keep-temps" => opts.keep_temps = true,
+            "--no-trace" => opts.trace = false,
             "-h" | "--help" => return Err(USAGE.into()),
             "-V" | "--version" => return Err(format!("aion {}", env!("CARGO_PKG_VERSION"))),
             o if o.starts_with("-O") && o.len() == 3 && o.as_bytes()[2].is_ascii_digit() => {
@@ -140,12 +142,12 @@ struct Compiled {
 }
 
 /// Everything up to (but not including) invoking the C toolchain.
-fn compile(map: &mut SourceMap, entry: &Path, project: Option<&project::Project>) -> Result<Compiled, Failure> {
+fn compile(map: &mut SourceMap, entry: &Path, project: Option<&project::Project>, trace: bool) -> Result<Compiled, Failure> {
     let dir = entry.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
     let packages = project::resolve(project, dir).map_err(|d| (d, None))?;
     let result = (|| {
         let loaded = loader::load(map, entry, packages)?;
-        let program = sema::analyze(&loaded)?;
+        let program = sema::analyze(&loaded, map, trace)?;
         Ok::<_, Diagnostic>(Compiled { ir: codegen::emit(&program), c_sources: loaded.c_sources, libs: loaded.libs })
     })();
     result.map_err(|d| (d, None))
@@ -257,7 +259,7 @@ fn run() -> Result<ExitCode, Failure> {
 
     let (entry, proj) = locate(cli.input.as_deref()).map_err(general)?;
     let mut map = SourceMap::default();
-    let program = compile(&mut map, &entry, proj.as_ref()).map_err(|(d, _)| (d, Some(map)))?;
+    let program = compile(&mut map, &entry, proj.as_ref(), cli.opts.trace).map_err(|(d, _)| (d, Some(map)))?;
 
     match cli.command {
         Subcommand::EmitIr => {

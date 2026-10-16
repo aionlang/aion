@@ -18,7 +18,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::rc::Rc;
 
-use crate::diag::{Diagnostic, Result, Span};
+use crate::diag::{Diagnostic, Result, SourceMap, Span};
 use crate::loader::Loaded;
 use crate::syntax::ast::{self, ExprKind, Item, StmtKind};
 use hir::{FnId, FnSig, FuncKind, GlobalId, Ty, TypeId};
@@ -254,6 +254,10 @@ pub struct Checker<'a> {
     /// The same for instances of generic interfaces.
     iface_instance_of: RefCell<HashMap<TypeId, (usize, Vec<Ty>)>>,
     module_names: Vec<String>,
+    /// Whether the program keeps a stack trace, and what it needs to know about the sources.
+    trace: bool,
+    files: Vec<FileLines>,
+    module_files: Vec<u32>,
     empty: Subst,
     /// Nesting depth of generic instantiation, to stop runaway recursion.
     depth: Cell<u32>,
@@ -379,8 +383,26 @@ impl Tables {
     }
 }
 
-pub fn analyze(loaded: &Loaded) -> Result<hir::Program> {
-    let ck = Checker::declare(loaded)?;
+/// Where the lines of a source file start, to turn a [`Span`] into a line number.
+struct FileLines {
+    name: String,
+    starts: Vec<u32>,
+    /// Part of the standard library, whose functions stay out of stack traces.
+    std: bool,
+}
+
+/// `trace` makes the program keep a stack of the user's own functions and lines, which a panic prints.
+pub fn analyze(loaded: &Loaded, map: &SourceMap, trace: bool) -> Result<hir::Program> {
+    let mut ck = Checker::declare(loaded)?;
+    ck.trace = trace;
+    ck.files = (0..map.len() as u32)
+        .map(|id| {
+            let f = map.file(id);
+            let starts = std::iter::once(0).chain(f.text.match_indices('\n').map(|(i, _)| i as u32 + 1)).collect();
+            FileLines { name: f.name.clone(), starts, std: f.name.starts_with("<std>") }
+        })
+        .collect();
+    ck.module_files = loaded.modules.iter().map(|m| m.file).collect();
     // Initialisers first: they fix the types of inferred globals in order.
     for &id in &ck.inits {
         ck.ensure(id)?;
@@ -427,6 +449,14 @@ pub fn analyze(loaded: &Loaded) -> Result<hir::Program> {
 }
 
 impl<'a> Checker<'a> {
+    /// The 1-based line a span starts on.
+    fn line_of(&self, span: Span) -> u32 {
+        match self.files.get(span.file as usize) {
+            Some(f) => f.starts.partition_point(|&s| s <= span.start) as u32,
+            None => 0,
+        }
+    }
+
     fn declare(loaded: &'a Loaded) -> Result<Self> {
         let mut ck = Checker {
             t: Tables::default(),
@@ -440,6 +470,9 @@ impl<'a> Checker<'a> {
             instance_of: RefCell::new(HashMap::new()),
             iface_instance_of: RefCell::new(HashMap::new()),
             module_names: loaded.modules.iter().map(|m| m.name.clone()).collect(),
+            trace: false,
+            files: Vec::new(),
+            module_files: Vec::new(),
             empty: Rc::new(HashMap::new()),
             depth: Cell::new(0),
             ext_methods: RefCell::new(HashMap::new()),
@@ -1413,6 +1446,7 @@ fn unstable_globals(loaded: &Loaded) -> HashSet<String> {
 /// Stands in for a function that was never checked (see [`FnSlot::lazy`]), so ids stay valid.
 fn unused_func() -> hir::Func {
     hir::Func {
+        trace: None,
         symbol: String::new(),
         kind: FuncKind::Unused,
         ret: Ty::Void,

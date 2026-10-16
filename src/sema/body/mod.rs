@@ -19,6 +19,12 @@ const MAX_CAPTURES: usize = 63;
 pub(super) fn check_fn(ck: &Checker, id: FnId, work: &Work) -> Result<hir::Func> {
     let info = ck.func(id);
     let mut cx = Cx::new(ck, info.module);
+    if ck.trace
+        && let Some(&file) = ck.module_files.get(info.module)
+        && !ck.files[file as usize].std
+    {
+        cx.trace_file = Some(ck.files[file as usize].name.clone());
+    }
     for p in &info.params {
         let local = cx.new_local(&p.name, p.ty);
         cx.scopes[0].insert(p.name.clone(), local);
@@ -187,7 +193,27 @@ pub(super) fn check_fn(ck: &Checker, id: FnId, work: &Work) -> Result<hir::Func>
     };
 
     cx.flush_lambdas();
+    let mut body = body;
+    let trace = cx.trace_file.clone().map(|file| {
+        let span = match work {
+            Work::Fn { decl, .. } | Work::Method { decl, .. } => decl.name.span,
+            Work::Ctor { decl, .. } | Work::TypeInit { decl, .. } => decl.name.span,
+            Work::Default { expr, .. } => expr.span,
+            Work::Init { stmts } => stmts.first().map_or_else(Span::default, |s| s.span),
+        };
+        let name = match (work, info.kind, info.params.first().map(|p| p.ty)) {
+            (Work::Init { .. }, ..) => "<top level>".to_string(),
+            (_, hir::FuncKind::Method, Some(Ty::Obj(t))) => format!("{}.{}", ck.t.ty(t).name, info.name),
+            (_, hir::FuncKind::Constructor, _) => format!("{}.new", info.name),
+            _ => info.name.clone(),
+        };
+        hir::Trace { name, file, line: ck.line_of(span) }
+    });
+    if let (Some(t), Some(b)) = (&trace, &mut body) {
+        b.insert(0, hir::Stmt::Line(t.line));
+    }
     Ok(hir::Func {
+        trace,
         symbol: info.symbol.clone(),
         kind: info.kind,
         ret: info.ret.get().unwrap_or(Ty::Void),
@@ -221,6 +247,7 @@ impl Checker<'_> {
             .collect();
         let call = mk(K::Call { func: id, args }, ret);
         let func = hir::Func {
+            trace: None,
             symbol: format!("thunk__{}", info.symbol),
             kind: hir::FuncKind::Closure,
             ret,
@@ -278,6 +305,7 @@ impl Checker<'_> {
         acc = concat(acc, text(")".into()));
 
         let func = hir::Func {
+            trace: None,
             symbol: format!("tostring__{}__{ty}", info.name),
             kind: hir::FuncKind::Method,
             ret: Ty::Str,
@@ -377,6 +405,7 @@ struct Frame {
 /// A checked lambda waiting for the enclosing function to finish, which
 /// settles which of the variables it captures need boxing.
 struct PendingLambda {
+    trace: Option<hir::Trace>,
     id: FnId,
     ret: Ty,
     n_params: usize,
@@ -405,6 +434,8 @@ struct Cx<'c, 'a> {
     outer: Vec<Frame>,
     vars: Vec<VarInfo>,
     lambdas: Vec<PendingLambda>,
+    /// The source file's name when this function keeps a frame in the stack trace.
+    trace_file: Option<String>,
     /// One entry per open block of the current function: the local holding the
     /// `defer` stack depth at its first `defer`, if it has one.
     block_defers: Vec<Option<LocalId>>,
@@ -471,12 +502,20 @@ impl<'c, 'a> Cx<'c, 'a> {
             outer: Vec::new(),
             vars: Vec::new(),
             lambdas: Vec::new(),
+            trace_file: None,
             block_defers: Vec::new(),
             loop_bases: Vec::new(),
             in_try: false,
             pending_try: false,
             narrowed: Vec::new(),
             lambda_assigned: HashSet::new(),
+        }
+    }
+
+    /// In a traced function, note that the next statement starts on `span`'s line.
+    fn mark_line(&self, span: Span, out: &mut Vec<hir::Stmt>) {
+        if self.trace_file.is_some() {
+            out.push(hir::Stmt::Line(self.ck.line_of(span)));
         }
     }
 
@@ -604,13 +643,18 @@ impl<'c, 'a> Cx<'c, 'a> {
     /// function is done, when every variable's capture/mutation status is known.
     fn flush_lambdas(&mut self) {
         for l in take(&mut self.lambdas) {
+            let mut body = l.body;
+            if let Some(t) = &l.trace {
+                body.insert(0, hir::Stmt::Line(t.line));
+            }
             let func = hir::Func {
+                trace: l.trace,
                 symbol: format!("lambda__{}", l.id),
                 kind: hir::FuncKind::Closure,
                 ret: l.ret,
                 n_params: l.n_params,
                 locals: self.convert_locals(l.locals),
-                body: Some(l.body),
+                body: Some(body),
                 captures: l.captures,
             };
             self.ck.set_func(l.id, func);
@@ -704,7 +748,12 @@ impl<'c, 'a> Cx<'c, 'a> {
         if captures.len() > MAX_CAPTURES {
             return Err(Diagnostic::new(format!("a lambda can capture at most {MAX_CAPTURES} variables"), span));
         }
-        self.lambdas.push(PendingLambda { id, ret, n_params: ps.len(), locals, body: stmts, captures });
+        let trace = self.trace_file.as_ref().map(|file| hir::Trace {
+            name: "<lambda>".into(),
+            file: file.clone(),
+            line: self.ck.line_of(span),
+        });
+        self.lambdas.push(PendingLambda { trace, id, ret, n_params: ps.len(), locals, body: stmts, captures });
         let ty = self.ck.t.intern_fn(ps.iter().map(|p| p.1).collect(), ret);
         Ok(mk(K::Closure { func: id }, ty))
     }
@@ -719,6 +768,7 @@ impl<'c, 'a> Cx<'c, 'a> {
         for (i, s) in body.iter().enumerate() {
             match &s.kind {
                 StmtKind::Expr(e) if i + 1 == body.len() && want_ret != Some(Ty::Void) => {
+                    self.mark_line(s.span, &mut out);
                     let v = self.expr_expected(e, want_ret)?;
                     let v = match want_ret {
                         Some(want) => {
@@ -845,6 +895,7 @@ impl<'c, 'a> Cx<'c, 'a> {
 
     /// [`Self::stmt`], keeping the null-check knowledge of `narrow.rs` up to date.
     fn stmt_narrowing(&mut self, s: &ast::Stmt, out: &mut Vec<hir::Stmt>) -> Result<()> {
+        self.mark_line(s.span, out);
         let after = self.kill_before(s);
         self.stmt(s, out)?;
         self.kill_after(&after);
@@ -856,6 +907,7 @@ impl<'c, 'a> Cx<'c, 'a> {
 
     /// A top-level statement of a module: `x := …` defines a global.
     fn top_stmt(&mut self, s: &ast::Stmt, out: &mut Vec<hir::Stmt>) -> Result<()> {
+        self.mark_line(s.span, out);
         let StmtKind::Let { name, init, .. } = &s.kind else { return self.stmt(s, out) };
         let Some(Sym::Global(gid)) = self.ck.t.scopes[self.module].items.get(&name.name).copied() else {
             unreachable!("declare registered every top-level `:=` as a global")

@@ -123,7 +123,20 @@ pub enum FuncKind {
     Unused,
 }
 
+/// What a stack trace shows for a function of the user's own code.
+#[derive(Clone)]
+pub struct Trace {
+    /// `describe`, `Counter.inc`, `<lambda>`, `<top level>`.
+    pub name: String,
+    /// The source file as errors show it.
+    pub file: String,
+    /// The line the function starts on.
+    pub line: u32,
+}
+
 pub struct Func {
+    /// `Some` for functions that keep a frame in the stack trace.
+    pub trace: Option<Trace>,
     /// Linker-level name (for externs, the C symbol).
     pub symbol: String,
     pub kind: FuncKind,
@@ -144,6 +157,8 @@ impl Func {
 }
 
 pub enum Stmt {
+    /// The following statements come from this source line (for stack traces; only in traced functions).
+    Line(u32),
     /// Declare a local; `None` means "zero value of its type".
     Let(LocalId, Option<Expr>),
     Set(LocalId, Expr),
