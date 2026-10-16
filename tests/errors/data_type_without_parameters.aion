@@ -1,0 +1,2 @@
+// error: a data type needs parameters
+data type Empty

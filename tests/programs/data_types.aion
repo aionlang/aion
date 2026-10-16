@@ -1,0 +1,27 @@
+// `data type` writes `equals`, `hashCode`, `copy` and `component1()…` for you, from the primary parameters.
+// So instances compare by value, work as Map keys and Set members, and can be taken apart.
+data type Point(x: Int, y: Int)
+a := Point(1, 2)
+b := Point(1, 2)
+println(a == b, a != Point(2, 1))
+println(a)
+println(a.copy(y: 9), a.copy(), a)
+x, y := a
+println(x, y)
+seen := Set<Point>()
+seen.add(a)
+println(Point(1, 2) in seen, Point(5, 5) in seen)
+m := Map<Point, String>()
+m[Point(0, 0)] = "origin"
+println(m[Point(0, 0)])
+
+data type Box<T>(value: T, label: String = "box")
+bx := Box(5)
+println(bx, bx == Box(5), bx.copy(value: 6))
+
+data type Person(name: String, address: Point?, tags: List<String>)
+p := Person("ann", null, ["a"])
+println(p.copy(name: "bob"))
+data type Segment(from: Point, to: Point)
+s1 := Segment(Point(0, 0), Point(1, 1))
+println(s1 == Segment(Point(0, 0), Point(1, 1)), s1.from == Point(0, 0))

@@ -284,6 +284,13 @@ impl<'a> Parser<'a> {
                     decl.open = true;
                     items.push(Item::Type(decl));
                 }
+                // `data type P(x: Int, y: Int)`: equals, hashCode, copy and componentN come with it
+                Token::Ident if self.text(self.toks[self.pos]) == "data" && self.peek_at(1) == Some(Token::Type) => {
+                    self.bump();
+                    let mut decl = self.type_decl()?;
+                    Self::data_members(&mut decl)?;
+                    items.push(Item::Type(decl));
+                }
                 Token::Interface => items.push(Item::Interface(self.interface_decl()?)),
                 Token::Extern => {
                     let start = self.bump().span;
@@ -570,6 +577,95 @@ impl<'a> Parser<'a> {
             self.expect(Token::RBrace)?;
         }
         Ok(TypeDecl { name, type_params, bounds, primary, fields, ctor, inits, methods, open: false, parent })
+    }
+
+    /// The members a `data type` gets from its primary parameters (unless it declares them itself):
+    /// `equals` and `hashCode` by value, `copy(x = …)`, and `component1()`, `component2()`, … for `a, b := p`.
+    fn data_members(decl: &mut TypeDecl) -> Result<()> {
+        let span = decl.name.span;
+        if decl.open || decl.parent.is_some() {
+            return Err(Diagnostic::new("a data type cannot be open or extend another type", span));
+        }
+        let params: Vec<(Ident, TypeRef)> = match &decl.primary {
+            Some(ps) if !ps.is_empty() => ps.iter().map(|p| (p.name.clone(), p.ty.clone())).collect(),
+            _ => {
+                return Err(Diagnostic::new("a data type needs parameters", span)
+                    .hint("e.g. `data type Point(x: Int, y: Int)`"));
+            }
+        };
+        let named = |name: &str, args: Vec<TypeRef>| TypeRef { kind: TypeKind::Named { name: name.to_string(), args }, span };
+        let me = named(&decl.name.name, decl.type_params.iter().map(|t| named(&t.name, Vec::new())).collect());
+        let name = |s: &str| Expr { kind: ExprKind::Name(s.to_string()), span };
+        let field = |obj: Expr, f: &Ident| Expr { kind: ExprKind::Field(Box::new(obj), Ident { name: f.name.clone(), span }), span };
+        let binary = |op: BinOp, l: Expr, r: Expr| Expr { kind: ExprKind::Binary(op, Box::new(l), Box::new(r)), span };
+        let call = |callee: Expr, args: Vec<Expr>| Expr {
+            kind: ExprKind::Call {
+                callee: Box::new(callee),
+                type_args: Vec::new(),
+                args: args.into_iter().map(|value| Arg { name: None, value }).collect(),
+            },
+            span,
+        };
+        let mut members: Vec<FnDecl> = Vec::new();
+        let mut add = |fn_name: &str, params: Vec<Param>, ret: Option<TypeRef>, body: Expr| {
+            members.push(FnDecl {
+                name: Ident { name: fn_name.to_string(), span },
+                type_params: Vec::new(),
+                bounds: Vec::new(),
+                params,
+                ret,
+                body: FnBody::Expr(body),
+                span,
+                modifier: Modifier::None,
+            });
+        };
+        let param = |n: &str, ty: TypeRef, default: Option<Expr>| Param { name: Ident { name: n.to_string(), span }, ty, default, vararg: false };
+
+        // equals: every field equal
+        let mut equal: Option<Expr> = None;
+        for (p, _) in &params {
+            let same = binary(BinOp::Eq, field(name("this"), p), field(name("other"), p));
+            equal = Some(match equal {
+                None => same,
+                Some(before) => binary(BinOp::And, before, same),
+            });
+        }
+        add("equals", vec![param("other", me.clone(), None)], Some(named("Bool", Vec::new())), equal.expect("a data type has parameters"));
+
+        // hashCode: the field hashes, mixed
+        let mut hash: Option<Expr> = None;
+        for (p, _) in &params {
+            let h = call(name("hashOf"), vec![field(name("this"), p)]);
+            hash = Some(match hash {
+                None => h,
+                Some(before) => {
+                    let mixed = binary(
+                        BinOp::Rem,
+                        binary(BinOp::Mul, before, Expr { kind: ExprKind::Int(31), span }),
+                        Expr { kind: ExprKind::Int(1_000_003), span },
+                    );
+                    binary(BinOp::Add, mixed, h)
+                }
+            });
+        }
+        add("hashCode", Vec::new(), Some(named("Int", Vec::new())), hash.expect("a data type has parameters"));
+
+        // copy: every parameter defaults to the current value
+        let copy_params = params.iter().map(|(p, ty)| param(&p.name, ty.clone(), Some(field(name("this"), p)))).collect();
+        let copy_args = params.iter().map(|(p, _)| name(&p.name)).collect();
+        add("copy", copy_params, Some(me), call(name(&decl.name.name), copy_args));
+
+        // component1(), component2(), …
+        for (i, (p, ty)) in params.iter().enumerate() {
+            add(&format!("component{}", i + 1), Vec::new(), Some(ty.clone()), field(name("this"), p));
+        }
+
+        for m in members {
+            if !decl.methods.iter().any(|d| d.name.name == m.name.name) {
+                decl.methods.push(m);
+            }
+        }
+        Ok(())
     }
 
     // ── statements ──────────────────────────────────────────────
@@ -1823,6 +1919,18 @@ mod tests {
         let err = |src: &str| Parser::new(0, src, 0).and_then(|mut p| p.expr()).unwrap_err().message;
         assert!(err("\"\"\"never closed").contains("unterminated"));
         assert!(err("r\"\"\"never closed").contains("unterminated"));
+    }
+
+    #[test]
+    fn data_types_get_their_members() {
+        let m = module("data type P(x: Int, y: Int) {\n    fn norm() = x\n}\ndata type Q(z: Int) {\n    fn equals(o: Q) = true\n}");
+        let Item::Type(p) = &m.items[0] else { panic!() };
+        let names: Vec<&str> = p.methods.iter().map(|d| d.name.name.as_str()).collect();
+        assert_eq!(names, ["norm", "equals", "hashCode", "copy", "component1", "component2"]);
+        // a member the type declares itself is kept
+        let Item::Type(q) = &m.items[1] else { panic!() };
+        assert_eq!(q.methods.iter().filter(|d| d.name.name == "equals").count(), 1);
+        assert!(Parser::new(0, "data type E", 0).and_then(|mut p| p.module()).is_err());
     }
 
     #[test]

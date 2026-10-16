@@ -1,0 +1,3 @@
+// error: a data type cannot be open or extend another type
+open type Base(x: Int)
+data type Derived(x: Int) : Base(x)

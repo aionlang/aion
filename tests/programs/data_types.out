@@ -1,0 +1,9 @@
+true true
+Point(x=1, y=2)
+Point(x=1, y=9) Point(x=1, y=2) Point(x=1, y=2)
+1 2
+true false
+origin
+Box<Int>(value=5, label=box) true Box<Int>(value=6, label=box)
+Person(name=bob, address=null, tags=[a])
+true true
