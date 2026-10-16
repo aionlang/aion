@@ -276,6 +276,12 @@ pub struct Checker<'a> {
     stringified: RefCell<BTreeSet<TypeId>>,
 }
 
+/// A top-level name that starts with `_` (but not `__`, the prelude's helpers, or just `_`) is private
+/// to the file that defines it.
+pub fn is_private(name: &str) -> bool {
+    name.starts_with('_') && !name.starts_with("__") && name != "_"
+}
+
 impl Tables {
     /// Resolve a bare name as seen from `module`: own items, imports, prelude.
     pub fn lookup(&self, module: usize, name: &str) -> Option<Sym> {
@@ -283,6 +289,9 @@ impl Tables {
         // `alias.Name`: an item of an imported module
         if let Some((alias, item)) = name.split_once('.') {
             let &m = s.modules.get(alias)?;
+            if is_private(item) {
+                return None;
+            }
             return self.scopes[m].items.get(item).copied();
         }
         s.items
@@ -562,6 +571,9 @@ impl<'a> Checker<'a> {
                 }
             }
             if let Some(sym) = &imp.symbol {
+                if is_private(&sym.name) {
+                    return Err(private_error(&sym.name, &loaded.modules[imp.module].name, sym.span));
+                }
                 let Some(found) = self.t.scopes[imp.module].items.get(&sym.name).copied() else {
                     return Err(Diagnostic::new(
                         format!("module `{}` has no item `{}`", loaded.modules[imp.module].name, sym.name),
@@ -1444,6 +1456,11 @@ fn unstable_globals(loaded: &Loaded) -> HashSet<String> {
 }
 
 /// Stands in for a function that was never checked (see [`FnSlot::lazy`]), so ids stay valid.
+fn private_error(name: &str, module: &str, span: Span) -> Diagnostic {
+    Diagnostic::new(format!("`{name}` is private to module `{module}`"), span)
+        .hint("names starting with `_` are only visible inside their own file")
+}
+
 fn unused_func() -> hir::Func {
     hir::Func {
         trace: None,

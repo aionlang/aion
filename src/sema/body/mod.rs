@@ -1779,10 +1779,19 @@ impl<'c, 'a> Cx<'c, 'a> {
         }
     }
 
+    /// A `_private` name of another module cannot be used from here.
+    fn check_public(&self, module: usize, name: &ast::Ident) -> Result<()> {
+        if module != self.module && super::is_private(&name.name) {
+            return Err(super::private_error(&name.name, &self.ck.module_names[module], name.span));
+        }
+        Ok(())
+    }
+
     /// `module.name` where `module` is an imported module alias and `name` a global.
     fn module_global(&mut self, obj: &ast::Expr, field: &ast::Ident) -> Result<Option<GlobalId>> {
         let A::Name(a) = &obj.kind else { return Ok(None) };
         let Some(Named::Module(m)) = self.resolve(a) else { return Ok(None) };
+        self.check_public(m, field)?;
         match self.ck.t.scopes[m].items.get(&field.name) {
             Some(&Sym::Global(g)) => Ok(Some(g)),
             // Functions and types are handled by the callers (calls, function values).
@@ -2189,6 +2198,7 @@ impl<'c, 'a> Cx<'c, 'a> {
                 if let A::Name(a) = &obj.kind
                     && let Some(Named::Module(m)) = self.resolve(a)
                 {
+                    self.check_public(m, field)?;
                     return match self.ck.t.scopes[m].items.get(&field.name) {
                         Some(&Sym::Fn(id)) => self.fn_value(id, e.span),
                         Some(&Sym::Type(ty)) => {
@@ -2831,6 +2841,7 @@ impl<'c, 'a> Cx<'c, 'a> {
                 if let A::Name(a) = &obj.kind {
                     match self.resolve(a) {
                         Some(Named::Module(target)) => {
+                            self.check_public(target, member)?;
                             let what = format!("{a}.{}", member.name);
                             return match self.ck.t.scopes[target].items.get(&member.name).copied() {
                                 Some(Sym::Fn(id)) if type_args.is_empty() => self.call_fn(id, None, args, span),
