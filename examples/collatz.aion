@@ -1,0 +1,85 @@
+// The Collatz conjecture: halve even numbers, triple-and-add-one odd ones; every start seems to reach 1.
+// Which start below a limit takes the longest?  Shows loops, a Map cache and a little statistics.
+//
+//   aion examples/collatz.aion
+
+// Number of steps needed to reach 1.
+fn steps(start: Int) -> Int {
+    n := start
+    count := 0
+    while n != 1 {
+        n = if n % 2 == 0 { n / 2 } else { 3 * n + 1 }
+        count += 1
+    }
+    return count
+}
+
+// The same with a cache: once we reach a number seen before, its answer is known.
+cache := Map<Int, Int>()
+fn stepsCached(n: Int) -> Int {
+    if n == 1 { return 0 }
+    known := cache.getOrNull(n)
+    if known != null { return known }
+    result := 1 + stepsCached(if n % 2 == 0 { n / 2 } else { 3 * n + 1 })
+    cache[n] = result
+    return result
+}
+
+fn path(start: Int) -> List<Int> {
+    out := [start]
+    n := start
+    while n != 1 {
+        n = if n % 2 == 0 { n / 2 } else { 3 * n + 1 }
+        out.add(n)
+    }
+    return out
+}
+
+println("27 takes", steps(27), "steps and climbs to", path(27).maxOrNull())
+println("path of 6:", path(6).join(" -> "))
+println("path of 7:", path(7).join(" -> "))
+
+best := 1
+bestSteps := 0
+total := 0
+limit := 100000
+for start in 1..limit {
+    s := stepsCached(start)
+    total += s
+    if s > bestSteps {
+        best = start
+        bestSteps = s
+    }
+}
+println("below $limit the longest chain starts at $best: $bestSteps steps")
+println("average chain length:", (total.toFloat() / (limit - 1).toFloat()).format(2))
+println("numbers remembered by the cache:", cache.size())
+println("cached and plain agree:", stepsCached(837799) == steps(837799))
+
+// How many starts below 1000 take each number of steps (a histogram in buckets of 25)?
+buckets := Array(10, 0)
+for start in 1..1000 {
+    buckets[(steps(start) / 25).min(9)] += 1
+}
+for i in 0..10 {
+    label := "${i * 25}-${i * 25 + 24}".padRight(8)
+    println(label, "#".repeat(buckets[i] / 5), buckets[i])
+}
+
+// > 27 takes 111 steps and climbs to 9232
+// > path of 6: 6 -> 3 -> 10 -> 5 -> 16 -> 8 -> 4 -> 2 -> 1
+// > path of 7: 7 -> 22 -> 11 -> 34 -> 17 -> 52 -> 26 -> 13 -> 40 -> 20 -> 10 -> 5 -> 16 -> 8 -> 4 -> 2 -> 1
+// > below 100000 the longest chain starts at 77031: 350 steps
+// > average chain length: 107.54
+// > numbers remembered by the cache: 217211
+// > cached and plain agree: true
+// > 0-24     ############################################ 220
+// > 25-49    ##################################################################### 345
+// > 50-74    ##################### 108
+// > 75-99    ############### 78
+// > 100-124  ################################ 162
+// > 125-149  ################ 81
+// > 150-174   4
+// > 175-199   1
+// > 200-224   0
+// > 225-249   0

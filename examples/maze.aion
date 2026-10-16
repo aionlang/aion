@@ -1,0 +1,104 @@
+// Solving a maze with breadth-first search.  The maze is data: a triple-quoted string with walls (#),
+// the start (S) and the exit (E).  Shows string handling, queues built from lists, Map and Set.
+//
+//   aion examples/maze.aion
+
+maze := """
+#####################
+#S  #       #       #
+# # # ##### # ##### #
+# #   #   # #     # #
+# ##### # # ##### # #
+#     # # #     # # #
+##### # # ##### # # #
+#     # #     # #   #
+# ##### ##### # #####
+#       #     #    E#
+#####################
+"""
+
+type Point(row: Int, col: Int) {
+    fn key() = "$row,$col"
+}
+
+lines := maze.lines()
+height := lines.size()
+width := lines[0].length()
+
+fn find(symbol: Char) -> Point {
+    for r in 0..height {
+        for c in 0..width {
+            if lines[r][c] == symbol { return Point(r, c) }
+        }
+    }
+    panic("no $symbol in the maze")
+}
+
+fn open(p: Point) -> Bool {
+    return p.row >= 0 && p.row < height && p.col >= 0 && p.col < width && lines[p.row][p.col] != '#'
+}
+
+start := find('S')
+goal := find('E')
+
+// Breadth-first search: explore outwards one step at a time, remembering where each cell was reached from.
+// The first time we reach the exit, we have found a shortest path.
+cameFrom := Map<String, Point>()
+queue := [start]
+next := 0
+seen := Set<String>()
+seen.add(start.key())
+found := false
+while next < queue.size() && !found {
+    here := queue[next]
+    next += 1
+    if here.row == goal.row && here.col == goal.col {
+        found = true
+        break
+    }
+    for step in [Point(-1, 0), Point(1, 0), Point(0, -1), Point(0, 1)] {
+        there := Point(here.row + step.row, here.col + step.col)
+        if open(there) && !seen.contains(there.key()) {
+            seen.add(there.key())
+            cameFrom[there.key()] = here
+            queue.add(there)
+        }
+    }
+}
+
+if !found {
+    println("no way out")
+} else {
+    // Walk back from the exit to the start.
+    route := List<Point>()
+    at := goal
+    while at.key() != start.key() {
+        route.add(at)
+        at = cameFrom[at.key()]
+    }
+    println("shortest path: ${route.size()} steps; looked at ${seen.size()} cells")
+
+    onRoute := Set<String>()
+    for p in route { onRoute.add(p.key()) }
+    for r in 0..height {
+        line := StringBuilder()
+        for c in 0..width {
+            symbol := lines[r][c]
+            line.appendChar(if symbol == ' ' && onRoute.contains("$r,$c") { '.' } else { symbol })
+        }
+        println(line)
+    }
+}
+
+// > shortest path: 30 steps; looked at 62 cells
+// > #####################
+// > #S..#.......#       #
+// > # #.#.#####.# ##### #
+// > # #...#   #.#     # #
+// > # ##### # #.##### # #
+// > #     # # #.....# # #
+// > ##### # # #####.# # #
+// > #     # #     #.#   #
+// > # ##### ##### #.#####
+// > #       #     #....E#
+// > #####################

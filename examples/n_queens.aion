@@ -1,0 +1,83 @@
+// The N-queens puzzle by backtracking: place N queens on an N×N board so that none attack another.
+// Shows recursion, early exit, closures that update a captured variable, and Set.
+//
+//   aion examples/n_queens.aion
+
+// `columns[row]` is the column of the queen in that row.  Can a queen go at (row, col)?
+fn safe(columns: List<Int>, row: Int, col: Int) -> Bool {
+    for r in 0..row {
+        c := columns[r]
+        if c == col || (c - col).abs() == row - r { return false }
+    }
+    return true
+}
+
+// Call `found` with every complete placement.
+fn solve(n: Int, row: Int, columns: List<Int>, found: (List<Int>) -> Unit) {
+    if row == n {
+        found(columns)
+        return
+    }
+    for col in 0..n {
+        if safe(columns, row, col) {
+            columns.add(col)
+            solve(n, row + 1, columns, found)
+            columns.pop()
+        }
+    }
+}
+
+fn show(columns: List<Int>) {
+    for row in 0..columns.size() {
+        line := StringBuilder()
+        for col in 0..columns.size() {
+            line.append(if columns[row] == col { "Q " } else { ". " })
+        }
+        println(line.toString().trimEnd())
+    }
+}
+
+// How many solutions are there?  (Known: 1, 0, 0, 2, 10, 4, 40, 92, 352 for N = 1 to 9.)
+for n in 1..=9 {
+    count := 0
+    solve(n, 0, List<Int>(), { placement -> count += 1 })
+    println("N = $n: $count solutions")
+}
+
+// Print the first solution for N = 8, and the solutions of the 4×4 board.
+println()
+first: List<Int>? = null
+solve(8, 0, List<Int>(), { placement ->
+    if first == null { first = placement.copy() }
+})
+println("first solution for 8 queens: ${first!!.join(" ")}")
+show(first!!)
+
+println()
+distinct := Set<String>()
+solve(4, 0, List<Int>(), { placement ->
+    distinct.add(placement.join(""))
+})
+println("4 queens:", distinct.toList().sorted().join(" and "))
+
+// > N = 1: 1 solutions
+// > N = 2: 0 solutions
+// > N = 3: 0 solutions
+// > N = 4: 2 solutions
+// > N = 5: 10 solutions
+// > N = 6: 4 solutions
+// > N = 7: 40 solutions
+// > N = 8: 92 solutions
+// > N = 9: 352 solutions
+// >
+// > first solution for 8 queens: 0 4 7 5 2 6 1 3
+// > Q . . . . . . .
+// > . . . . Q . . .
+// > . . . . . . . Q
+// > . . . . . Q . .
+// > . . Q . . . . .
+// > . . . . . . Q .
+// > . Q . . . . . .
+// > . . . Q . . . .
+// >
+// > 4 queens: 1302 and 2031

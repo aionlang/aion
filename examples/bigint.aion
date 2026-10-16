@@ -1,0 +1,153 @@
+// Arbitrary-precision arithmetic: Int is 64 bits and wraps around, so for huge numbers we build our own
+// type from a list of base-one-billion "limbs".  Shows types with methods, lists, and a bit of maths.
+//
+//   aion examples/bigint.aion
+
+LIMB := 1000000000
+
+type BigNat {
+    // Least significant limb first; each limb is below one billion.
+    limbs: List<Int> = List<Int>()
+
+    fn digitCount() -> Int = toString().length()
+
+    fn digitSum() -> Int {
+        total := 0
+        for c in toString() { total += c.digitValue() ?: 0 }
+        return total
+    }
+
+    fn add(other: BigNat) -> BigNat {
+        out := BigNat()
+        carry := 0
+        n := limbs.size().max(other.limbs.size())
+        for i in 0..n {
+            sum := carry + (limbs.getOrNull(i) ?: 0) + (other.limbs.getOrNull(i) ?: 0)
+            out.limbs.add(sum % LIMB)
+            carry = sum / LIMB
+        }
+        if carry > 0 { out.limbs.add(carry) }
+        return out
+    }
+
+    // Multiply by a small number (below one billion).
+    fn mulSmall(m: Int) -> BigNat {
+        out := BigNat()
+        carry := 0
+        for limb in limbs {
+            product := limb * m + carry
+            out.limbs.add(product % LIMB)
+            carry = product / LIMB
+        }
+        while carry > 0 {
+            out.limbs.add(carry % LIMB)
+            carry /= LIMB
+        }
+        return out
+    }
+
+    // Schoolbook multiplication.
+    fn mul(other: BigNat) -> BigNat {
+        cells := Array(limbs.size() + other.limbs.size() + 1, 0)
+        for i in 0..limbs.size() {
+            carry := 0
+            for j in 0..other.limbs.size() {
+                cur := cells[i + j] + limbs[i] * other.limbs[j] + carry
+                cells[i + j] = cur % LIMB
+                carry = cur / LIMB
+            }
+            k := i + other.limbs.size()
+            while carry > 0 {
+                cur := cells[k] + carry
+                cells[k] = cur % LIMB
+                carry = cur / LIMB
+                k += 1
+            }
+        }
+        out := BigNat()
+        for cell in cells { out.limbs.add(cell) }
+        while out.limbs.size() > 1 && out.limbs.last() == 0 { out.limbs.pop() }
+        return out
+    }
+
+    fn pow(exponent: Int) -> BigNat {
+        result := fromInt(1)
+        base := this
+        e := exponent
+        while e > 0 {
+            if e % 2 == 1 { result = result.mul(base) }
+            base = base.mul(base)
+            e /= 2
+        }
+        return result
+    }
+
+    fn toString() -> String {
+        if limbs.size() == 0 { return "0" }
+        out := StringBuilder()
+        out.append("${limbs.last()}")
+        for i in 0..limbs.size() - 1 {
+            out.append("${limbs[limbs.size() - 2 - i]}".padLeft(9, "0"))
+        }
+        return out.toString()
+    }
+}
+
+fn fromInt(n: Int) -> BigNat {
+    out := BigNat()
+    rest := n
+    if rest == 0 { out.limbs.add(0) }
+    while rest > 0 {
+        out.limbs.add(rest % LIMB)
+        rest /= LIMB
+    }
+    return out
+}
+
+fn factorial(n: Int) -> BigNat {
+    result := fromInt(1)
+    for i in 2..=n { result = result.mulSmall(i) }
+    return result
+}
+
+fn fibonacci(n: Int) -> BigNat {
+    a := fromInt(0)
+    b := fromInt(1)
+    for i in 0..n {
+        next := a.add(b)
+        a = b
+        b = next
+    }
+    return a
+}
+
+exact := 1
+for i in 2..=20 { exact *= i }
+println("20! fits in an Int:        ", factorial(20), "=", exact)
+println("30! does not:              ", factorial(30))
+println("50!                        ", factorial(50))
+h := factorial(100)
+println("100! has", h.digitCount(), "digits, digit sum", h.digitSum())
+println("2^64 =                     ", fromInt(2).pow(64), "(Int would wrap to 0)")
+println("2^256 =                    ", fromInt(2).pow(256))
+println("2^1000 digit sum:          ", fromInt(2).pow(1000).digitSum())
+println("fib(300) =                 ", fibonacci(300))
+println("fib(1000) has", fibonacci(1000).digitCount(), "digits")
+
+// Multiplying two big numbers.
+a := fromInt(10).pow(30).add(fromInt(7))
+b := fromInt(10).pow(30)
+println("(10^30 + 7) * 10^30 =       ", a.mul(b))
+println("999999999 * 999999999 =     ", fromInt(999999999).mul(fromInt(999999999)))
+
+// > 20! fits in an Int:         2432902008176640000 = 2432902008176640000
+// > 30! does not:               265252859812191058636308480000000
+// > 50!                         30414093201713378043612608166064768844377641568960512000000000000
+// > 100! has 158 digits, digit sum 648
+// > 2^64 =                      18446744073709551616 (Int would wrap to 0)
+// > 2^256 =                     115792089237316195423570985008687907853269984665640564039457584007913129639936
+// > 2^1000 digit sum:           1366
+// > fib(300) =                  222232244629420445529739893461909967206666939096499764990979600
+// > fib(1000) has 209 digits
+// > (10^30 + 7) * 10^30 =        1000000000000000000000000000007000000000000000000000000000000
+// > 999999999 * 999999999 =      999999998000000001

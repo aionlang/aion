@@ -1,0 +1,157 @@
+// Sorting algorithms written by hand, then the library's own: bubble, insertion, quick and merge sort,
+// a generic merge sort that works on anything `Comparable`, and sorting objects by several keys.
+//
+//   aion examples/sorting.aion
+
+// A tiny pseudo-random generator, so every run sorts the same numbers.
+seed := 2024
+fn nextRandom(limit: Int) -> Int {
+    seed = (seed * 1103515245 + 12345).and(0x7fffffff)
+    return seed.shr(8) % limit
+}
+
+fn sample(count: Int) -> List<Int> {
+    xs := List<Int>()
+    for i in 0..count { xs.add(nextRandom(100)) }
+    return xs
+}
+
+fn isSorted(xs: List<Int>) -> Bool {
+    for i in 1..xs.size() {
+        if xs[i - 1] > xs[i] { return false }
+    }
+    return true
+}
+
+// Swap neighbours until nothing moves.  In place; O(n²).
+fn bubbleSort(xs: List<Int>) {
+    swapped := true
+    while swapped {
+        swapped = false
+        for i in 1..xs.size() {
+            if xs[i - 1] > xs[i] {
+                tmp := xs[i - 1]
+                xs[i - 1] = xs[i]
+                xs[i] = tmp
+                swapped = true
+            }
+        }
+    }
+}
+
+// Grow a sorted prefix by inserting the next element where it belongs.
+fn insertionSort(xs: List<Int>) {
+    for i in 1..xs.size() {
+        value := xs[i]
+        j := i - 1
+        while j >= 0 && xs[j] > value {
+            xs[j + 1] = xs[j]
+            j -= 1
+        }
+        xs[j + 1] = value
+    }
+}
+
+// Pick a pivot, sort the smaller and larger elements separately.  Returns a new list.
+fn quickSort(xs: List<Int>) -> List<Int> {
+    if xs.size() <= 1 { return xs }
+    pivot := xs[xs.size() / 2]
+    less := xs.filter { it < pivot }
+    same := xs.filter { it == pivot }
+    more := xs.filter { it > pivot }
+    out := quickSort(less)
+    out.addAll(same)
+    out.addAll(quickSort(more))
+    return out
+}
+
+// Generic merge sort: `T: Comparable<T>` means "has a compareTo(other: T) -> Int", which
+// Int, Float, String and Char have, and so does any type you give one.
+fn mergeSort<T: Comparable<T>>(xs: List<T>) -> List<T> {
+    if xs.size() <= 1 { return xs }
+    middle := xs.size() / 2
+    left := mergeSort(xs[0..middle])
+    right := mergeSort(xs[middle..xs.size()])
+    out := List<T>()
+    i := 0
+    j := 0
+    while i < left.size() && j < right.size() {
+        if left[i].compareTo(right[j]) <= 0 {
+            out.add(left[i])
+            i += 1
+        } else {
+            out.add(right[j])
+            j += 1
+        }
+    }
+    while i < left.size() {
+        out.add(left[i])
+        i += 1
+    }
+    while j < right.size() {
+        out.add(right[j])
+        j += 1
+    }
+    return out
+}
+
+data := sample(20)
+println("input:        ", data.join(" "))
+
+bubbled := data.copy()
+bubbleSort(bubbled)
+println("bubble sort:  ", bubbled.join(" "))
+
+inserted := data.copy()
+insertionSort(inserted)
+println("insertion:    ", inserted.join(" "))
+
+println("quick sort:   ", quickSort(data).join(" "))
+println("merge sort:   ", mergeSort(data).join(" "))
+println("library sort: ", data.sorted().join(" "))
+println("all agree:", isSorted(bubbled) && bubbled.join(",") == inserted.join(",") && inserted.join(",") == mergeSort(data).join(","))
+
+// The generic version sorts other types too.
+println(mergeSort(["pear", "apple", "fig", "banana"]).join(" "))
+println(mergeSort([3.14, 2.71, 1.41, 1.73]).join(" "))
+println(mergeSort(['q', 'a', 'z', 'm']).join(" "))
+
+// Larger input: all of them handle a thousand numbers.
+big := sample(1000)
+fast := mergeSort(big)
+slow := big.copy()
+insertionSort(slow)
+println("1000 numbers sorted alike:", fast.join(",") == slow.join(","), "- smallest", fast.first(), "largest", fast.last())
+
+// Sorting objects: by one key, by a computed key, by several keys, and in descending order.
+type Person(name: String, age: Int, city: String)
+
+people := [
+    Person("Ann", 31, "Oslo"), Person("Bob", 25, "Rome"), Person("Cy", 31, "Bern"),
+    Person("Di", 19, "Oslo"), Person("Ed", 25, "Bern"),
+]
+println("by age:        ", people.sortedBy { it.age }.map { it.name }.join(" "))
+println("by name length:", people.sortedBy { it.name.length() }.map { it.name }.join(" "))
+byCityThenAge := people.sortedWith { a, b ->
+    if a.city != b.city { a.city.compareTo(b.city) } else { a.age - b.age }
+}
+println("city, then age:", byCityThenAge.map { "${it.city}:${it.name}" }.join(" "))
+println("oldest first:  ", people.sortedWith { a, b -> b.age - a.age }.map { it.name }.join(" "))
+println("descending:    ", data.sortedDescending().take(5).join(" "), "...")
+
+// > input:         34 76 46 46 65 81 70 92 4 98 67 64 30 64 34 43 53 23 23 56
+// > bubble sort:   4 23 23 30 34 34 43 46 46 53 56 64 64 65 67 70 76 81 92 98
+// > insertion:     4 23 23 30 34 34 43 46 46 53 56 64 64 65 67 70 76 81 92 98
+// > quick sort:    4 23 23 30 34 34 43 46 46 53 56 64 64 65 67 70 76 81 92 98
+// > merge sort:    4 23 23 30 34 34 43 46 46 53 56 64 64 65 67 70 76 81 92 98
+// > library sort:  4 23 23 30 34 34 43 46 46 53 56 64 64 65 67 70 76 81 92 98
+// > all agree: true
+// > apple banana fig pear
+// > 1.41 1.73 2.71 3.14
+// > a m q z
+// > 1000 numbers sorted alike: true - smallest 0 largest 99
+// > by age:         Di Bob Ed Ann Cy
+// > by name length: Cy Di Ed Ann Bob
+// > city, then age: Bern:Ed Bern:Cy Oslo:Di Oslo:Ann Rome:Bob
+// > oldest first:   Ann Cy Bob Ed Di
+// > descending:     98 92 81 76 70 ...

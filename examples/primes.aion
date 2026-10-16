@@ -1,0 +1,100 @@
+// Prime numbers: trial division, the sieve of Eratosthenes, and factorisation.
+//
+//   aion examples/primes.aion
+
+// Check divisors up to the square root.
+fn isPrime(n: Int) -> Bool {
+    if n < 2 { return false }
+    if n < 4 { return true }
+    if n % 2 == 0 { return false }
+    d := 3
+    while d * d <= n {
+        if n % d == 0 { return false }
+        d += 2
+    }
+    return true
+}
+
+// The sieve: cross out the multiples of every prime.  `Array` is a fixed-size, fast block of values.
+fn sieve(limit: Int) -> List<Int> {
+    composite := Array(limit + 1, false)
+    primes := List<Int>()
+    for n in 2..=limit {
+        if composite[n] { continue }
+        primes.add(n)
+        multiple := n * n
+        while multiple <= limit {
+            composite[multiple] = true
+            multiple += n
+        }
+    }
+    return primes
+}
+
+// Break a number into prime factors: 360 = 2 * 2 * 2 * 3 * 3 * 5.
+fn factors(n: Int) -> List<Int> {
+    out := List<Int>()
+    rest := n
+    d := 2
+    while d * d <= rest {
+        while rest % d == 0 {
+            out.add(d)
+            rest /= d
+        }
+        d += 1
+    }
+    if rest > 1 { out.add(rest) }
+    return out
+}
+
+under100 := sieve(100)
+println("primes below 100 (${under100.size()}):", under100.join(" "))
+
+big := sieve(1000000)
+println("primes below 1,000,000:", big.size())
+println("the 1000th prime:", sieve(10000)[999])
+println("largest prime below 1,000,000:", big.last())
+
+// The two methods agree.
+agree := true
+for n in 0..2000 {
+    if isPrime(n) != (n in sieve(2000)) { agree = false }
+}
+println("trial division and sieve agree:", agree)
+
+for n in [360, 97, 1001, 600851475143, 9223372036854775807] {
+    parts := factors(n)
+    println("$n = ${parts.join(" * ")}")
+}
+
+// Twin primes: pairs that differ by two.
+twins := 0
+for i in 1..under100.size() {
+    if under100[i] - under100[i - 1] == 2 { twins += 1 }
+}
+println("twin prime pairs below 100:", twins)
+
+// Gaps between consecutive primes below a million: find the widest.
+widest := 0
+at := 0
+for i in 1..big.size() {
+    gap := big[i] - big[i - 1]
+    if gap > widest {
+        widest = gap
+        at = big[i - 1]
+    }
+}
+println("widest gap below 1,000,000:", widest, "after", at)
+
+// > primes below 100 (25): 2 3 5 7 11 13 17 19 23 29 31 37 41 43 47 53 59 61 67 71 73 79 83 89 97
+// > primes below 1,000,000: 78498
+// > the 1000th prime: 7919
+// > largest prime below 1,000,000: 999983
+// > trial division and sieve agree: true
+// > 360 = 2 * 2 * 2 * 3 * 3 * 5
+// > 97 = 97
+// > 1001 = 7 * 11 * 13
+// > 600851475143 = 71 * 839 * 1471 * 6857
+// > 9223372036854775807 = 7 * 7 * 73 * 127 * 337 * 92737 * 649657
+// > twin prime pairs below 100: 8
+// > widest gap below 1,000,000: 114 after 492113

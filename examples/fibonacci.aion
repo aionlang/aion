@@ -1,0 +1,101 @@
+// Fibonacci four ways: plain recursion, a loop, memoisation with a Map, and a list of the first terms.
+// Also shows that Int arithmetic wraps around on overflow instead of failing.
+//
+//   aion examples/fibonacci.aion
+
+// The textbook definition.  Fine for small n, exponentially slow for large n.
+calls := 0
+fn fibRecursive(n: Int) -> Int {
+    calls += 1
+    return if n < 2 { n } else { fibRecursive(n - 1) + fibRecursive(n - 2) }
+}
+
+// Two variables and a loop: linear time, constant memory.
+fn fibLoop(n: Int) -> Int {
+    a := 0
+    b := 1
+    for i in 0..n {
+        next := a + b
+        a = b
+        b = next
+    }
+    return a
+}
+
+// Remember what was already computed.  `memo` is a module variable, so the function can use it.
+memo := Map<Int, Int>()
+fn fibMemo(n: Int) -> Int {
+    if n < 2 { return n }
+    cached := memo.getOrNull(n)
+    if cached != null { return cached }
+    result := fibMemo(n - 1) + fibMemo(n - 2)
+    memo[n] = result
+    return result
+}
+
+// The first `count` terms as a list.
+fn fibonacci(count: Int) -> List<Int> {
+    terms := List<Int>()
+    a := 0
+    b := 1
+    for i in 0..count {
+        terms.add(a)
+        next := a + b
+        a = b
+        b = next
+    }
+    return terms
+}
+
+println("first 15:", fibonacci(15).join(" "))
+
+println("fib(25) recursive:", fibRecursive(25), "after", calls, "calls")
+println("fib(25) memoised: ", fibMemo(25), "after", memo.size(), "stored values")
+println("fib(90) by loop:  ", fibLoop(90))
+
+// All three agree.
+agree := true
+for n in 0..=20 {
+    if fibRecursive(n) != fibLoop(n) || fibLoop(n) != fibMemo(n) { agree = false }
+}
+println("methods agree for 0..20:", agree)
+
+// The ratio of neighbours approaches the golden ratio, (1 + sqrt(5)) / 2.
+for n in [5, 10, 20, 40] {
+    ratio := fibLoop(n + 1).toFloat() / fibLoop(n).toFloat()
+    println("fib(${n + 1}) / fib($n) =", ratio.format(12))
+}
+
+// fib(92) is the largest that fits in 64 bits; the next one wraps to a negative number.
+println("fib(92) =", fibLoop(92))
+println("fib(93) =", fibLoop(93), "(wrapped around)")
+
+// Which terms are even?  Every third one.
+evens := fibonacci(20).filter { it % 2 == 0 }
+println("even terms below index 20:", evens.join(" "))
+
+// Sum of the even terms that stay below four million (Project Euler #2).
+total := 0
+a := 1
+b := 2
+while b < 4000000 {
+    if b % 2 == 0 { total += b }
+    next := a + b
+    a = b
+    b = next
+}
+println("sum of even terms below 4,000,000:", total)
+
+// > first 15: 0 1 1 2 3 5 8 13 21 34 55 89 144 233 377
+// > fib(25) recursive: 75025 after 242785 calls
+// > fib(25) memoised:  75025 after 24 stored values
+// > fib(90) by loop:   2880067194370816120
+// > methods agree for 0..20: true
+// > fib(6) / fib(5) = 1.600000000000
+// > fib(11) / fib(10) = 1.618181818182
+// > fib(21) / fib(20) = 1.618033998522
+// > fib(41) / fib(40) = 1.618033988750
+// > fib(92) = 7540113804746346429
+// > fib(93) = -6246583658587674878 (wrapped around)
+// > even terms below index 20: 0 2 8 34 144 610 2584
+// > sum of even terms below 4,000,000: 4613732

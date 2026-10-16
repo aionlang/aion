@@ -1,0 +1,53 @@
+// FizzBuzz, the `when` expression, and a rule table so the game can be changed without touching the loop.
+//
+//   aion examples/fizzbuzz.aion
+
+// `when` picks the first matching branch and is an expression: it has a value.
+fn fizzbuzz(n: Int) -> String = when {
+    n % 15 == 0 -> "FizzBuzz"
+    n % 3 == 0 -> "Fizz"
+    n % 5 == 0 -> "Buzz"
+    else -> "$n"
+}
+
+words := List<String>()
+for n in 1..=20 {
+    words.add(fizzbuzz(n))
+}
+println(words.join(" "))
+
+// The same game with the rules as data: a list of (divisor, word) pairs.
+type Rule(divisor: Int, word: String)
+
+fn play(n: Int, rules: List<Rule>) -> String {
+    out := ""
+    for rule in rules {
+        if n % rule.divisor == 0 { out += rule.word }
+    }
+    return if out == "" { "$n" } else { out }
+}
+
+rules := [Rule(3, "Fizz"), Rule(5, "Buzz"), Rule(7, "Bazz")]
+line := List<String>()
+for n in [1, 3, 5, 7, 15, 21, 35, 105, 106] {
+    line.add(play(n, rules))
+}
+println(line.join(" "))
+
+// Count how often each word appears in the first 1000 rounds.
+counts := Map<String, Int>()
+for n in 1..=1000 {
+    word := fizzbuzz(n)
+    kind := if word == "Fizz" || word == "Buzz" || word == "FizzBuzz" { word } else { "number" }
+    counts[kind] = counts.getOr(kind, 0) + 1
+}
+for kind in ["number", "Fizz", "Buzz", "FizzBuzz"] {
+    println(kind.padRight(9), counts[kind])
+}
+
+// > 1 2 Fizz 4 Buzz Fizz 7 8 Fizz Buzz 11 Fizz 13 14 FizzBuzz 16 17 Fizz 19 Buzz
+// > 1 Fizz Buzz Bazz FizzBuzz FizzBazz BuzzBazz FizzBuzzBazz 106
+// > number    533
+// > Fizz      267
+// > Buzz      134
+// > FizzBuzz  66

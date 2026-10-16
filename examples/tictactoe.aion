@@ -1,0 +1,137 @@
+// Tic-tac-toe with a perfect player: minimax searches every possible game.  Two perfect players always draw,
+// and a perfect player beats one that just takes the first free square.
+// Shows recursion with backtracking, optional values, and a type that is copied and compared.
+//
+//   aion examples/tictactoe.aion
+
+lines := [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 3, 6], [1, 4, 7], [2, 5, 8], [0, 4, 8], [2, 4, 6]]
+visited := 0
+
+type Board {
+    // 9 cells holding "X", "O" or " ".
+    cells: List<String> = [" ", " ", " ", " ", " ", " ", " ", " ", " "]
+
+    fn winner() -> String? {
+        for line in lines {
+            first := cells[line[0]]
+            if first != " " && first == cells[line[1]] && first == cells[line[2]] { return first }
+        }
+        return null
+    }
+
+    fn moves() -> List<Int> {
+        out := List<Int>()
+        for i in 0..9 {
+            if cells[i] == " " { out.add(i) }
+        }
+        return out
+    }
+
+    fn toString() -> String {
+        rows := List<String>()
+        for r in 0..3 {
+            rows.add(" ${cells[r * 3]} | ${cells[r * 3 + 1]} | ${cells[r * 3 + 2]}")
+        }
+        return rows.join("\n---+---+---\n")
+    }
+}
+
+fn opponent(player: String) -> String = if player == "X" { "O" } else { "X" }
+
+// How good is this position for `me`, if `turn` plays next and everybody plays perfectly?
+// +1: I win, 0: draw, -1: I lose.
+fn minimax(board: Board, turn: String, me: String) -> Int {
+    visited += 1
+    won := board.winner()
+    if won != null { return if won == me { 1 } else { -1 } }
+    moves := board.moves()
+    if moves.size() == 0 { return 0 }
+    best := if turn == me { -2 } else { 2 }
+    for move in moves {
+        board.cells[move] = turn
+        score := minimax(board, opponent(turn), me)
+        board.cells[move] = " "
+        best = if turn == me { best.max(score) } else { best.min(score) }
+    }
+    return best
+}
+
+// The first move with the best score.
+fn bestMove(board: Board, player: String) -> Int {
+    best := -2
+    choice := -1
+    for move in board.moves() {
+        board.cells[move] = player
+        score := minimax(board, opponent(player), player)
+        board.cells[move] = " "
+        if score > best {
+            best = score
+            choice = move
+        }
+    }
+    return choice
+}
+
+// Play a game; `X` and `O` are the names of the strategies ("perfect" or "naive").
+fn play(x: String, o: String, show: Bool) -> String {
+    board := Board()
+    turn := "X"
+    while board.winner() == null && board.moves().size() > 0 {
+        strategy := if turn == "X" { x } else { o }
+        move := if strategy == "perfect" { bestMove(board, turn) } else { board.moves().first() }
+        board.cells[move] = turn
+        if show { println("$turn plays square $move") }
+        turn = opponent(turn)
+    }
+    if show { println(board) }
+    return board.winner() ?: "draw"
+}
+
+println("perfect X against perfect O:")
+result := play("perfect", "perfect", true)
+println("result:", result)
+println("positions searched:", visited)
+
+println()
+println("naive X against perfect O:")
+result = play("naive", "perfect", true)
+println("result:", result)
+
+println()
+println("perfect X against naive O:", play("perfect", "naive", false))
+println("naive against naive:      ", play("naive", "naive", false))
+
+// > perfect X against perfect O:
+// > X plays square 0
+// > O plays square 4
+// > X plays square 1
+// > O plays square 2
+// > X plays square 6
+// > O plays square 3
+// > X plays square 5
+// > O plays square 7
+// > X plays square 8
+// >  X | X | O
+// > ---+---+---
+// >  O | O | X
+// > ---+---+---
+// >  X | O | X
+// > result: draw
+// > positions searched: 618175
+// >
+// > naive X against perfect O:
+// > X plays square 0
+// > O plays square 4
+// > X plays square 1
+// > O plays square 2
+// > X plays square 3
+// > O plays square 6
+// >  X | X | O
+// > ---+---+---
+// >  X | O |  
+// > ---+---+---
+// >  O |   |  
+// > result: O
+// >
+// > perfect X against naive O: X
+// > naive against naive:       X

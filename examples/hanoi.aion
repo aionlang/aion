@@ -1,0 +1,78 @@
+// The Tower of Hanoi: recursion, a type holding three stacks, and counting moves.
+//
+//   aion examples/hanoi.aion
+
+type Towers(disks: Int) {
+    pegs: List<List<Int>> = [List<Int>(), List<Int>(), List<Int>()]
+    moves: Int = 0
+    log: Bool = false
+
+    init {
+        // the largest disk at the bottom of peg 0
+        for d in disks.countdown() { pegs[0].add(d) }
+    }
+
+    fn move(from: Int, to: Int) {
+        disk := pegs[from].pop()
+        pegs[to].add(disk)
+        moves += 1
+        if log { println("  move disk $disk from ${"ABC"[from]} to ${"ABC"[to]}") }
+    }
+
+    // Move `count` disks from one peg to another using the third as a spare.
+    fn transfer(count: Int, from: Int, to: Int, spare: Int) {
+        if count == 0 { return }
+        transfer(count - 1, from, spare, to)
+        move(from, to)
+        transfer(count - 1, spare, to, from)
+    }
+
+    fn solve() { transfer(disks, 0, 2, 1) }
+
+    fn toString() -> String = "A=${pegs[0]} B=${pegs[1]} C=${pegs[2]}"
+}
+
+// An extension method: `5.countdown()` is [5, 4, 3, 2, 1].
+fn Int.countdown() -> List<Int> {
+    out := List<Int>()
+    i := this
+    while i >= 1 {
+        out.add(i)
+        i -= 1
+    }
+    return out
+}
+
+small := Towers(3)
+small.log = true
+println("start:  $small")
+small.solve()
+println("finish: $small after ${small.moves} moves")
+
+// n disks take 2^n - 1 moves, so the count doubles with every disk.
+println()
+for n in [1, 2, 5, 10, 16] {
+    t := Towers(n)
+    t.solve()
+    println("$n disks: ${t.moves} moves", if t.moves == 2.pow(n) - 1 { "(= 2^$n - 1)" } else { "(unexpected!)" })
+}
+println("64 disks need 2^64 - 1 moves: too big for an Int (it wraps to ${2.pow(64) - 1}).")
+println("At one move per second that is about 585 billion years.")
+
+// > start:  A=[3, 2, 1] B=[] C=[]
+// >   move disk 1 from A to C
+// >   move disk 2 from A to B
+// >   move disk 1 from C to B
+// >   move disk 3 from A to C
+// >   move disk 1 from B to A
+// >   move disk 2 from B to C
+// >   move disk 1 from A to C
+// > finish: A=[] B=[] C=[3, 2, 1] after 7 moves
+// >
+// > 1 disks: 1 moves (= 2^1 - 1)
+// > 2 disks: 3 moves (= 2^2 - 1)
+// > 5 disks: 31 moves (= 2^5 - 1)
+// > 10 disks: 1023 moves (= 2^10 - 1)
+// > 16 disks: 65535 moves (= 2^16 - 1)
+// > 64 disks need 2^64 - 1 moves: too big for an Int (it wraps to -1).
+// > At one move per second that is about 585 billion years.
