@@ -1,0 +1,101 @@
+// More about functions: defaults that use earlier parameters, any number of arguments with `vararg`,
+// functions inside functions, and the `cond ? a : b` operator.
+//
+//   aion examples/functions.aion
+
+// ── ? : picks one of two values ──
+fn category(age: Int) -> String {
+    return age > 18 ? "adult" : "youth"
+}
+fn sign(n: Int) = n < 0 ? "negative" : n == 0 ? "zero" : "positive"
+println(category(12), category(40), sign(-4), sign(0), sign(9))
+
+// ── defaults can be any expression, and may use the parameters before them ──
+fn rectangle(w: Int, h: Int = w, label: String = "${w}x$h") = "$label has area ${w * h}"
+println(rectangle(3))
+println(rectangle(3, 4))
+println(rectangle(3, 4, label: "door"))
+
+// a list default is a new list on every call (not shared, as in some languages)
+fn remember(item: String, seen: List<String> = []) -> List<String> {
+    seen.add(item)
+    return seen
+}
+println(remember("a"), remember("b"), remember("c", ["x"]))
+
+// ── vararg: any number of arguments, a List inside ──
+fn sum(vararg xs: Int) = xs.fold(0) { acc, x -> acc + x }
+fn biggest(first: Int, vararg rest: Int) -> Int {
+    best := first
+    for r in rest { best = r > best ? r : best }
+    return best
+}
+fn log(level: String, vararg parts: String) = println("[$level] " + parts.join(" "))
+println(sum(), sum(5), sum(1, 2, 3, 4))
+println(biggest(3), biggest(3, 9, 4))
+log("info", "server", "started", "on", "port", "8080")
+
+// `*list` passes a list's items one by one, in a call or inside a list
+scores := [90, 72, 85]
+println(sum(*scores), sum(100, *scores), biggest(0, *scores))
+println([0, *scores, 100])
+
+// ── functions inside functions: they see the variables around them ──
+fn collatzLength(start: Int) -> Int {
+    fn next(n: Int) = n % 2 == 0 ? n / 2 : 3 * n + 1
+    n := start
+    steps := 0
+    while n != 1 {
+        n = next(n)
+        steps += 1
+    }
+    return steps
+}
+println("collatz 27 takes", collatzLength(27), "steps")
+
+// ... and can call themselves when the result type is written, which suits memoised recursion
+fn fib(n: Int) -> Int {
+    memo := Map<Int, Int>()
+    fn go(k: Int) -> Int {
+        if k < 2 { return k }
+        cached := memo.getOrNull(k)
+        if cached != null { return cached }
+        value := go(k - 1) + go(k - 2)
+        memo[k] = value
+        return value
+    }
+    return go(n)
+}
+println("fib(80) =", fib(80))
+
+// a nested function can be returned: it keeps the variables it uses
+fn counter(start: Int) -> () -> Int {
+    n := start
+    fn next() -> Int {
+        n += 1
+        return n
+    }
+    return next
+}
+a := counter(0)
+b := counter(100)
+println(a(), a(), a(), b())
+
+// a variable with a function type can call itself too
+fact: (Int) -> Int = { n -> n <= 1 ? 1 : n * fact(n - 1) }
+println("10! =", fact(10))
+
+// > youth adult negative zero positive
+// > 3x3 has area 9
+// > 3x4 has area 12
+// > door has area 12
+// > [a] [b] [x, c]
+// > 0 5 10
+// > 3 9
+// > [info] server started on port 8080
+// > 247 347 90
+// > [0, 90, 72, 85, 100]
+// > collatz 27 takes 111 steps
+// > fib(80) = 23416728348467685
+// > 1 2 3 101
+// > 10! = 3628800

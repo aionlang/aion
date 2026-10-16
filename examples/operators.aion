@@ -1,0 +1,83 @@
+// Operators on your own types: `a + b` calls `a.plus(b)`, `a * 2` calls `times`, `a < b` uses `compareTo`,
+// `a == b` uses `equals`, `-a` calls `unaryMinus`.  Fractions that stay in lowest terms, and 2-D vectors.
+//
+//   aion examples/operators.aion
+
+import math
+
+type Fraction(num: Int, den: Int = 1) {
+    init {
+        if den == 0 { panic("a fraction needs a denominator") }
+        g := num.abs().gcd(den.abs())
+        sign := den < 0 ? -1 : 1
+        this.num = sign * num / g       // `num` alone is the parameter; `this.num` is the field
+        this.den = sign * den / g
+    }
+
+    fn plus(o: Fraction) = Fraction(num * o.den + o.num * den, den * o.den)
+    fn minus(o: Fraction) = Fraction(num * o.den - o.num * den, den * o.den)
+    fn times(o: Fraction) = Fraction(num * o.num, den * o.den)
+    fn div(o: Fraction) = Fraction(num * o.den, den * o.num)
+    fn unaryMinus() = Fraction(-num, den)
+    fn compareTo(o: Fraction) = num * o.den - o.num * den
+    fn equals(o: Fraction) = num == o.num && den == o.den
+    fn hashCode() = num * 31 + den
+    fn toString() = den == 1 ? "$num" : "$num/$den"
+}
+
+half := Fraction(1, 2)
+third := Fraction(1, 3)
+println(half, third, Fraction(6, -8), Fraction(4, 2))
+println("1/2 + 1/3 =", half + third)
+println("1/2 - 1/3 =", half - third)
+println("1/2 * 1/3 =", half * third)
+println("1/2 / 1/3 =", half / third)
+println("-(1/2) =", -half)
+println("1/2 > 1/3:", half > third, "  1/2 == 2/4:", half == Fraction(2, 4))
+
+// += works too, so a sum is a loop; the harmonic numbers stay exact
+h := Fraction(0)
+for k in 1..=10 { h += Fraction(1, k) }
+println("1 + 1/2 + … + 1/10 =", h)
+
+// compareTo makes the type sortable, equals and hashCode make it a Map key
+mixed := [Fraction(3, 4), Fraction(1, 8), Fraction(5, 6), Fraction(1, 2)]
+println("sorted:", mixed.sorted().join(" < "))
+seen := Map<Fraction, String>()
+seen[Fraction(1, 2)] = "a half"
+println(seen[Fraction(3, 6)])
+
+// 2-D vectors: a number on the right scales
+type Vec(x: Float, y: Float) {
+    fn plus(o: Vec) = Vec(x + o.x, y + o.y)
+    fn minus(o: Vec) = Vec(x - o.x, y - o.y)
+    fn times(k: Float) = Vec(x * k, y * k)
+    fn unaryMinus() = Vec(-x, -y)
+    fn dot(o: Vec) = x * o.x + y * o.y
+    fn length() = math.sqrt(dot(this))
+    fn toString() = "($x, $y)"
+}
+
+a := Vec(3.0, 4.0)
+b := Vec(1.0, -2.0)
+println(a + b, a - b, a * 2.0, -a)
+println("|a| =", a.length(), " a·b =", a.dot(b))
+
+// a path of points, summed with +=
+position := Vec(0.0, 0.0)
+for step in [Vec(1.0, 0.0), Vec(0.0, 2.0), Vec(-0.5, 0.5)] { position += step * 2.0 }
+println("end of the path:", position)
+
+// > 1/2 1/3 -3/4 2
+// > 1/2 + 1/3 = 5/6
+// > 1/2 - 1/3 = 1/6
+// > 1/2 * 1/3 = 1/6
+// > 1/2 / 1/3 = 3/2
+// > -(1/2) = -1/2
+// > 1/2 > 1/3: true   1/2 == 2/4: true
+// > 1 + 1/2 + … + 1/10 = 7381/2520
+// > sorted: 1/8 < 1/2 < 3/4 < 5/6
+// > a half
+// > (4, 2) (2, 6) (6, 8) (-3, -4)
+// > |a| = 5  a·b = -5
+// > end of the path: (1, 5)

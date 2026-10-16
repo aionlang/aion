@@ -45,6 +45,9 @@ changes (`// stdin:` lines in a header feed the program input, `// args:` gives 
 | File | Topic |
 |------|-------|
 | [closures.aion](closures.aion) | lambdas, closures that remember variables, composition, currying, memoising, `map`/`filter`/`fold` |
+| [functions.aion](functions.aion) | `cond ? a : b`, defaults that use earlier parameters, `vararg` and `*spread`, functions inside functions |
+| [tuples.aion](tuples.aion) | `(a, b)` values, `a, b := pair`, swapping, `for (k, v) in …`, `zip`/`enumerate`, tuples as map keys |
+| [operators.aion](operators.aion) | `+ - * / < ==` on your own types (`plus`, `times`, `compareTo`, `equals`): fractions and vectors |
 | [generics.aion](generics.aion) | `Stack<T>`, `Queue<T>`, `Pair<A, B>`, constraints (`T: Comparable<T>`), generic interfaces |
 | [interfaces.aion](interfaces.aion) | interfaces satisfied by shape, dispatch at run time, mixed lists |
 | [inheritance.aion](inheritance.aion) | `open`, `override`, `super`, `is`, `as` |

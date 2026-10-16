@@ -1,0 +1,92 @@
+// Tuples hold a few values together: `(1, "one")` has the type `(Int, String)`.  `a, b := pair` takes one apart,
+// which also makes returning several results, swapping, and looping over pairs short.
+//
+//   aion examples/tuples.aion
+
+// Several results from one function
+fn divmod(a: Int, b: Int) -> (Int, Int) = (a / b, a % b)
+fn minmax(xs: List<Int>) -> (Int, Int) {
+    lo := xs[0]
+    hi := xs[0]
+    for x in xs {
+        if x < lo { lo = x }
+        if x > hi { hi = x }
+    }
+    return (lo, hi)
+}
+
+q, r := divmod(17, 5)
+println("17 = 5 * $q + $r")
+lo, hi := minmax([7, -2, 9, 4])
+println("range: $lo .. $hi")
+pair := divmod(100, 7)
+println(pair, "first =", pair.first, "second =", pair.second)
+
+// Swapping and parallel assignment: the right side is worked out first
+x, y := 1, 2
+x, y = y, x
+println("swapped:", x, y)
+a, b := 0, 1
+for i in 0..10 { a, b = b, a + b }              // the Fibonacci step in one line
+println("fib(10) =", a)
+
+// Nested patterns, and `_` for the parts you don't need
+(name, (year, month)) := ("Ada", (1815, 12))
+println("$name was born in $month/$year")
+_, middle, _ := (1, 2, 3)
+println("middle:", middle)
+
+// Loops over pairs: map entries, zip, and enumerate
+ages := {"ann": 31, "bob": 25, "cy": 47}
+for (who, age) in ages.entries() { println("$who is $age") }
+names := ["ann", "bob", "cy"]
+scores := [90, 72, 85]
+for n, s in names.zip(scores) { println("$n scored $s") }
+for i, n in enumerate(names) { println("${i + 1}. $n") }
+
+// Tuples compare by value, so they work as map keys: here, cells of a grid
+distance := Map<(Int, Int), Int>()
+queue := [(0, 0)]
+distance[(0, 0)] = 0
+while queue.size() > 0 {
+    (r0, c0) := queue.removeAt(0)
+    for (dr, dc) in [(0, 1), (1, 0)] {
+        next := (r0 + dr, c0 + dc)
+        if next.first < 3 && next.second < 3 && !(next in distance) {
+            distance[next] = distance[(r0, c0)] + 1
+            queue.add(next)
+        }
+    }
+}
+println("steps to the far corner:", distance[(2, 2)], " cells reached:", distance.size())
+
+// A list gives its first elements the same way
+first, second := ["x", "y", "z"]
+println(first + second)
+
+// Tuples print as (a, b); an optional tuple is written (Int, Int)?
+best: (String, Int)? = null
+for n, s in names.zip(scores) {
+    if best == null || s > best!!.second { best = (n, s) }
+}
+println("best:", best)
+
+// > 17 = 5 * 3 + 2
+// > range: -2 .. 9
+// > (14, 2) first = 14 second = 2
+// > swapped: 2 1
+// > fib(10) = 55
+// > Ada was born in 12/1815
+// > middle: 2
+// > ann is 31
+// > bob is 25
+// > cy is 47
+// > ann scored 90
+// > bob scored 72
+// > cy scored 85
+// > 1. ann
+// > 2. bob
+// > 3. cy
+// > steps to the far corner: 4  cells reached: 9
+// > xy
+// > best: (ann, 90)
