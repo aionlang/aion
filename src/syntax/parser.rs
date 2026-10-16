@@ -584,6 +584,11 @@ impl<'a> Parser<'a> {
                     StmtKind::For { var, iter, body: self.block()? }
                 }
             }
+            Some(Token::Fn) => {
+                let fn_start = self.bump().span;
+                let decl = self.fn_decl(fn_start, false)?;
+                StmtKind::Let { name: decl.name.clone(), ty: Self::nested_fn_type(&decl)?, init: Some(Self::nested_fn(decl)?) }
+            }
             Some(Token::Break) => {
                 self.bump();
                 StmtKind::Break
@@ -638,6 +643,40 @@ impl<'a> Parser<'a> {
         };
         out.push(Stmt { kind, span: start.to(self.prev_span()) });
         Ok(())
+    }
+
+    /// A function declared inside another: `fn helper(x: Int) -> Int { … }` is a variable holding a
+    /// closure, so it sees the variables around it.  Its type is written out when the result type is
+    /// known, which also lets it call itself.
+    fn nested_fn(decl: FnDecl) -> Result<Expr> {
+        let span = decl.span;
+        if !decl.type_params.is_empty() {
+            return Err(Diagnostic::new("a function inside another cannot have type parameters", decl.name.span)
+                .hint("declare it at the top level instead"));
+        }
+        if let Some(p) = decl.params.iter().find(|p| p.default.is_some()) {
+            return Err(Diagnostic::new("a function inside another cannot have default values", p.name.span)
+                .hint("declare it at the top level instead"));
+        }
+        let params = decl.params.into_iter().map(|p| LambdaParam { name: p.name, ty: Some(p.ty) }).collect();
+        let body = match decl.body {
+            FnBody::Block(body) => body,
+            FnBody::Expr(e) => vec![Self::expr_stmt(e)],
+            FnBody::Extern { .. } => return Err(Diagnostic::new("a function inside another cannot be `extern`", span)),
+        };
+        Ok(Expr { kind: ExprKind::Lambda { params, explicit: true, body }, span })
+    }
+
+    /// The type of a nested function, when its result type is written or implied (a block body
+    /// without `->` returns nothing).
+    fn nested_fn_type(decl: &FnDecl) -> Result<Option<TypeRef>> {
+        let ret = match (&decl.ret, &decl.body) {
+            (Some(ret), _) => ret.clone(),
+            (None, FnBody::Block(_)) => TypeRef { kind: TypeKind::Named { name: "Unit".into(), args: Vec::new() }, span: decl.name.span },
+            (None, _) => return Ok(None),
+        };
+        let params = decl.params.iter().map(|p| p.ty.clone()).collect();
+        Ok(Some(TypeRef { kind: TypeKind::Fn { params, ret: Box::new(ret) }, span: decl.name.span }))
     }
 
     /// A fresh name for something the parser introduces; `$` cannot appear in a source identifier.

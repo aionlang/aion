@@ -1,0 +1,5 @@
+// error: a function inside another cannot have type parameters
+fn outer() -> Int {
+    fn same<T>(x: T) -> T = x
+    return same(1)
+}

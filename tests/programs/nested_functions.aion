@@ -1,0 +1,55 @@
+// A function can be declared inside another.  It sees the variables around it, and
+// can call itself when its result type is written.
+fn describe(n: Int) -> String {
+    fn label(x: Int) -> String {
+        return x % 2 == 0 ? "even" : "odd"
+    }
+    fn twice(x: Int) = x * 2
+    fn countdown(k: Int) {
+        if k > 0 {
+            print("$k ")
+            countdown(k - 1)
+        }
+    }
+    fn fact(k: Int) -> Int {
+        if k <= 1 { return 1 }
+        return k * fact(k - 1)
+    }
+    countdown(3)
+    println()
+    return "${label(n)} ${twice(n)} ${fact(n)}"
+}
+println(describe(4))
+
+// it keeps the variables it uses alive, so it can be returned
+fn counter() -> () -> Int {
+    n := 0
+    fn next() -> Int {
+        n += 1
+        return n
+    }
+    return next
+}
+c := counter()
+c()
+c()
+println(c())
+
+fn fib(n: Int) -> Int {
+    fn go(a: Int, b: Int, k: Int) -> Int = k == 0 ? a : go(b, a + b, k - 1)
+    return go(0, 1, n)
+}
+println(fib(30))
+
+// a variable with a function type can call itself, too
+fact: (Int) -> Int = { n -> n < 2 ? 1 : n * fact(n - 1) }
+println(fact(10))
+
+// inside a method and in a loop
+type Greeter(prefix: String) {
+    fn greetAll(names: List<String>) {
+        fn greet(name: String) = println("$prefix, $name!")
+        for name in names { greet(name) }
+    }
+}
+Greeter("Hello").greetAll(["Ann", "Bob"])

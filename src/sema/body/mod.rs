@@ -721,6 +721,12 @@ impl<'c, 'a> Cx<'c, 'a> {
             out.push(self.run_defers(mark)?);
         }
         self.scopes.pop();
+        // A body that always `return`s (like a nested function's) needs no final value.
+        if let (Some(want), None) = (want_ret, result)
+            && always_returns(self.ck, &out)
+        {
+            result = Some(want);
+        }
         match (want_ret, result) {
             (Some(want), None) => Err(Diagnostic::new(
                 format!("this lambda must end with a {} value", self.name(want)),
@@ -846,6 +852,23 @@ impl<'c, 'a> Cx<'c, 'a> {
             StmtKind::Let { name, ty, init } => {
                 let declared = ty.as_ref().map(|t| self.ck.resolve_value_type(self.module, t, &self.subst)).transpose()?;
                 let init_span = init.as_ref().map(|e| e.span);
+                if let (Some(fn_ty @ Ty::Fn(_)), Some(lambda)) = (declared, init.as_ref())
+                    && matches!(lambda.kind, ast::ExprKind::Lambda { .. })
+                {
+                    // `f: (Int) -> Int = { … f(n - 1) … }`: a function variable can call itself, so
+                    // it exists before its body is checked, and is boxed so that the body sees the value.
+                    if self.scopes.last().unwrap().contains_key(&name.name) {
+                        return Err(Diagnostic::new(format!("`{}` is already defined in this scope", name.name), name.span));
+                    }
+                    let id = self.new_local(&name.name, fn_ty);
+                    self.scopes.last_mut().unwrap().insert(name.name.clone(), id);
+                    let value = self.value_expected(lambda, declared)?;
+                    let value = self.coerce(value, fn_ty, lambda.span)?;
+                    self.mark_mutated(id);
+                    out.push(hir::Stmt::Let(id, None));
+                    out.push(hir::Stmt::Set(id, value));
+                    return Ok(());
+                }
                 let init = init.as_ref().map(|e| self.value_expected(e, declared)).transpose()?;
                 let (local_ty, init) = match (declared, init) {
                     (Some(ty), Some(e)) => (ty, Some(self.coerce(e, ty, init_span.unwrap())?)),

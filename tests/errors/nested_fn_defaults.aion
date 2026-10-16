@@ -1,0 +1,5 @@
+// error: a function inside another cannot have default values
+fn outer() -> Int {
+    fn add(a: Int, b: Int = 1) -> Int = a + b
+    return add(1)
+}

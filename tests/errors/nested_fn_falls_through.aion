@@ -1,0 +1,7 @@
+// error: this lambda must produce a Int
+fn outer(n: Int) -> Int {
+    fn sign(x: Int) -> Int {
+        if x > 0 { return 1 }
+    }
+    return sign(n)
+}
