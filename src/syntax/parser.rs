@@ -986,12 +986,28 @@ impl<'a> Parser<'a> {
     }
 
     fn range_expr(&mut self) -> Result<Expr> {
-        let lhs = self.binary(1)?;
+        let mut lhs = self.binary(1)?;
         if matches!(self.peek(), Some(Token::DotDot | Token::DotDotEq)) && !self.nl() {
             let inclusive = self.bump().kind == Token::DotDotEq;
             let end = self.binary(1)?;
             let span = lhs.span.to(end.span);
-            return Ok(Expr { kind: ExprKind::Range { start: Box::new(lhs), end: Box::new(end), inclusive }, span });
+            lhs = Expr { kind: ExprKind::Range { start: Box::new(lhs), end: Box::new(end), inclusive }, span };
+        }
+        // `a downTo b`, `0..10 step 2`: the words are only operators between two expressions on a line
+        while self.peek() == Some(Token::Ident)
+            && !self.nl()
+            && matches!(self.text(self.toks[self.pos]), "step" | "downTo")
+            && !matches!(self.peek_at(1), None | Some(Token::RBrace | Token::RParen | Token::Comma | Token::Eq))
+        {
+            let word = self.bump();
+            let method = Ident { name: self.text(word).to_string(), span: word.span };
+            let arg = self.binary(1)?;
+            let span = lhs.span.to(arg.span);
+            let callee = Expr { kind: ExprKind::Field(Box::new(lhs), method), span };
+            lhs = Expr {
+                kind: ExprKind::Call { callee: Box::new(callee), type_args: Vec::new(), args: vec![Arg { name: None, value: arg }] },
+                span,
+            };
         }
         Ok(lhs)
     }
@@ -1919,6 +1935,22 @@ mod tests {
         let err = |src: &str| Parser::new(0, src, 0).and_then(|mut p| p.expr()).unwrap_err().message;
         assert!(err("\"\"\"never closed").contains("unterminated"));
         assert!(err("r\"\"\"never closed").contains("unterminated"));
+    }
+
+    #[test]
+    fn step_and_down_to_are_operators_between_expressions() {
+        // `0..10 step 2` is `(0..10).step(2)`, `a downTo b step c` is `a.downTo(b).step(c)`
+        let ExprKind::Call { callee, .. } = &parse_expr("0..10 step 2").kind else { panic!("expected a call") };
+        let ExprKind::Field(recv, name) = &callee.kind else { panic!() };
+        assert_eq!(name.name, "step");
+        assert!(matches!(recv.kind, ExprKind::Range { .. }));
+        let ExprKind::Call { callee, .. } = &parse_expr("a downTo b step 2").kind else { panic!() };
+        let ExprKind::Field(recv, name) = &callee.kind else { panic!() };
+        assert_eq!(name.name, "step");
+        assert!(matches!(&recv.kind, ExprKind::Call { .. }));
+        // as plain names they are still names
+        assert!(matches!(parse_expr("step").kind, ExprKind::Name(_)));
+        assert!(matches!(parse_expr("f(step, downTo)").kind, ExprKind::Call { .. }));
     }
 
     #[test]

@@ -1,0 +1,30 @@
+// A range is a value: 1..5 stops before 5, 1..=5 includes it, `step` and `downTo` change the pace.
+// `for i in a..b` is still a plain counting loop; building a Range is for when you want the numbers as data.
+r := 1..5
+println(r, r.size(), 3 in r, 5 in r)
+println((1..=5).toList(), (1..=5).sum())
+println((1..10).map { it * it })
+println((1..10).filter { it % 3 == 0 })
+println(0..10 step 3)
+println(10 downTo 7)
+println(10 downTo 0 step 4)
+println((1..5).reversed(), (0..10).step(5).reversed())
+for i in 10 downTo 7 { print(i, "") }
+println()
+for i in 0..20 step 5 { print(i, "") }
+println()
+for i in (1..4).reversed() { print(i, "") }
+println()
+println((1..0).isEmpty(), (5..1).size(), (3..3).toList())
+total := (1..100).fold(0) { acc, x -> acc + x }
+println(total)
+println((1..5).any { it > 4 }, (1..5).all { it > 1 }, (1..5).count { it % 2 == 1 })
+xs := [10, 20, 30, 40, 50]
+println((0..4 step 2).map { xs[it] })
+println(r.first(), r.last(), (1..10 step 3).join("-"))
+
+// ranges in `when`, in `in`, and bounds that are expressions
+n := 7
+println(when (n) { in 1..5 -> "low"; in 5..10 -> "mid"; else -> "high" })
+size := 4
+println((0..size * 2 step size).toList(), n in 0..n + 1, n in 0..n)

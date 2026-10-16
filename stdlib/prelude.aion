@@ -720,6 +720,68 @@ fn enumerate<T>(xs: List<T>) -> List<(Int, T)> {
     return out
 }
 
+// A run of Ints: `1..5` (up to, not including, 5), `1..=5`, `(0..10) step 2`, `10 downTo 0`.  It can be
+// looped over, tested with `in`, and used like a list of its numbers.  (`for i in a..b` itself does not
+// build one.)
+type Range(start: Int, end: Int, stride: Int = 1) {
+    init {
+        if stride == 0 { panic("a range cannot step by 0") }
+    }
+
+    fn size() -> Int {
+        if stride > 0 {
+            if end <= start { return 0 }
+            return (end - start + stride - 1) / stride
+        }
+        if start <= end { return 0 }
+        return (start - end - stride - 1) / (-stride)
+    }
+    fn isEmpty() = size() == 0
+    fn get(index: Int) -> Int {
+        if index < 0 || index >= size() { panic("index $index is out of bounds for a range of ${size()} numbers") }
+        return start + index * stride
+    }
+    fn first() -> Int = get(0)
+    fn last() -> Int = get(size() - 1)
+    fn contains(x: Int) -> Bool {
+        if stride > 0 { return x >= start && x < end && (x - start) % stride == 0 }
+        return x <= start && x > end && (start - x) % (-stride) == 0
+    }
+    // Every n-th number: `(0..10).step(2)`, also written `0..10 step 2`.
+    fn step(n: Int) -> Range {
+        if n <= 0 { panic("a step must be positive") }
+        return Range(start, end, stride * n)
+    }
+    fn reversed() -> Range {
+        if size() == 0 { return Range(0, 0) }
+        return Range(last(), start - (stride > 0 ? 1 : -1), -stride)
+    }
+    fn toList() -> List<Int> {
+        out := List<Int>()
+        n := size()
+        for i in 0..n { out.add(start + i * stride) }
+        return out
+    }
+    fn sum() -> Int {
+        total := 0
+        n := size()
+        for i in 0..n { total += start + i * stride }
+        return total
+    }
+    fn forEach(f: (Int) -> Unit) = toList().forEach(f)
+    fn map<R>(f: (Int) -> R) -> List<R> = toList().map(f)
+    fn filter(keep: (Int) -> Bool) -> List<Int> = toList().filter(keep)
+    fn fold<R>(initial: R, f: (R, Int) -> R) -> R = toList().fold(initial, f)
+    fn any(test: (Int) -> Bool) -> Bool = toList().any(test)
+    fn all(test: (Int) -> Bool) -> Bool = toList().all(test)
+    fn count(test: (Int) -> Bool) -> Int = toList().count(test)
+    fn join(separator: String = ", ") = toList().join(separator)
+    fn toString() = toList().toString()
+}
+
+// `10 downTo 1`: the numbers from 10 down to (and including) 1.
+fn Int.downTo(end: Int) = Range(this, end - 1, -1)
+
 // One key/value pair of a Map.
 type Entry<K, V>(key: K, value: V) {
     fn component1() = key

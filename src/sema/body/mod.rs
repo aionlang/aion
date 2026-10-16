@@ -2261,8 +2261,21 @@ impl<'c, 'a> Cx<'c, 'a> {
                 mk(K::Block(out, Box::new(unit())), Ty::Void)
             }
 
-            A::Range { .. } => {
-                return Err(Diagnostic::new("a range can only be used in a `for` loop or after `in`", e.span));
+            // A range that is not looped over directly is a `Range` object (see the prelude).
+            A::Range { start, end, inclusive } => {
+                let from = self.value(start)?;
+                let from = self.coerce(from, Ty::Int, start.span)?;
+                let to = self.value(end)?;
+                let mut to = self.coerce(to, Ty::Int, end.span)?;
+                if *inclusive {
+                    to = mk(K::Binary(hir::BinOp::Add, Box::new(to), Box::new(mk(K::Int(1), Ty::Int))), Ty::Int);
+                }
+                let Some(&Sym::Type(range)) = self.ck.t.scopes[0].items.get("Range") else {
+                    return Err(Diagnostic::new("the prelude has no `Range`", e.span));
+                };
+                let ctor = self.ck.t.ty(range).ctor;
+                let one = mk(K::Int(1), Ty::Int);
+                self.call_values(ctor, None, vec![(from, start.span), (to, end.span), (one, e.span)], e.span)?
             }
 
             // Without an expected function type, only fully annotated lambdas can be checked.
