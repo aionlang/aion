@@ -666,7 +666,15 @@ fn examples_print_what_they_promise() {
     for folder in folders {
         checked += 1;
         let project = folder.join("aion.project").is_file();
-        if let Err(e) = check_example(&folder, &folder.join("main.aion"), project) {
+        let main = folder.join("main.aion");
+        let result = if main.is_file() {
+            check_example(&folder, &main, project)
+        } else {
+            // a library package has no program of its own, only tests
+            let tests = folder.join("tests/check.aion");
+            check_example(&tests, &tests, false)
+        };
+        if let Err(e) = result {
             failures.push(e);
         }
     }
