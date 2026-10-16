@@ -1,0 +1,7 @@
+// The package's entry file: what `import shapes` loads.
+import .circle
+import @util
+
+fn describe(r: Int) = "a circle of radius $r has area ${circle.area(r)} (doubled: ${util.double(circle.area(r))})"
+fn _secret() = "only this file can call _secret"
+fn hint() = _secret()

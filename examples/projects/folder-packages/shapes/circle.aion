@@ -1,0 +1,1 @@
+fn area(r: Int) = r * r * 3

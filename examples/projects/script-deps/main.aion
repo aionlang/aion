@@ -1,0 +1,9 @@
+#!/usr/bin/env aion
+// A script with a dependency and no project file: the `// dep:` line names where it lives (a path here;
+// `github.com/user/repo@v1.2` works the same way, and `aion add <source> --script main.aion` writes the line).
+// dep: tools = ./tools
+import tools
+
+println(tools.shout("dependencies in a script"))
+
+// > DEPENDENCIES IN A SCRIPT!

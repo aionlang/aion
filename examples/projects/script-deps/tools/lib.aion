@@ -1,0 +1,1 @@
+fn shout(text: String) = text.upper() + "!"

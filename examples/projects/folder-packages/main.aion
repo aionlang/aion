@@ -1,0 +1,14 @@
+// A folder is a package: `import shapes` loads shapes/lib.aion, `import shapes.circle` loads shapes/circle.aion.
+// `@util` starts at the root of this program; `.circle` (inside shapes/lib.aion) starts at the importing file's folder.
+// Names starting with `_` are private to their file.
+import shapes
+import shapes.circle
+import @util
+
+println(shapes.describe(2))
+println(circle.area(3), util.double(21))
+println(shapes.hint())
+
+// > a circle of radius 2 has area 12 (doubled: 24)
+// > 27 42
+// > only this file can call _secret

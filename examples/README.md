@@ -91,5 +91,7 @@ See [docs/projects.md](../docs/projects.md) and [docs/packages.md](../docs/packa
 | [projects/geometry](projects/geometry) | a *library package* with its own tests (`aion tests/check.aion`) |
 | [projects/geometry-demo](projects/geometry-demo) | a program that depends on that package |
 | [projects/c-extension](projects/c-extension) | C code compiled into the program (`c = [...]`), bound with `extern fn` |
+| [projects/folder-packages](projects/folder-packages) | a folder as a package (`import shapes`), `@root` and `.relative` imports, `_private` names |
+| [projects/script-deps](projects/script-deps) | a script with a `// dep:` line and no project file |
 | [projects/greeter](projects/greeter) | the smallest project with a dependency |
 | [projects/modules](projects/modules) | plain imports between files, with no project file |
