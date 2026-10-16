@@ -1,0 +1,2 @@
+// error: a `vararg` parameter has no default value
+fn f(vararg xs: Int = 3) {}

@@ -1,0 +1,3 @@
+// error: `*` spreads a list into a call or a list literal
+fn f(a: Int) {}
+f(*[1])

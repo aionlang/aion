@@ -60,6 +60,8 @@ pub struct Param {
     pub ty: TypeRef,
     /// `x: Int = 0`
     pub default: Option<Expr>,
+    /// `vararg xs: Int`: takes any number of arguments; `xs` is a `List<Int>` inside.  `ty` is the element type.
+    pub vararg: bool,
 }
 
 #[derive(Debug)]
@@ -235,6 +237,8 @@ pub enum ExprKind {
     Slice { obj: Box<Expr>, start: Option<Box<Expr>>, end: Option<Box<Expr>>, inclusive: bool },
     /// `[1, 2, 3]`
     List(Vec<Expr>),
+    /// `*xs` in a call or a list: the elements of a list, one by one.
+    Spread(Box<Expr>),
     /// `{"a": 1, "b": 2}`
     Map(Vec<(Expr, Expr)>),
     Unary(UnOp, Box<Expr>),

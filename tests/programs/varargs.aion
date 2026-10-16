@@ -1,0 +1,46 @@
+// A `vararg` parameter takes any number of arguments, and is a List inside the function.
+// `*xs` passes the items of a list one by one — in a call, or in a list literal.
+fn sum(vararg xs: Int) -> Int {
+    total := 0
+    for x in xs { total += x }
+    return total
+}
+println(sum())
+println(sum(1))
+println(sum(1, 2, 3))
+nums := [10, 20, 30]
+println(sum(*nums))
+println(sum(1, *nums, 2))
+
+// other parameters come first
+fn log(level: String, vararg parts: String) {
+    println("[$level] " + parts.join())
+}
+log("info")
+log("info", "a", "b")
+
+fn biggest(first: Int, vararg rest: Int) -> Int {
+    m := first
+    for r in rest { if r > m { m = r } }
+    return m
+}
+println(biggest(3, 9, 4))
+
+// generic, and in constructors and methods
+fn listOf<T>(vararg items: T) -> List<T> = items
+xs := listOf(1, 2, 3)
+println(xs)
+println(listOf("a", "b"))
+println([0, *xs, 4])
+println(listOf(*xs, *xs).size())
+
+type Bag {
+    items: List<Int> = []
+    constructor(vararg first: Int) {
+        for x in first { items.add(x) }
+    }
+    fn addAll(vararg more: Int) { for x in more { items.add(x) } }
+}
+b := Bag(1, 2)
+b.addAll(3, 4)
+println(b.items)

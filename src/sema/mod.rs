@@ -131,6 +131,8 @@ pub struct ParamInfo {
     pub name: String,
     pub ty: Ty,
     pub default: Option<Const>,
+    /// `vararg xs: Int`: `ty` is the `List<Int>` the function sees; callers pass the items one by one.
+    pub vararg: bool,
 }
 
 #[derive(Clone)]
@@ -713,7 +715,14 @@ impl<'a> Checker<'a> {
     fn param_info(&self, mi: usize, p: &ast::Param, subst: &Subst) -> Result<ParamInfo> {
         let ty = self.resolve_value_type(mi, &p.ty, subst)?;
         let default = p.default.as_ref().map(|e| const_default(e, ty, &self.t)).transpose()?;
-        Ok(ParamInfo { name: p.name.name.clone(), ty, default })
+        if p.vararg {
+            let Some(&Sym::GenericType(list)) = self.t.scopes[0].items.get("List") else {
+                return Err(Diagnostic::new("the prelude has no `List`", p.name.span));
+            };
+            let ty = Ty::Obj(self.instantiate_type(list, vec![ty], p.ty.span)?);
+            return Ok(ParamInfo { name: p.name.name.clone(), ty, default: None, vararg: true });
+        }
+        Ok(ParamInfo { name: p.name.name.clone(), ty, default, vararg: false })
     }
 
     fn params(
@@ -725,7 +734,7 @@ impl<'a> Checker<'a> {
     ) -> Result<Vec<ParamInfo>> {
         let mut out: Vec<ParamInfo> = Vec::new();
         if let Some(ty) = receiver {
-            out.push(ParamInfo { name: "this".into(), ty, default: None });
+            out.push(ParamInfo { name: "this".into(), ty, default: None, vararg: false });
         }
         for p in params {
             if out.iter().any(|q| q.name == p.name.name) {
@@ -916,7 +925,7 @@ impl<'a> Checker<'a> {
         let owner = self.t.ty(ty).name.clone();
         // Open types and subtypes split construction in two: allocate, then run the initialiser.
         if td.open || td.parent.is_some() {
-            let mut init_params = vec![ParamInfo { name: "this".into(), ty: Ty::Obj(ty), default: None }];
+            let mut init_params = vec![ParamInfo { name: "this".into(), ty: Ty::Obj(ty), default: None, vararg: false }];
             init_params.extend(params.iter().cloned());
             let init = self.declare_fn(
                 FnInfo {

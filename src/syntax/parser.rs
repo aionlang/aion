@@ -354,11 +354,26 @@ impl<'a> Parser<'a> {
         let params = self.scoped(true, false, |p| {
             let mut params = Vec::new();
             while p.peek() != Some(Token::RParen) {
+                // `vararg` is only a keyword in front of `name:`
+                let vararg = p.peek() == Some(Token::Ident)
+                    && p.text(p.toks[p.pos]) == "vararg"
+                    && p.peek_at(1) == Some(Token::Ident)
+                    && p.peek_at(2) == Some(Token::Colon);
+                if vararg {
+                    p.bump();
+                }
                 let name = p.ident()?;
                 p.expect(Token::Colon)?;
                 let ty = p.type_ref()?;
                 let default = if p.eat(Token::Eq) { Some(p.expr()?) } else { None };
-                params.push(Param { name, ty, default });
+                if vararg && default.is_some() {
+                    return Err(Diagnostic::new("a `vararg` parameter has no default value", name.span)
+                        .hint("leaving it out gives an empty list"));
+                }
+                if params.last().is_some_and(|q: &Param| q.vararg) {
+                    return Err(Diagnostic::new("`vararg` must be the last parameter", name.span));
+                }
+                params.push(Param { name, ty, default, vararg });
                 if !p.eat(Token::Comma) {
                     break;
                 }
@@ -374,6 +389,9 @@ impl<'a> Parser<'a> {
         let name = self.ident()?;
         let (type_params, bounds) = self.bounded_type_params()?;
         let params = self.params()?;
+        if let Some(v) = params.iter().find(|p| p.vararg).filter(|_| is_extern) {
+            return Err(Diagnostic::new("an `extern` function cannot take a `vararg`", v.name.span));
+        }
         let ret = if self.eat(Token::Arrow) { Some(self.type_ref()?) } else { None };
         let body = if is_extern {
             let symbol = if self.eat(Token::Eq) {
@@ -418,6 +436,9 @@ impl<'a> Parser<'a> {
                         p.bump();
                         let name = p.ident()?;
                         let params = p.params()?;
+                        if let Some(v) = params.iter().find(|p| p.vararg) {
+                            return Err(Diagnostic::new("an interface method cannot take a `vararg`", v.name.span));
+                        }
                         let ret = if p.eat(Token::Arrow) { Some(p.type_ref()?) } else { None };
                         if matches!(p.peek(), Some(Token::LBrace | Token::Eq)) && !p.nl() {
                             return Err(Diagnostic::new(
@@ -440,6 +461,10 @@ impl<'a> Parser<'a> {
         let name = self.ident()?;
         let (type_params, bounds) = self.bounded_type_params()?;
         let primary = if self.peek() == Some(Token::LParen) && !self.nl() { Some(self.params()?) } else { None };
+        if let Some(p) = primary.as_ref().and_then(|ps| ps.iter().find(|p| p.vararg)) {
+            return Err(Diagnostic::new("a primary constructor cannot take a `vararg`", p.name.span)
+                .hint("declare a constructor: `constructor(vararg xs: Int) { … }`"));
+        }
         // `: Parent(args)` — extend another type, handing it its constructor arguments.
         let parent = if self.peek() == Some(Token::Colon) && !self.nl() {
             let colon = self.bump().span;
@@ -656,6 +681,10 @@ impl<'a> Parser<'a> {
         }
         if let Some(p) = decl.params.iter().find(|p| p.default.is_some()) {
             return Err(Diagnostic::new("a function inside another cannot have default values", p.name.span)
+                .hint("declare it at the top level instead"));
+        }
+        if let Some(p) = decl.params.iter().find(|p| p.vararg) {
+            return Err(Diagnostic::new("a function inside another cannot take a `vararg`", p.name.span)
                 .hint("declare it at the top level instead"));
         }
         let params = decl.params.into_iter().map(|p| LambdaParam { name: p.name, ty: Some(p.ty) }).collect();
@@ -1087,12 +1116,24 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
-            args.push(Arg { name, value: self.expr()? });
+            let value = if name.is_none() { self.element()? } else { self.expr()? };
+            args.push(Arg { name, value });
             if !self.eat(Token::Comma) {
                 break;
             }
         }
         Ok(args)
+    }
+
+    /// An argument or list element: an expression, or `*xs` to spread a list into place.
+    fn element(&mut self) -> Result<Expr> {
+        if self.peek() != Some(Token::Star) {
+            return self.expr();
+        }
+        let star = self.bump().span;
+        let inner = self.expr()?;
+        let span = star.to(inner.span);
+        Ok(Expr { kind: ExprKind::Spread(Box::new(inner)), span })
     }
 
     fn primary(&mut self) -> Result<Expr> {
@@ -1163,7 +1204,7 @@ impl<'a> Parser<'a> {
                 let items = self.scoped(true, false, |p| {
                     let mut items = Vec::new();
                     while p.peek() != Some(Token::RBracket) {
-                        items.push(p.expr()?);
+                        items.push(p.element()?);
                         if !p.eat(Token::Comma) {
                             break;
                         }

@@ -1557,20 +1557,49 @@ impl<'c, 'a> Cx<'c, 'a> {
 
     /// `[a, b, c]`  ⇒  `{ $l := List<T>(); $l.add(a); $l.add(b); $l.add(c); $l }`
     fn list_literal(&mut self, items: &[ast::Expr], expected: Option<Ty>, span: Span) -> Result<hir::Expr> {
+        self.list_from(items.iter().map(|e| (e, None)).collect(), expected, span)
+    }
+
+    /// A list of `items`, which may already be evaluated (for a `*spread`, the list inside).
+    fn list_from(&mut self, items: Vec<(&ast::Expr, Option<hir::Expr>)>, expected: Option<Ty>, span: Span) -> Result<hir::Expr> {
         let hint = self.expected_args(expected, "List").map(|a| a[0]);
-        let mut values = Vec::new();
+        let mut rows = Vec::new();
         let mut elem = hint;
-        for item in items {
-            let v = self.value_expected(item, elem)?;
-            let want = *elem.get_or_insert(v.ty);
-            values.push((self.coerce(v, want, item.span)?, item.span));
+        for (item, done) in items {
+            if let A::Spread(inner) = &item.kind {
+                let want = match elem {
+                    Some(e) => Some(Ty::Obj(self.collection("List", vec![e], inner.span)?)),
+                    None => None,
+                };
+                let v = match done {
+                    Some(v) => v,
+                    None => self.value_expected(inner, want)?,
+                };
+                let Some(found) = self.expected_args(Some(v.ty), "List") else {
+                    return Err(Diagnostic::new(format!("`*` spreads a list, not a {}", self.name(v.ty)), inner.span));
+                };
+                let e = *elem.get_or_insert(found[0]);
+                let list = Ty::Obj(self.collection("List", vec![e], inner.span)?);
+                rows.push(("addAll", vec![(self.coerce(v, list, inner.span)?, inner.span)]));
+            } else {
+                let v = match done {
+                    Some(v) => v,
+                    None => self.value_expected(item, elem)?,
+                };
+                let want = *elem.get_or_insert(v.ty);
+                if v.ty != want && self.expected_args(Some(v.ty), "List").is_some() && self.expected_args(Some(want), "List").is_none() {
+                    return Err(Diagnostic::new(format!("expected {}, found {}", self.name(want), self.name(v.ty)), item.span)
+                        .hint("to pass the items of a list one by one, write `*xs`"));
+                }
+                rows.push(("add", vec![(self.coerce(v, want, item.span)?, item.span)]));
+            }
         }
         let Some(elem) = elem else {
             return Err(Diagnostic::new("cannot infer the element type of an empty list", span)
                 .hint("write `List<Int>()`, or give the variable a type: `xs: List<Int> = []`"));
         };
         let ty = self.collection("List", vec![elem], span)?;
-        self.fill_collection(ty, "add", values.into_iter().map(|v| vec![v]).collect(), span)
+        self.fill_collection(ty, rows, span)
     }
 
     /// `{ k: v, … }`  ⇒  `{ $m := Map<K, V>(); $m.set(k, v); …; $m }`
@@ -1583,28 +1612,28 @@ impl<'c, 'a> Cx<'c, 'a> {
             let kt = *key_ty.get_or_insert(kv.ty);
             let vv = self.value_expected(v, val_ty)?;
             let vt = *val_ty.get_or_insert(vv.ty);
-            rows.push(vec![(self.coerce(kv, kt, k.span)?, k.span), (self.coerce(vv, vt, v.span)?, v.span)]);
+            rows.push(("set", vec![(self.coerce(kv, kt, k.span)?, k.span), (self.coerce(vv, vt, v.span)?, v.span)]));
         }
         let (Some(k), Some(v)) = (key_ty, val_ty) else {
             return Err(Diagnostic::new("cannot infer the types of an empty map", span)
                 .hint("write `Map<String, Int>()`"));
         };
         let ty = self.collection("Map", vec![k, v], span)?;
-        self.fill_collection(ty, "set", rows, span)
+        self.fill_collection(ty, rows, span)
     }
 
-    /// A new `ty` with `method(args…)` called once per row.
-    fn fill_collection(&mut self, ty: TypeId, method: &str, rows: Vec<Vec<(hir::Expr, Span)>>, span: Span) -> Result<hir::Expr> {
+    /// A new `ty` with a method called once per row: `(method, arguments)`.
+    fn fill_collection(&mut self, ty: TypeId, rows: Vec<(&str, Vec<(hir::Expr, Span)>)>, span: Span) -> Result<hir::Expr> {
         let info = self.ck.t.ty(ty);
-        let add = *info
-            .methods
-            .get(method)
-            .ok_or_else(|| Diagnostic::new(format!("`{}` has no `{method}` method", info.name), span))?;
         let obj_ty = Ty::Obj(ty);
         let tmp = self.new_local("$lit", obj_ty);
         let make = self.call_values(info.ctor, None, Vec::new(), span)?;
         let mut stmts = vec![hir::Stmt::Let(tmp, Some(make))];
-        for row in rows {
+        for (method, row) in rows {
+            let add = *info
+                .methods
+                .get(method)
+                .ok_or_else(|| Diagnostic::new(format!("`{}` has no `{method}` method", info.name), span))?;
             let call = self.call_values(add, Some(self.local_expr(tmp)), row, span)?;
             stmts.push(hir::Stmt::Expr(call));
         }
@@ -2184,6 +2213,10 @@ impl<'c, 'a> Cx<'c, 'a> {
 
             A::List(items) => self.list_literal(items, None, e.span)?,
             A::Map(entries) => self.map_literal(entries, None, e.span)?,
+            A::Spread(_) => {
+                return Err(Diagnostic::new("`*` spreads a list into a call or a list literal", e.span)
+                    .hint("e.g. `f(*xs)` or `[0, *xs]`, where `f` takes a `vararg`"));
+            }
 
             A::Range { .. } => {
                 return Err(Diagnostic::new("a range can only be used in a `for` loop or after `in`", e.span));
@@ -3003,12 +3036,23 @@ impl<'c, 'a> Cx<'c, 'a> {
         let ret = ck.ret_of(id, span)?;
         let params = &info.params[usize::from(recv.is_some())..];
         let names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
-        let order = self.map_args(&info.name, &names, args, span)?;
+        // The arguments from `tail` on are the items of the `vararg` parameter.
+        let tail = vararg_tail(params.last().is_some_and(|p| p.vararg).then(|| params.len() - 1), args);
+        let mapped = match tail {
+            Some(k) => &args[..=k],
+            None => args,
+        };
+        let order = self.map_args(&info.name, &names, mapped, span)?;
         pre.resize_with(args.len(), || None);
 
         // Evaluate arguments in the order they were written.
         let mut values: Vec<Option<hir::Expr>> = (0..params.len()).map(|_| None).collect();
-        for (ai, (a, &pi)) in args.iter().zip(&order).enumerate() {
+        for (ai, (a, &pi)) in mapped.iter().zip(&order).enumerate() {
+            if tail == Some(ai) {
+                let items = (ai..args.len()).map(|i| (&args[i].value, pre[i].take())).collect();
+                values[pi] = Some(self.list_from(items, Some(params[pi].ty), a.value.span)?);
+                continue;
+            }
             let v = match pre[ai].take() {
                 Some(v) => v,
                 None => self.value_expected(&a.value, Some(params[pi].ty))?,
@@ -3032,6 +3076,7 @@ impl<'c, 'a> Cx<'c, 'a> {
             call_args.push(match (v, &p.default) {
                 (Some(v), _) => v,
                 (None, Some(c)) => self.coerce(const_expr(c), p.ty, span)?,
+                (None, None) if p.vararg => self.list_from(Vec::new(), Some(p.ty), span)?,
                 (None, None) => {
                     return Err(Diagnostic::new(
                         format!("`{}` is missing the argument `{}`", info.name, p.name),
@@ -3064,6 +3109,12 @@ impl<'c, 'a> Cx<'c, 'a> {
         }
         Ok(mk(K::Print { newline, args: out }, Ty::Void))
     }
+}
+
+/// Where the arguments of a `vararg` parameter (at index `k`) start: from there on, all are unnamed.
+fn vararg_tail(k: Option<usize>, args: &[ast::Arg]) -> Option<usize> {
+    let k = k?;
+    (args.len() > k && args[k..].iter().all(|a| a.name.is_none())).then_some(k)
 }
 
 fn default_expr(ty: Ty) -> hir::Expr {

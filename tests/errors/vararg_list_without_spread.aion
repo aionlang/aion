@@ -1,0 +1,4 @@
+// error: expected Int, found List<Int>
+fn sum(vararg xs: Int) -> Int = 0
+nums := [1, 2]
+println(sum(nums))

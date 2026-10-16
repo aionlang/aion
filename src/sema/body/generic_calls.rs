@@ -104,7 +104,17 @@ impl Cx<'_, '_> {
         }
 
         let pnames: Vec<&str> = tpl.params.iter().map(|p| p.name.name.as_str()).collect();
-        let order = self.map_args(tpl.name, &pnames, args, span)?;
+        // The arguments from `tail` on are the items of a `vararg` parameter, whose type as written is the item type.
+        let tail = vararg_tail(tpl.params.last().is_some_and(|p| p.vararg).then(|| tpl.params.len() - 1), args);
+        let mapped = match tail {
+            Some(k) => &args[..=k],
+            None => args,
+        };
+        let order = self.map_args(tpl.name, &pnames, mapped, span)?;
+        let param_of = |ai: usize| match tail {
+            Some(k) if ai >= k => k,
+            _ => order[ai],
+        };
         let mut pre: Vec<Option<hir::Expr>> = (0..args.len()).map(|_| None).collect();
 
         // 1. Arguments that are not lambdas say what their types are.
@@ -112,8 +122,19 @@ impl Cx<'_, '_> {
             if matches!(a.value.kind, A::Lambda { .. }) {
                 continue;
             }
+            if let A::Spread(inner) = &a.value.kind {
+                if !tail.is_some_and(|k| ai >= k) {
+                    return Err(Diagnostic::new("`*` spreads a list into a `vararg` parameter", a.value.span));
+                }
+                let v = self.value(inner)?;
+                if let Some(found) = self.expected_args(Some(v.ty), "List") {
+                    self.unify(tpl, &tpl.params[param_of(ai)].ty, found[0], &mut bind);
+                }
+                pre[ai] = Some(v);
+                continue;
+            }
             let v = self.value(&a.value)?;
-            self.unify(tpl, &tpl.params[order[ai]].ty, v.ty, &mut bind);
+            self.unify(tpl, &tpl.params[param_of(ai)].ty, v.ty, &mut bind);
             pre[ai] = Some(v);
         }
 
@@ -136,7 +157,7 @@ impl Cx<'_, '_> {
         // 3. Lambdas, now that the parameter types they need are (usually) known.
         for (ai, a) in args.iter().enumerate() {
             let A::Lambda { params, explicit, body } = &a.value.kind else { continue };
-            let written = &tpl.params[order[ai]].ty;
+            let written = &tpl.params[param_of(ai)].ty;
             let sig = self.lambda_expectation(tpl, written, &bind);
             let v = self.lambda_sig(params, *explicit, body, sig, a.value.span)?;
             self.unify(tpl, written, v.ty, &mut bind);

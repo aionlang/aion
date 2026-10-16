@@ -1,0 +1,2 @@
+// error: `vararg` must be the last parameter
+fn f(vararg xs: Int, y: Int) {}
