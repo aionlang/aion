@@ -27,7 +27,7 @@ lib = "lib.aion"
   Everything a module defines is public, so decide what belongs in `lib.aion`:
   re-export a few names rather than making users reach into your folders.
 * Other modules of the package are reached as `import slugify.internal.tables`
-  from outside and as `import internal.tables` from inside.
+  from outside and as `import internal.tables` from inside the package.
 * The name your users write in `import` is *their* name for the dependency, so
   keep your own `name` short and unsurprising.
 
@@ -46,21 +46,25 @@ fn slugify(text: String) -> String {
 
 ## 2. Test it
 
-Tests are plain programs that stop with a message (or a non-zero exit code) when something
-is wrong.  Keep them in `tests/` and run them with `aion tests/check.aion`; a test sees the
-project's own `lib` like any other module:
+Tests are plain programs that report (or stop with a non-zero exit code) when something is
+wrong.  Keep them in `tests/` and run them from the package folder with `aion tests/check.aion`.
+Inside its own package a module is found by file name, so the library is simply `lib` (the
+file `lib.aion`), where a program that depends on the package writes `import slugify`:
 
 ```text
 // tests/check.aion
-import slugify
+import lib
 
 fn expect(actual: String, wanted: String) {
     if actual != wanted { panic("slugify gave '$actual', wanted '$wanted'") }
 }
 
-expect(slugify.slugify("Hello, World!"), "hello-world")
+expect(lib.slugify("Hello, World!"), "hello-world")
 println("ok")
 ```
+
+The `geometry` package in [examples/projects](../examples/projects/geometry) is a complete
+example with a test file, and `geometry-demo` uses it.
 
 ## 3. Depend on other packages
 
