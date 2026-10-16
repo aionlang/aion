@@ -9,6 +9,7 @@ mod codegen;
 mod diag;
 mod embedded;
 mod loader;
+mod manage;
 mod project;
 mod sema;
 mod syntax;
@@ -27,6 +28,11 @@ usage:
   aion build [file.aion] [-o <out>]   compile to a native executable
   aion emit-ir [file.aion]            print the generated LLVM IR
   aion new <name>                     create a project directory
+  aion add <source> [--as NAME] [--tag T|--branch B|--rev R] [--script FILE] [--yes]
+                                      add a dependency (a git repo like github.com/me/http@v1, or a path)
+  aion remove <name>                  remove a dependency
+  aion update [name]                  fetch newer commits for git dependencies
+  aion tree [FILE]                    show the dependency tree
   aion fetch                          download the project's dependencies
   aion clean                          delete the build cache
 
@@ -260,8 +266,37 @@ fn new_project(name: &str) -> Result<(), Diagnostic> {
     Ok(())
 }
 
+/// `aion add / remove / update / tree`.
+fn manage_command(command: &str, args: &[String]) -> ExitCode {
+    let result = (|| {
+        let opts = manage::parse_opts(args)?;
+        let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+        let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from);
+        let mut prompt = manage::Terminal { yes: opts.yes };
+        match command {
+            "add" => manage::add(&opts, &cwd, home.as_deref(), &mut prompt),
+            "remove" => manage::remove(&opts, &cwd, home.as_deref(), &mut prompt),
+            "update" => manage::update(&opts, &cwd, home.as_deref(), &mut prompt),
+            _ => manage::tree(&opts, &cwd, home.as_deref(), &mut prompt),
+        }
+    })();
+    match result {
+        Ok(message) => {
+            if command == "tree" { print!("{message}") } else { eprintln!("{message}") }
+            ExitCode::SUCCESS
+        }
+        Err(message) => {
+            eprintln!("error: {message}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn run() -> Result<ExitCode, Failure> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(command) = args.first().map(String::as_str).filter(|c| ["add", "remove", "update", "tree"].contains(c)) {
+        return Ok(manage_command(command, &args[1..]));
+    }
     let cli = match parse_args(&args) {
         Ok(c) => c,
         Err(msg) => {

@@ -298,6 +298,99 @@ fn a_script_can_declare_dependencies_in_its_header() {
     assert!(stderr(&out).contains("belongs to a project"), "{}", stderr(&out));
 }
 
+#[test]
+fn aion_add_remove_update_and_tree_manage_dependencies() {
+    if Command::new("git").arg("--version").output().is_err() {
+        eprintln!("skipping: git is not installed");
+        return;
+    }
+    let root = scratch("manage");
+    let home = root.join("home");
+    let env = [("HOME", home.as_path())];
+    let repo = root.join("http_repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let git = |dir: &Path, args: &[&str]| {
+        let ok = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(ok, "git {args:?} failed");
+    };
+    git(&repo, &["init", "-q"]);
+    write(&repo.join("lib.aion"), "fn version() = \"1.0\"\n");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "one"]);
+    git(&repo, &["tag", "v1"]);
+    let url = format!("file://{}", repo.display());
+
+    // into the project in the current folder (no terminal: no questions)
+    let app = home.join("app");
+    write(&app.join("aion.project"), "name = \"app\"  # mine\n");
+    write(&app.join("main.aion"), "import http\nprintln(http.version())\n");
+    let out = aion_in_env(&app, &["add", &format!("{url}@v1"), "--as", "http"], &env);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let manifest = std::fs::read_to_string(app.join("aion.project")).unwrap();
+    assert!(manifest.contains("# mine") && manifest.contains("http = { git = \"file://"), "{manifest}");
+    assert_eq!(stdout(&aion_in_env(&app, &[], &env)), "1.0\n");
+    assert!(stderr(&aion_in_env(&app, &["add", &format!("{url}@v1"), "--as", "http"], &env)).contains("already a dependency"));
+
+    // from a sub-folder: the project above is used
+    write(&app.join("sub/x.aion"), "println(1)\n");
+    let out = aion_in_env(&app.join("sub"), &["add", "../../../tools_dir", "--as", "tools"], &env);
+    assert!(!out.status.success());
+    write(&home.join("tools_dir/lib.aion"), "fn t() = 1\n");
+    let out = aion_in_env(&app.join("sub"), &["add", "../../tools_dir"], &env);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(std::fs::read_to_string(app.join("aion.project")).unwrap().contains("tools_dir = { path = \"../tools_dir\" }"));
+
+    // the tree, then removing
+    let tree = stdout(&aion_in_env(&app, &["tree"], &env));
+    assert!(tree.starts_with("app"), "{tree}");
+    assert!(tree.contains("http") && tree.contains("git file://") && tree.contains("tools_dir"), "{tree}");
+    let out = aion_in_env(&app, &["remove", "tools_dir"], &env);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(!std::fs::read_to_string(app.join("aion.project")).unwrap().contains("tools_dir"));
+    assert!(!aion_in_env(&app, &["remove", "tools_dir"], &env).status.success());
+
+    // a script keeps its dependency in its header
+    write(&home.join("s.aion"), "println(1)\n");
+    let out = aion_in_env(&home, &["add", &format!("{url}@v1"), "--as", "http", "--script", "s.aion"], &env);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(std::fs::read_to_string(home.join("s.aion")).unwrap().starts_with("// dep: http = file://"));
+    assert!(home.join("s.aion.lock").is_file());
+
+    // no project anywhere: one is created
+    let loose = root.join("elsewhere");
+    std::fs::create_dir_all(&loose).unwrap();
+    let out = aion_in_env(&loose, &["add", &url, "--as", "http", "--tag", "v1"], &env);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(std::fs::read_to_string(loose.join("aion.project")).unwrap().contains("tag = \"v1\""));
+
+    // update after a new commit on the default branch moves the pin
+    write(&repo.join("lib.aion"), "fn version() = \"2.0\"\n");
+    git(&repo, &["commit", "-qam", "two"]);
+    let branch = loose.join("b");
+    write(&branch.join("aion.project"), "name = \"b\"\n");
+    write(&branch.join("main.aion"), "import http\nprintln(http.version())\n");
+    assert!(aion_in_env(&branch, &["add", &url, "--as", "http"], &env).status.success());
+    assert_eq!(stdout(&aion_in_env(&branch, &[], &env)), "2.0\n");
+    write(&repo.join("lib.aion"), "fn version() = \"3.0\"\n");
+    git(&repo, &["commit", "-qam", "three"]);
+    assert_eq!(stdout(&aion_in_env(&branch, &[], &env)), "2.0\n");
+    assert!(aion_in_env(&branch, &["update", "http"], &env).status.success());
+    assert_eq!(stdout(&aion_in_env(&branch, &[], &env)), "3.0\n");
+
+    // a failing clone leaves the file as it was
+    let before = std::fs::read_to_string(branch.join("aion.project")).unwrap();
+    let out = aion_in_env(&branch, &["add", "file:///definitely/not/there", "--as", "ghost"], &env);
+    assert!(!out.status.success());
+    assert_eq!(std::fs::read_to_string(branch.join("aion.project")).unwrap(), before);
+}
+
 // ── projects & dependencies ─────────────────────────────────────────
 
 /// A scratch directory unique to one test.

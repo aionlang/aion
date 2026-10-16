@@ -61,7 +61,7 @@ pub enum GitRef {
 }
 
 impl GitRef {
-    fn describe(&self) -> String {
+    pub fn describe(&self) -> String {
         match self {
             GitRef::Default => "HEAD".into(),
             GitRef::Tag(t) => format!("tag:{t}"),
@@ -75,6 +75,8 @@ impl GitRef {
 #[derive(Debug)]
 pub struct Package {
     pub root: PathBuf,
+    /// How the dependency was asked for, for `aion tree` ("git https://… @ tag:v1 (9fceb02)").
+    pub source: String,
     /// The package's `aion.project`, if it has one.
     pub manifest: Option<PathBuf>,
     /// The module `import <dependency-name>` loads.
@@ -305,6 +307,7 @@ pub fn resolve(
     let mut r = Resolver {
         packages: vec![Package {
             root: root.clone(),
+            source: String::new(),
             manifest: project.map(|p| p.root.join(FILE_NAME)),
             lib: project.and_then(|p| p.lib.clone()),
             link: project.map(|p| p.link.clone()).unwrap_or_default(),
@@ -353,7 +356,14 @@ impl Resolver {
                     let link = sub.as_ref().map(|p| p.link.clone()).unwrap_or_default();
                     let c = sub.as_ref().map(|p| p.c.clone()).unwrap_or_default();
                     let manifest = sub.as_ref().map(|_| dir.join(FILE_NAME));
-                    self.packages.push(Package { root: dir.clone(), manifest, lib, link, c, deps: HashMap::new() });
+                    let source = match &dep.source {
+                        Source::Path(_) => format!("path {}", dir.display()),
+                        Source::Git { url, spec } => {
+                            let commit = dir.file_name().map_or(String::new(), |n| n.to_string_lossy().chars().take(7).collect());
+                            format!("git {url} @ {} ({commit})", spec.describe())
+                        }
+                    };
+                    self.packages.push(Package { root: dir.clone(), source, manifest, lib, link, c, deps: HashMap::new() });
                     self.by_root.insert(dir, idx);
                     if let Some(sub) = sub {
                         self.add_deps(idx, &sub.deps)?;
@@ -431,6 +441,24 @@ fn sanitize(s: &str) -> String {
     s.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect()
 }
 
+/// Forget the pinned commits of these dependencies in the lock file, so the next resolve fetches
+/// them again.  Returns how many pins were dropped.
+pub fn unlock(deps: &[Dependency], lock_path: &Path) -> Result<usize> {
+    let mut lock = Lock::read(lock_path);
+    let mut dropped = 0;
+    for d in deps {
+        if let Source::Git { url, spec } = &d.source
+            && lock.remove(&format!("{url}#{}", spec.describe()))
+        {
+            dropped += 1;
+        }
+    }
+    if dropped > 0 {
+        lock.write(lock_path)?;
+    }
+    Ok(dropped)
+}
+
 // ── lock file ───────────────────────────────────────────────────────
 
 #[derive(Default)]
@@ -453,6 +481,12 @@ impl Lock {
 
     fn get(&self, key: &str) -> Option<&str> {
         self.entries.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+    }
+
+    fn remove(&mut self, key: &str) -> bool {
+        let before = self.entries.len();
+        self.entries.retain(|(k, _)| k != key);
+        self.entries.len() != before
     }
 
     fn set(&mut self, key: String, commit: String) {
