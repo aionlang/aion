@@ -69,7 +69,7 @@ From loosest to tightest binding:
 | Operators          | Operands                                              |
 |--------------------|-------------------------------------------------------|
 | `c ? a : b`        | Bool condition; the value of `a` or of `b`            |
-| `a..b`  `a..=b`    | Int ranges, only in `for` and after `in`              |
+| `a..b`  `a..=b`    | Int ranges (see [Ranges](#ranges)); `step` and `downTo` follow them |
 | `\|\|`             | Bool                                                  |
 | `&&`               | Bool                                                  |
 | `==` `!=`          | numbers, Bool, String (by value), objects (by identity)|
@@ -154,6 +154,34 @@ println(i, total)
 
 `a..b` excludes `b`; `a..=b` includes it.  The loop variable is fresh on every
 iteration.
+
+### Ranges
+
+A range is a value too: `1..5` (without 5), `1..=5`, `0..20 step 5`, `10 downTo 1`.  It can be
+tested with `in`, looped over, and used like a list of its numbers.  `for i in a..b` itself is a
+plain counting loop and builds nothing.
+
+```aion
+r := 1..=5
+println(r, r.size(), 3 in r, 9 in r)                 // [1, 2, 3, 4, 5] 5 true false
+println((1..=10).map { it * it })                    // [1, 4, 9, 16, 25, 36, 49, 64, 81, 100]
+println((1..=100).sum(), (1..=5).reversed())         // 5050 [5, 4, 3, 2, 1]
+
+for i in 0..=20 step 5 { print(i, "") }              // 0 5 10 15 20
+println()
+for i in 10 downTo 0 step 4 { print(i, "") }         // 10 6 2
+println()
+
+names := ["ann", "bob", "cy", "di", "ed"]
+println((0..names.size() step 2).map { names[it] })  // [ann, cy, ed]
+fn describe(r: Range) = "${r.size()} numbers from ${r.first()} to ${r.last()}"
+println(describe(5..10))                             // 5 numbers from 5 to 9
+```
+
+A `Range` has `size() isEmpty() get first() last() contains step reversed toList sum` and
+`forEach map filter fold any all count join`.  Only `Int` ranges are values; a `Char` range such as
+`'a'..='e'` can still be looped over.  `step` and `downTo` are words between two expressions, not
+keywords: `step` and `downTo` stay usable as names.
 
 ## Functions
 
@@ -334,6 +362,32 @@ println(c.show())                            // hits=1
   it may be null (see [Nullability](#nullability)); a plain `Type` is still not
   checked against being unset.
 * A type can extend an `open` type; see [Inheritance](#inheritance).
+
+### Data types
+
+`data type` writes the comparing and copying for you.  Its instances are equal when all their
+parameters are, hash the same (so they work as `Map` keys and `Set` members), can be copied with
+changes, and can be taken apart like a [tuple](#tuples-and-destructuring):
+
+```aion
+data type Point(x: Int, y: Int)
+
+a := Point(2, 3)
+println(a == Point(2, 3), a != Point(3, 2))        // true true: by value, not by identity
+moved := a.copy(x: 10)                              // a copy with some parts changed
+println(moved, a)                                   // Point(x=10, y=3) Point(x=2, y=3)
+x, y := moved
+println(x, y)                                       // 10 3
+
+visited := Set<Point>()
+for p in [Point(0, 0), Point(1, 0), Point(0, 0)] { visited.add(p) }
+println(visited.size())                             // 2
+```
+
+`equals(other)`, `hashCode()`, `copy(…)` (every parameter defaults to the current value) and
+`component1()`, `component2()`, … come from the primary parameters; a method of the same name that
+you write yourself is kept.  A data type cannot be `open` or extend another type.  Fields hold
+what they hold: a `List` field is compared by identity, a nested data type by value.
 
 ## Operators on your own types
 
@@ -710,8 +764,33 @@ println(describe("x"), describe(null))
 |----------------------|----------------------------------------------------------------------|
 | `x == null`, `x != null` | test for null; `x == 5` also works (equal if both are null, or both present and equal) |
 | `x!!`                | the value; `unexpected null value` panic if it is null                |
-| `x ?: y`             | `x` unless it is null, then `y`; a `y` that doesn't return, such as `panic(...)`, is fine |
+| `x ?: y`             | `x` unless it is null, then `y`; a `y` that leaves, such as `panic(...)`, `return v`, `break` or `continue`, is fine |
 | `x?.f`, `x?.f(…)`    | `null` if `x` is null, otherwise the (optional) result; a chain stops at the first null |
+
+**Leaving early.**  `return`, `break` and `continue` are expressions, so they can follow `?:`
+to leave when a value is missing, and they can be a branch of an `if` or `? :`:
+
+```aion
+fn priceWithTax(prices: Map<String, Int>, name: String) -> Int {
+    price := prices.getOrNull(name) ?: return -1       // no such item: leave right here
+    return price + price / 5
+}
+fn total(prices: Map<String, Int>, names: List<String>) -> Int {
+    sum := 0
+    for name in names {
+        sum += prices.getOrNull(name) ?: break          // stop at the first unknown name
+    }
+    return sum
+}
+fn describe(n: Int) -> String {
+    sign := n > 0 ? "positive" : n < 0 ? "negative" : return "zero"
+    return "$sign number"
+}
+prices := {"pen": 150, "book": 1200}
+println(priceWithTax(prices, "book"), priceWithTax(prices, "sofa"))   // 1440 -1
+println(total(prices, ["pen", "book", "sofa", "pen"]))                // 1350
+println(describe(4), describe(-4), describe(0))                       // positive number negative number zero
+```
 
 **Smart casts.**  Inside `if x != null { … }`, in the `else` of `if x == null`, in
 `a != null && a.ok`, and after an `if x == null { return … }` guard, an optional
@@ -1150,6 +1229,22 @@ top of a standard-library module adds `-lsqlite3` to the build.
 The program stops with exit code 1 and a message on stderr for: division by
 zero, using a null object or function, indexing outside an array or list, out of
 memory, and `panic(...)` — unless a [`try`](#cleanup-and-errors) catches it.
+
+The message is followed by where it happened: each function of your own code that was running,
+innermost first, with the line it was on.
+
+```text
+[aion] panic: insufficient funds
+    at Account.withdraw (bank.aion:7)
+    at process (bank.aion:15)
+    at <top level> (bank.aion:21)
+```
+
+A lambda is `<lambda>`, top-level statements are `<top level>`, and the standard library's own
+functions are left out (a bad index in `xs.get(i)` is reported at your line).  A very deep call chain
+shows its first twelve and last three calls.  Keeping the trace costs a little speed on programs
+that make very many small calls; `aion --no-trace file.aion` (or `aion build --no-trace`) leaves
+it out.
 
 ## Not (yet) in the language
 

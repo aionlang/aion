@@ -298,6 +298,11 @@ A precise, non-moving **mark-sweep** collector.
   compiler emits (`aion_roots`).  The collector walks both.  This is plain memory
   traffic, so it is correct at every optimisation level and needs no LLVM GC
   support.
+* **Stack traces.**  A function of the program's own code (not the standard library) also keeps a
+  record `{prev, info, line}` on the machine stack, linked into `aion_trace_top`; `info` names the
+  function and file, and the compiled code stores the current line before each statement.  A fatal
+  panic walks the chain and prints it.  `try` and the task switch save and restore the top, like the
+  shadow stack.  `--no-trace` compiles all of it out.
 * **When.**  Only inside an allocation, when the heap exceeds a threshold
   (initially 4 MiB, afterwards twice the live size).  Because everything live is
   rooted at that point, no safepoints are needed.

@@ -203,6 +203,7 @@ example of generic types.
 | `Map<K, V>` | `Map<K, V>()`, `{k: v}` | `size() isEmpty() get set containsKey contains getOr getOrNull remove clear keys values entries forEach toString`; `m[k]`, `m[k] = v`; loops over its `Entry`s |
 | `Entry<K, V>` | | `key`, `value`, `component1()`, `component2()` |
 | `Tuple2<A, B>` … `Tuple5` | `(a, b)`, type `(A, B)` | `first second third fourth fifth`, `componentN()`, value `equals` / `hashCode` ([tuples](language.md#tuples-and-destructuring)) |
+| `Range` | `1..5`, `1..=5`, `0..10 step 2`, `10 downTo 0` | `size() isEmpty() get first last contains step reversed toList sum forEach map filter fold any all count join`; loops and `in` work on it ([ranges](language.md#ranges)) |
 | `Set<T>` | `Set<T>()`, `setOf(list)` | `size() isEmpty() contains add remove clear toList toString` |
 
 `enumerate(xs)` is a list of `(index, element)` pairs: `for i, x in enumerate(xs)`.

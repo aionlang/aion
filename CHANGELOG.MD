@@ -106,6 +106,14 @@ migration notes at the end of this section.
   hashed by value), `a, b := pair`, `(a, (b, c)) := …`, `_`, `a, b = b, a` (also fields and elements),
   `for (k, v) in …` / `for k, v in …`, through `component1()`, `component2()`, … which tuples, `Entry`
   and `List` have. Parenthesised types group: `((Int) -> Int)?`. Library: `zip`, `enumerate`.
+- **Early exits as expressions.** `x ?: return -1`, `n.toIntOrNull() ?: break`, `c ? v : continue`;
+  a branch of an `if` / `when` / `? :` that always leaves no longer has to match the other's type.
+- **`data type`.** `data type Point(x: Int, y: Int)` compares and hashes by value (Map keys, Sets),
+  has `copy(y: 9)`, and takes apart with `a, b := p`.
+- **Ranges are values.** `r := 1..5`, `(1..10).map { … }`, `x in r`, `0..10 step 2`, `10 downTo 0`;
+  `for i in a..b` is still a plain loop.
+- **Stack traces.** A panic prints the functions and lines that led to it (your own code only; lambdas
+  as `<lambda>`); `--no-trace` leaves them out for a little more speed on call-heavy programs.
 - **Defaults, varargs, nested functions.** Default arguments can be any expression and use the
   parameters before them (`h: Int = w`, `into: List<Int> = []`), `vararg xs: Int` with `*xs` to
   spread a list into a call or a list literal (`[0, *xs]`), functions declared inside functions
