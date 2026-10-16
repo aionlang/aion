@@ -239,6 +239,10 @@ pub enum ExprKind {
     List(Vec<Expr>),
     /// `*xs` in a call or a list: the elements of a list, one by one.
     Spread(Box<Expr>),
+    /// `return v`, `break`, `continue` where a value is expected, as in `x ?: return -1`.
+    Return(Option<Box<Expr>>),
+    Break,
+    Continue,
     /// `{"a": 1, "b": 2}`
     Map(Vec<(Expr, Expr)>),
     Unary(UnOp, Box<Expr>),

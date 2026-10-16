@@ -131,6 +131,8 @@ fn walk_expr_kind<'a>(kind: &'a A, lambda: bool, f: &mut dyn FnMut(Assign<'a>)) 
         }
         A::List(items) => items.iter().for_each(|e| walk_expr(e, lambda, f)),
         A::Spread(inner) => walk_expr(inner, lambda, f),
+        A::Return(value) => value.iter().for_each(|v| walk_expr(v, lambda, f)),
+        A::Break | A::Continue => {}
         A::Map(entries) => {
             for (k, v) in entries {
                 walk_expr(k, lambda, f);

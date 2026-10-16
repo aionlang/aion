@@ -1230,6 +1230,24 @@ impl<'a> Parser<'a> {
                 return Self::tuple_expr(items, start.to(end));
             }
             Token::If => return self.if_expr(),
+            Token::Return => {
+                self.bump();
+                let ends = match self.peek() {
+                    None | Some(Token::RBrace | Token::RParen | Token::RBracket | Token::Semi | Token::Comma | Token::Colon) => true,
+                    _ => self.nl(),
+                };
+                let value = if ends { None } else { Some(Box::new(self.expr()?)) };
+                let end = value.as_ref().map_or(span, |v| v.span);
+                return Ok(Expr { kind: ExprKind::Return(value), span: span.to(end) });
+            }
+            Token::Break => {
+                self.bump();
+                ExprKind::Break
+            }
+            Token::Continue => {
+                self.bump();
+                ExprKind::Continue
+            }
             Token::Try => return self.try_expr(),
             Token::When => return self.when_expr(),
             Token::LBrace => return self.brace_expr(),
@@ -1805,6 +1823,18 @@ mod tests {
         let err = |src: &str| Parser::new(0, src, 0).and_then(|mut p| p.expr()).unwrap_err().message;
         assert!(err("\"\"\"never closed").contains("unterminated"));
         assert!(err("r\"\"\"never closed").contains("unterminated"));
+    }
+
+    #[test]
+    fn early_exits_are_expressions() {
+        let ExprKind::Elvis(_, rhs) = &parse_expr("a ?: return -1").kind else { panic!("expected ?:") };
+        assert!(matches!(&rhs.kind, ExprKind::Return(Some(_))));
+        let ExprKind::Elvis(_, rhs) = &parse_expr("a ?: break").kind else { panic!("expected ?:") };
+        assert!(matches!(rhs.kind, ExprKind::Break));
+        assert!(matches!(&parse_expr("c ? x : continue").kind, ExprKind::If { .. }));
+        // a bare `return` ends at the end of the line
+        let m = module("fn f(a: Int?) {\n    a ?: return\n    println(a)\n}");
+        assert_eq!(m.items.len(), 1);
     }
 
     #[test]

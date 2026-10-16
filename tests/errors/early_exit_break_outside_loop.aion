@@ -1,0 +1,5 @@
+// error: `break` outside of a loop
+fn f(n: Int?) -> Int {
+    v := n ?: break
+    return v
+}

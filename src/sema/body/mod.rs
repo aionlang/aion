@@ -300,6 +300,22 @@ fn always_returns(ck: &Checker, stmts: &[hir::Stmt]) -> bool {
     }
 }
 
+/// Does the expression always leave — by `return`, `break`, `continue` or `panic` — instead of producing a value?
+fn diverges(ck: &Checker, e: &hir::Expr) -> bool {
+    match &e.kind {
+        K::Cond { then, otherwise, .. } => diverges(ck, then) && diverges(ck, otherwise),
+        K::Block(stmts, tail) => {
+            let leaves = |s: &hir::Stmt| match s {
+                hir::Stmt::Return(_) | hir::Stmt::Break | hir::Stmt::Continue => true,
+                hir::Stmt::Expr(e) => diverges(ck, e),
+                _ => false,
+            };
+            stmts.iter().any(leaves) || diverges(ck, tail)
+        }
+        _ => is_panic(ck, e),
+    }
+}
+
 fn expr_returns(ck: &Checker, e: &hir::Expr) -> bool {
     match &e.kind {
         K::Cond { then, otherwise, .. } => expr_returns(ck, then) && expr_returns(ck, otherwise),
@@ -913,14 +929,7 @@ impl<'c, 'a> Cx<'c, 'a> {
 
             StmtKind::For { var, iter, body } => self.for_loop(var, iter, body, out)?,
 
-            StmtKind::Break | StmtKind::Continue => {
-                if self.loops == 0 {
-                    let word = if matches!(s.kind, StmtKind::Break) { "break" } else { "continue" };
-                    return Err(Diagnostic::new(format!("`{word}` outside of a loop"), s.span));
-                }
-                self.leave_loop_body(out)?;
-                out.push(if matches!(s.kind, StmtKind::Break) { hir::Stmt::Break } else { hir::Stmt::Continue });
-            }
+            StmtKind::Break | StmtKind::Continue => self.jump_stmt(matches!(s.kind, StmtKind::Break), s.span, out)?,
 
             StmtKind::Defer(body) => {
                 let unit_fn = self.ck.t.intern_fn(Vec::new(), Ty::Void);
@@ -935,37 +944,50 @@ impl<'c, 'a> Cx<'c, 'a> {
                 out.push(hir::Stmt::Expr(push));
             }
 
-            StmtKind::Return(_) if self.in_try => {
-                return Err(Diagnostic::new("`return` is not allowed inside `try` or `catch`", s.span)
-                    .hint("set a variable inside, and return after the `try`; or make the `try` the last expression"));
-            }
-
-            StmtKind::Return(value) => {
-                let value = match (value, self.in_ctor, self.ret) {
-                    (None, true, _) => self.this_expr(),
-                    (Some(e), true, _) => {
-                        return Err(Diagnostic::new("a constructor cannot return a value", e.span));
-                    }
-                    (_, _, None) => {
-                        return Err(Diagnostic::new("`return` needs the function to declare its return type", s.span)
-                            .hint("write `-> Type` on the function, or drop `return` and use `= expr`"));
-                    }
-                    (None, _, Some(Ty::Void)) => None,
-                    (None, _, Some(ret)) => {
-                        return Err(Diagnostic::new(format!("expected a {} to return", self.name(ret)), s.span));
-                    }
-                    (Some(e), _, Some(Ty::Void)) => {
-                        return Err(Diagnostic::new("this function does not return a value", e.span)
-                            .hint("add `-> Type` to the signature"));
-                    }
-                    (Some(e), _, Some(ret)) => {
-                        let v = self.value_expected(e, Some(ret))?;
-                        Some(self.coerce(v, ret, e.span)?)
-                    }
-                };
-                self.emit_return(value, out)?;
-            }
+            StmtKind::Return(value) => self.return_stmt(value.as_ref(), s.span, out)?,
         }
+        Ok(())
+    }
+
+    /// `return`, as a statement or (`x ?: return -1`) inside an expression.
+    fn return_stmt(&mut self, value: Option<&ast::Expr>, span: Span, out: &mut Vec<hir::Stmt>) -> Result<()> {
+        if self.in_try {
+            return Err(Diagnostic::new("`return` is not allowed inside `try` or `catch`", span)
+                .hint("set a variable inside, and return after the `try`; or make the `try` the last expression"));
+        }
+        let value = match (value, self.in_ctor, self.ret) {
+            (None, true, _) => self.this_expr(),
+            (Some(e), true, _) => {
+                return Err(Diagnostic::new("a constructor cannot return a value", e.span));
+            }
+            (_, _, None) => {
+                return Err(Diagnostic::new("`return` needs the function to declare its return type", span)
+                    .hint("write `-> Type` on the function, or drop `return` and use `= expr`"));
+            }
+            (None, _, Some(Ty::Void)) => None,
+            (None, _, Some(ret)) => {
+                return Err(Diagnostic::new(format!("expected a {} to return", self.name(ret)), span));
+            }
+            (Some(e), _, Some(Ty::Void)) => {
+                return Err(Diagnostic::new("this function does not return a value", e.span)
+                    .hint("add `-> Type` to the signature"));
+            }
+            (Some(e), _, Some(ret)) => {
+                let v = self.value_expected(e, Some(ret))?;
+                Some(self.coerce(v, ret, e.span)?)
+            }
+        };
+        self.emit_return(value, out)
+    }
+
+    /// `break` or `continue`, as a statement or inside an expression.
+    fn jump_stmt(&mut self, is_break: bool, span: Span, out: &mut Vec<hir::Stmt>) -> Result<()> {
+        if self.loops == 0 {
+            let word = if is_break { "break" } else { "continue" };
+            return Err(Diagnostic::new(format!("`{word}` outside of a loop"), span));
+        }
+        self.leave_loop_body(out)?;
+        out.push(if is_break { hir::Stmt::Break } else { hir::Stmt::Continue });
         Ok(())
     }
 
@@ -2229,6 +2251,15 @@ impl<'c, 'a> Cx<'c, 'a> {
                 return Err(Diagnostic::new("`*` spreads a list into a call or a list literal", e.span)
                     .hint("e.g. `f(*xs)` or `[0, *xs]`, where `f` takes a `vararg`"));
             }
+            // `x ?: return -1`: leaves the function (or loop) instead of producing a value
+            A::Return(_) | A::Break | A::Continue => {
+                let mut out = Vec::new();
+                match &e.kind {
+                    A::Return(value) => self.return_stmt(value.as_deref(), e.span, &mut out)?,
+                    other => self.jump_stmt(matches!(other, A::Break), e.span, &mut out)?,
+                }
+                mk(K::Block(out, Box::new(unit())), Ty::Void)
+            }
 
             A::Range { .. } => {
                 return Err(Diagnostic::new("a range can only be used in a `for` loop or after `in`", e.span));
@@ -2300,6 +2331,16 @@ impl<'c, 'a> Cx<'c, 'a> {
         if otherwise.is_none() && then.ty != Ty::Void {
             return Err(Diagnostic::new("an `if` that produces a value needs an `else`", span)
                 .hint("for `when`, add an `else ->` branch"));
+        }
+        // A branch that always leaves (`return`, `break`, `panic(…)`) has no type of its own.
+        let (then_leaves, other_leaves) = (diverges(self.ck, &then), diverges(self.ck, &other));
+        if then_leaves != other_leaves {
+            let (leaving, staying) = if then_leaves { (&mut then, &other) } else { (&mut other, &then) };
+            if staying.ty != Ty::Void {
+                let ty = staying.ty;
+                let gone = replace(leaving, unit());
+                *leaving = mk(K::Block(vec![hir::Stmt::Expr(gone)], Box::new(default_expr(ty))), ty);
+            }
         }
         let Some(ty) = self.join(then.ty, other.ty) else {
             return Err(Diagnostic::new(

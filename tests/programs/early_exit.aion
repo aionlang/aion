@@ -1,0 +1,67 @@
+// `return`, `break` and `continue` are expressions too: `x ?: return -1` leaves when x is null, and
+// either branch of `if` / `? :` may leave instead of producing a value.
+fn find(xs: List<Int>) -> Int {
+    first := xs.firstOrNull() ?: return -1
+    return first * 10
+}
+println(find([]), find([4]))
+
+fn f(a: Bool) -> Int {
+    x := if a { 1 } else { return 5 }
+    return x + 1
+}
+println(f(true), f(false))
+
+fn g(a: Bool) -> Int {
+    x := if a { 1 } else { panic("no") }
+    return x
+}
+println(g(true))
+
+fn h(xs: List<Int>) -> Int {
+    total := 0
+    for x in xs {
+        v := x > 0 ? x : continue
+        total += v
+    }
+    return total
+}
+println(h([1, -1, 2]))
+
+fn firstNegative(xs: List<Int>) -> String {
+    for x in xs {
+        n := x < 0 ? x : continue
+        return "found $n"
+    }
+    return "none"
+}
+println(firstNegative([1, 2, -3]), firstNegative([1]))
+
+fn parse(items: List<String>) -> Int {
+    sum := 0
+    for s in items {
+        n := s.toIntOrNull() ?: break
+        sum += n
+    }
+    return sum
+}
+println(parse(["1", "2", "x", "4"]))
+
+fn describe(n: Int?) -> String {
+    value := n ?: return "nothing"
+    return when {
+        value > 0 -> "positive"
+        value < 0 -> "negative"
+        else -> "zero"
+    }
+}
+println(describe(null), describe(5), describe(-2))
+
+fn deferred(n: Int?) -> Int {
+    defer println("cleanup")
+    v := n ?: return 7
+    return v
+}
+a := deferred(null)
+b := deferred(3)
+println(a, b)
