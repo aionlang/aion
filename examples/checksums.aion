@@ -1,0 +1,79 @@
+// Digests, encodings and compression: hash some text, encode it for transport, compress it, and check that it all
+// comes back unchanged.  Shows the hash, encoding and zlib modules and the Bytes type.
+// (Building this one needs the zlib development files: zlib1g-dev.)
+//
+//   aion examples/checksums.aion
+
+import encoding
+import hash
+import zlib
+
+message := "The quick brown fox jumps over the lazy dog"
+
+// Message digests: a fixed-size fingerprint of any data.
+println("md5     ", hash.md5(message))
+println("sha1    ", hash.sha1(message))
+println("sha256  ", hash.sha256(message))
+println("crc32   ", hash.crc32(message), "=", hash.crc32(message).toHex())
+println("changing one letter changes everything:", hash.sha256("The quick brown fox jumps over the lazy cog").substring(0, 16), "vs", hash.sha256(message).substring(0, 16))
+
+// HMAC: a digest that needs a secret key, so only the key holders can produce it.
+key := "my secret key".toBytes()
+tag := hash.hmacSha256(key, message.toBytes()).toHex()
+println("hmac    ", tag)
+println("verifies with the key:", hash.hmacSha256(key, message.toBytes()).toHex() == tag, " with another key:", hash.hmacSha256("other".toBytes(), message.toBytes()).toHex() == tag)
+
+// Encodings turn bytes into text that survives e-mail, URLs and JSON.
+println()
+println("hex     ", message.toBytes().toHex().substring(0, 32), "...")
+println("base64  ", encoding.base64(message))
+println("url     ", encoding.urlEncode("name=Zoë & co/100%"), "->", encoding.urlDecode(encoding.urlEncode("name=Zoë & co/100%")))
+raw := bytesOf([0, 1, 2, 250, 251, 252, 253, 254, 255])
+println("binary  ", encoding.base64Bytes(raw), "(url-safe:", encoding.base64UrlBytes(raw) + ")", encoding.base64Decode(encoding.base64Bytes(raw)) == raw)
+
+// Compression: repetitive data shrinks a lot, random-looking data does not.
+println()
+repetitive := "to be or not to be, that is the question. ".repeat(50).toBytes()
+packed := zlib.gzip(repetitive)!!
+println("text:   ", repetitive.size(), "bytes ->", packed.size(), "compressed (${(packed.size() * 100 / repetitive.size())}%)")
+println("restored:", zlib.gunzip(packed) == repetitive, " sha256 matches:", hash.sha256Bytes(zlib.gunzip(packed)!!).toHex() == hash.sha256Bytes(repetitive).toHex())
+
+noise := Bytes(2000)
+state := 7
+for i in 0..noise.size() {
+    state = (state * 6364136223846793005 + 1442695040888963407)
+    noise[i] = state.ushr(33).and(255)
+}
+println("noise:  ", noise.size(), "bytes ->", zlib.gzip(noise)!!.size(), "compressed")
+
+// Damaged data is detected.
+broken := packed.slice(0, packed.size() - 4)
+println("truncated archive:", zlib.gunzip(broken), "-", zlib.lastError())
+
+// Small tools built from these: a fingerprint for a "file" and a short unique id.
+fn fingerprint(content: String) -> String = hash.sha256(content).substring(0, 12)
+println()
+println("fingerprints:", fingerprint("version 1"), fingerprint("version 2"), fingerprint("version 1"))
+id := encoding.uuid()
+println("uuid looks right:", id.length() == 36, id[14] == '4', id.split("-").map { it.length() }.join(","))
+
+// > md5      9e107d9d372bb6826bd81d3542a419d6
+// > sha1     2fd4e1c67a2d28fced849ee1bb76e7391b93eb12
+// > sha256   d7a8fbb307d7809469ca9abcb0082e4f8d5651e46d3cdb762d02d0bf37c9e592
+// > crc32    1095738169 = 414fa339
+// > changing one letter changes everything: e4c4d8f3bf76b692 vs d7a8fbb307d78094
+// > hmac     8a16bf337634b4198cee3be21c04cdd2160eb9c424c938a06e7d94232e12269b
+// > verifies with the key: true  with another key: false
+// >
+// > hex      54686520717569636b2062726f776e20 ...
+// > base64   VGhlIHF1aWNrIGJyb3duIGZveCBqdW1wcyBvdmVyIHRoZSBsYXp5IGRvZw==
+// > url      name%3DZo%C3%AB%20%26%20co%2F100%25 -> name=Zoë & co/100%
+// > binary   AAEC+vv8/f7/ (url-safe: AAEC-vv8_f7_) true
+// >
+// > text:    2100 bytes -> 76 compressed (3%)
+// > restored: true  sha256 matches: true
+// > noise:   2000 bytes -> 2023 compressed
+// > truncated archive: null - the compressed data is cut short
+// >
+// > fingerprints: b19f8edae2ee f4761aa023c3 b19f8edae2ee
+// > uuid looks right: true true 8,4,4,4,12

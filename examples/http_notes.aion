@@ -1,0 +1,110 @@
+// A web service and its client in one program: a JSON "notes" API served by Aion's http module, and a client
+// that creates, lists, updates and deletes notes.  Both run as tasks in the same process, taking turns whenever
+// one of them waits for the network.
+//
+//   aion examples/http_notes.aion
+//
+// To run only the server, listen on a fixed port (`http.listen(8080, "", handle)`), delete the client part and
+// end the program with `waitAll()`; then try it with  curl http://localhost:8080/notes
+
+import http
+import json
+
+type Note(id: Int, text: String, done: Bool) {
+    fn toJson() -> json.Json = json.object().put("id", json.int(id)).put("text", json.string(text)).put("done", json.bool(done))
+}
+
+notes := Map<Int, Note>()
+nextId := 1
+
+fn reply(status: Int, body: json.Json) -> http.Response = http.jsonResponse(body, status)
+fn problem(status: Int, message: String) -> http.Response = reply(status, json.object().put("error", json.string(message)))
+
+// Routing: look at the method and path, and answer.
+fn handle(req: http.Request) -> http.Response {
+    if req.path == "/notes" && req.method == "GET" {
+        list := json.array()
+        for note in notes.values() { list.add(note.toJson()) }
+        return reply(200, list)
+    }
+    if req.path == "/notes" && req.method == "POST" {
+        body := req.json()
+        text := body?.get("text")?.asString()
+        if text == null { return problem(400, "send a JSON object with a \"text\" field") }
+        note := Note(nextId, text, false)
+        notes[nextId] = note
+        nextId += 1
+        return reply(201, note.toJson())
+    }
+    if req.path.startsWith("/notes/") {
+        id := req.path[7..].toIntOrNull()
+        note := if id == null { null } else { notes.getOrNull(id) }
+        if note == null { return problem(404, "no such note") }
+        if req.method == "GET" { return reply(200, note.toJson()) }
+        if req.method == "PUT" {
+            notes[note.id] = Note(note.id, note.text, req.json()?.getBool("done") ?: note.done)
+            return reply(200, notes[note.id].toJson())
+        }
+        if req.method == "DELETE" {
+            notes.remove(note.id)
+            return http.respond(204, Bytes(0), "text/plain")
+        }
+    }
+    return problem(404, "unknown route ${req.method} ${req.path}")
+}
+
+server := http.listen(0, "127.0.0.1", handle)!!
+base := "http://127.0.0.1:${server.port()}"
+println("serving the notes API")
+
+// ── The client ──────────────────────────────────────────────────
+
+fn show(label: String, r: http.Response?) {
+    if r == null {
+        println(label.padRight(22), "no answer:", http.lastError())
+    } else {
+        println(label.padRight(22), r.status, r.reason.padRight(11), r.text())
+    }
+}
+
+show("list (empty)", http.get(base + "/notes"))
+show("create", http.postJson(base + "/notes", json.object().put("text", json.string("buy milk"))))
+show("create", http.postJson(base + "/notes", json.object().put("text", json.string("learn Aion"))))
+show("create (invalid)", http.postJson(base + "/notes", json.object().put("title", json.string("oops"))))
+show("get 2", http.get(base + "/notes/2"))
+show("mark 2 done", http.putJson(base + "/notes/2", json.object().put("done", json.bool(true))))
+show("get 99", http.get(base + "/notes/99"))
+show("list", http.get(base + "/notes"))
+show("delete 1", http.delete(base + "/notes/1"))
+show("list", http.get(base + "/notes"))
+show("wrong route", http.get(base + "/nothing/here"))
+
+// Many clients at once: ten tasks each add a note.
+done := Channel<Int>(10)
+for i in 1..=10 {
+    launch {
+        r := http.postJson(base + "/notes", json.object().put("text", json.string("parallel note $i")))
+        done.send(r?.status ?: 0)
+    }
+}
+statuses := List<Int>()
+for i in 1..=10 { statuses.add(done.receive()!!) }
+println("ten parallel creates:", statuses.sorted().join(" "), "->", notes.size(), "notes stored")
+
+server.close()
+println("server closed; a request now fails:", http.get(base + "/notes") == null)
+
+// > serving the notes API
+// > list (empty)           200 OK          []
+// > create                 201 Created     {"id":1,"text":"buy milk","done":false}
+// > create                 201 Created     {"id":2,"text":"learn Aion","done":false}
+// > create (invalid)       400 Bad Request {"error":"send a JSON object with a \"text\" field"}
+// > get 2                  200 OK          {"id":2,"text":"learn Aion","done":false}
+// > mark 2 done            200 OK          {"id":2,"text":"learn Aion","done":true}
+// > get 99                 404 Not Found   {"error":"no such note"}
+// > list                   200 OK          [{"id":1,"text":"buy milk","done":false},{"id":2,"text":"learn Aion","done":true}]
+// > delete 1               204 No Content
+// > list                   200 OK          [{"id":2,"text":"learn Aion","done":true}]
+// > wrong route            404 Not Found   {"error":"unknown route GET /nothing/here"}
+// > ten parallel creates: 201 201 201 201 201 201 201 201 201 201 -> 11 notes stored
+// > server closed; a request now fails: true

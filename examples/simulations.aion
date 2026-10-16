@@ -1,0 +1,104 @@
+// Random numbers put to work: dice, shuffling a deck, estimating pi by throwing darts, and the birthday
+// paradox.  The generator is seeded, so every run prints the same numbers - remove `random.seed` for fresh ones.
+//
+//   aion examples/simulations.aion
+
+import math
+import random
+
+random.seed(2024)
+
+// Rolling two dice 6000 times: the totals follow a triangle, with 7 the most common.
+tally := Array(13, 0)
+for i in 0..6000 { tally[random.range(1, 6) + random.range(1, 6)] += 1 }
+println("two dice, 6000 rolls")
+for total in 2..=12 {
+    println("  ${total.toString().padLeft(2)} ${"#".repeat(tally[total] / 20)} ${tally[total]}")
+}
+
+// Shuffle a deck and deal a hand.
+suits := ["hearts", "spades"]
+ranks := ["A", "K", "Q", "J", "10"]
+deck := List<String>()
+for suit in suits {
+    for rank in ranks { deck.add("$rank of $suit") }
+}
+random.shuffle(deck)
+println()
+println("shuffled deck:", deck.take(4).join(", "), "...")
+println("a hand of three:", random.sample(deck, 3))
+println("a random card:", random.choice(deck))
+
+// Estimate pi: throw darts at a square; the share landing inside the quarter circle is pi / 4.
+darts := 200000
+inside := 0
+for i in 0..darts {
+    x := random.float()
+    y := random.float()
+    if x * x + y * y <= 1.0 { inside += 1 }
+}
+estimate := 4.0 * inside.toFloat() / darts.toFloat()
+println()
+println("pi is about", estimate.format(3), "(true value", math.pi.format(3) + ", off by", (estimate - math.pi).abs().format(4) + ")")
+
+// The birthday paradox: how likely is it that two people in a group share a birthday?
+fn sharedBirthday(people: Int) -> Bool {
+    seen := Set<Int>()
+    for i in 0..people {
+        if !seen.add(random.int(365)) { return true }
+    }
+    return false
+}
+println()
+for people in [10, 23, 40, 60] {
+    trials := 2000
+    hits := 0
+    for t in 0..trials { if sharedBirthday(people) { hits += 1 } }
+    println("  $people people: ${(hits * 100 / trials).toString().padLeft(3)}% chance of a shared birthday")
+}
+
+// A random walk: 1000 steps left or right; how far from the start?
+position := 0
+farthest := 0
+for step in 0..1000 {
+    position += if random.bool() { 1 } else { -1 }
+    farthest = farthest.max(position.abs())
+}
+println()
+println("random walk: ended at $position, strayed up to $farthest steps away")
+
+// The same seed gives the same sequence.
+random.seed(5)
+first := List<Int>()
+for i in 0..5 { first.add(random.int(100)) }
+random.seed(5)
+second := List<Int>()
+for i in 0..5 { second.add(random.int(100)) }
+println("same seed, same numbers:", first, first.join(",") == second.join(","))
+
+// > two dice, 6000 rolls
+// >    2 ######## 174
+// >    3 ################ 334
+// >    4 ###################### 441
+// >    5 ################################## 691
+// >    6 ########################################## 843
+// >    7 ################################################### 1020
+// >    8 ########################################## 856
+// >    9 ################################## 687
+// >   10 ###################### 443
+// >   11 ################# 340
+// >   12 ######## 171
+// >
+// > shuffled deck: Q of spades, K of spades, 10 of spades, Q of hearts ...
+// > a hand of three: [J of spades, 10 of hearts, 10 of spades]
+// > a random card: 10 of hearts
+// >
+// > pi is about 3.147 (true value 3.142, off by 0.0054)
+// >
+// >   10 people:  12% chance of a shared birthday
+// >   23 people:  49% chance of a shared birthday
+// >   40 people:  89% chance of a shared birthday
+// >   60 people:  99% chance of a shared birthday
+// >
+// > random walk: ended at -10, strayed up to 52 steps away
+// > same seed, same numbers: [85, 16, 62, 93, 93] true

@@ -1,0 +1,117 @@
+// A little library database in SQLite: create tables, insert with parameters, query with joins and
+// aggregates, update inside a transaction.  The database lives in memory, so nothing is left behind.
+// (Building this one needs the SQLite development files: libsqlite3-dev.)
+//
+//   aion examples/sqlite_library.aion
+
+import sqlite
+
+db := sqlite.open(":memory:")!!
+db.script("""
+    CREATE TABLE authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL, born INTEGER);
+    CREATE TABLE books (
+        id INTEGER PRIMARY KEY,
+        title TEXT NOT NULL,
+        author_id INTEGER REFERENCES authors(id),
+        year INTEGER,
+        rating REAL,
+        copies INTEGER DEFAULT 1
+    );
+""")
+
+// Insert with `?` parameters: never build SQL by pasting values into the text.
+fn addAuthor(name: String, born: Int) -> Int {
+    db.exec("INSERT INTO authors (name, born) VALUES (?, ?)", [sqlite.text(name), sqlite.int(born)])
+    return db.lastInsertId()
+}
+fn addBook(title: String, author: Int, year: Int, rating: Float?, copies: Int) {
+    db.exec(
+        "INSERT INTO books (title, author_id, year, rating, copies) VALUES (?, ?, ?, ?, ?)",
+        [sqlite.text(title), sqlite.int(author), sqlite.int(year), if rating == null { sqlite.nil() } else { sqlite.float(rating) }, sqlite.int(copies)],
+    )
+}
+
+herbert := addAuthor("Frank Herbert", 1920)
+le_guin := addAuthor("Ursula K. Le Guin", 1929)
+asimov := addAuthor("Isaac Asimov", 1920)
+addAuthor("Nobody Yet", 2000)
+
+addBook("Dune", herbert, 1965, 4.5, 3)
+addBook("Dune Messiah", herbert, 1969, 3.9, 1)
+addBook("The Left Hand of Darkness", le_guin, 1969, 4.3, 2)
+addBook("A Wizard of Earthsea", le_guin, 1968, 4.1, 2)
+addBook("The Dispossessed", le_guin, 1974, null, 1)
+addBook("Foundation", asimov, 1951, 4.2, 4)
+addBook("I, Robot", asimov, 1950, 4.0, 2)
+
+println("books:", db.queryOne("SELECT count(*) AS n FROM books")!!.int("n"), " copies:", db.queryOne("SELECT sum(copies) AS n FROM books")!!.int("n"))
+
+// A join, ordered.
+println()
+for row in db.query("SELECT b.title, a.name, b.year FROM books b JOIN authors a ON a.id = b.author_id ORDER BY b.year, b.title")!! {
+    println("${row.int("year")}  ${row.text("title").padRight(28)} ${row.text("name")}")
+}
+
+// Aggregates per author, including an author without books (LEFT JOIN) and a rating that may be NULL.
+println()
+sql := """
+    SELECT a.name AS name, count(b.id) AS books, avg(b.rating) AS rating, max(b.year) AS latest
+    FROM authors a LEFT JOIN books b ON b.author_id = a.id
+    GROUP BY a.id ORDER BY books DESC, name
+"""
+for row in db.query(sql)!! {
+    rating := if row.isNull("rating") { "-" } else { row.float("rating").format(2) }
+    println("${row.text("name").padRight(18)} ${row.int("books")} books  avg rating $rating  latest ${row.value("latest")}")
+}
+
+// Parameters in a WHERE clause.
+println()
+found := db.query("SELECT title FROM books WHERE year BETWEEN ? AND ? AND copies >= ? ORDER BY title", [sqlite.int(1960), sqlite.int(1970), sqlite.int(2)])!!
+println("1960s books with 2+ copies:", found.map { it.text("title") }.join("; "))
+println("title search:", db.query("SELECT title FROM books WHERE title LIKE ?", [sqlite.text("%Dune%")])!!.map { it.text("title") })
+
+// Updates inside a transaction: all of them happen, or none.
+println()
+ok := db.transaction {
+    db.exec("UPDATE books SET copies = copies - 1 WHERE title = ?", [sqlite.text("Dune")])
+    db.exec("UPDATE books SET rating = rating + 0.1 WHERE rating IS NOT NULL AND year < 1960")
+    println("  changed", db.changes(), "rows in the last statement")
+}
+println("committed:", ok, "- Dune copies now", db.queryOne("SELECT copies FROM books WHERE title = 'Dune'")!!.int("copies"))
+
+failed := try {
+    db.transaction {
+        db.exec("DELETE FROM books")
+        panic("something went wrong half way")
+    }
+} catch e { false }
+println("failed transaction rolled back:", !failed, "- books still there:", db.queryOne("SELECT count(*) AS n FROM books")!!.int("n"))
+
+// SQL errors come back as a message.
+println(db.exec("INSERT INTO books (title) VALUES (NULL)"), "-", sqlite.lastError())
+println(db.query("SELECT * FROM missing_table"), "-", sqlite.lastError())
+db.close()
+
+// > books: 7  copies: 15
+// >
+// > 1950  I, Robot                     Isaac Asimov
+// > 1951  Foundation                   Isaac Asimov
+// > 1965  Dune                         Frank Herbert
+// > 1968  A Wizard of Earthsea         Ursula K. Le Guin
+// > 1969  Dune Messiah                 Frank Herbert
+// > 1969  The Left Hand of Darkness    Ursula K. Le Guin
+// > 1974  The Dispossessed             Ursula K. Le Guin
+// >
+// > Ursula K. Le Guin  3 books  avg rating 4.20  latest 1974
+// > Frank Herbert      2 books  avg rating 4.20  latest 1969
+// > Isaac Asimov       2 books  avg rating 4.10  latest 1951
+// > Nobody Yet         0 books  avg rating -  latest NULL
+// >
+// > 1960s books with 2+ copies: A Wizard of Earthsea; Dune; The Left Hand of Darkness
+// > title search: [Dune, Dune Messiah]
+// >
+// >   changed 2 rows in the last statement
+// > committed: true - Dune copies now 2
+// > failed transaction rolled back: true - books still there: 7
+// > false - NOT NULL constraint failed: books.title
+// > null - no such table: missing_table

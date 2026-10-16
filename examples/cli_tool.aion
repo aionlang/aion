@@ -1,0 +1,44 @@
+// A command-line tool with real option parsing: flags, options with values and defaults, a positional
+// argument, repeatable options, and generated --help.  Arguments go after the file name (put `--` before
+// anything that looks like an option, so that aion itself leaves it alone):
+//
+//   aion examples/cli_tool.aion -- --help
+//   aion examples/cli_tool.aion -- -n 3 --shout --greeting=Hi Ann Bob
+//   aion examples/cli_tool.aion Ann                 (a missing argument prints the usage and exits with 2)
+//
+// The test suite runs it with these arguments:
+// args: --times 2 -s --greeting Howdy --tag a --tag b Ann Bob
+
+import cli
+
+p := cli.parser("greet", "Greet people, as loudly as you like.")
+p.flag("shout", "s", "print in capitals")
+p.flag("quiet", "q", "print only the names")
+p.option("greeting", "g", "the word to greet with", "Hello")
+p.option("times", "n", "repeat each greeting", "1")
+p.multi("tag", "t", "add a tag in brackets")
+p.positional("first", "the first person to greet")
+p.rest("others", "more people")
+
+// parseOrExit prints the usage and quits on --help or a mistake; otherwise you get the parsed arguments.
+a := p.parseOrExit(args())
+
+people := [a.get("first")]
+people.addAll(a.rest())
+times := a.getInt("times", 1)
+tags := a.all("tag")
+
+for person in people {
+    for i in 0..times {
+        line := if a.flag("quiet") { person } else { "${a.get("greeting")}, $person" }
+        if !tags.isEmpty() { line += " [" + tags.join("][") + "]" }
+        println(if a.flag("shout") { line.upper() + "!" } else { line })
+    }
+}
+println("(${people.size() * times} greetings; times given explicitly: ${a.has("times")}, greeting given explicitly: ${a.has("greeting")})")
+
+// > HOWDY, ANN [A][B]!
+// > HOWDY, ANN [A][B]!
+// > HOWDY, BOB [A][B]!
+// > HOWDY, BOB [A][B]!
+// > (4 greetings; times given explicitly: true, greeting given explicitly: true)

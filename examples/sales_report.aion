@@ -1,0 +1,133 @@
+// A data-processing script: parse CSV text, compute totals per region and product, rank the results, print a
+// formatted table and export the summary as JSON.  Shows the csv and json modules, Maps of Maps and formatting.
+//
+//   aion examples/sales_report.aion
+
+import csv
+import json
+
+data := """
+date,region,product,units,price
+2024-01-05,North,Widget,12,9.99
+2024-01-09,South,Gadget,3,24.50
+2024-01-12,North,Gadget,7,24.50
+2024-02-02,East,Widget,20,9.99
+2024-02-14,South,Widget,5,9.99
+2024-02-20,East,"Doohickey, large",2,129.00
+2024-03-03,North,Doohickey,1,89.00
+2024-03-08,West,Gadget,9,23.00
+2024-03-15,East,Gadget,4,24.50
+2024-03-30,North,Widget,30,8.99
+"""
+
+records := csv.parseRecords(data)!!
+println("read", records.size(), "sales")
+
+// Revenue of one record.
+fn revenue(r: Map<String, String>) -> Float = r["units"].toIntOr(0).toFloat() * (r["price"].toFloatOr(0.0))
+
+byRegion := Map<String, Float>()
+byProduct := Map<String, Float>()
+unitsByProduct := Map<String, Int>()
+byMonth := Map<String, Float>()
+total := 0.0
+for r in records {
+    amount := revenue(r)
+    total += amount
+    byRegion[r["region"]] = byRegion.getOr(r["region"], 0.0) + amount
+    byProduct[r["product"]] = byProduct.getOr(r["product"], 0.0) + amount
+    unitsByProduct[r["product"]] = unitsByProduct.getOr(r["product"], 0) + r["units"].toIntOr(0)
+    month := r["date"].substring(0, 7)
+    byMonth[month] = byMonth.getOr(month, 0.0) + amount
+}
+
+// Print a ranking with a bar chart.
+fn ranking(title: String, totals: Map<String, Float>) {
+    println()
+    println(title)
+    entries := totals.entries().sortedBy { -it.value }
+    best := entries.first().value
+    for e in entries {
+        bar := "#".repeat((e.value / best * 30.0).round())
+        println("  ${e.key.padRight(18)} ${e.value.format(2).padLeft(9)}  $bar")
+    }
+}
+ranking("revenue by region", byRegion)
+ranking("revenue by product", byProduct)
+println()
+println("revenue by month")
+for month in byMonth.keys().sorted() { println("  $month ${byMonth[month].format(2).padLeft(9)}") }
+println()
+println("total revenue:", total.format(2), " average sale:", (total / records.size().toFloat()).format(2))
+
+best := records.sortedBy { revenue(it) }.last()
+println("biggest sale:", best["date"], best["product"], "to", best["region"], "-", revenue(best).format(2))
+
+// Export the summary as JSON.
+summary := json.object()
+summary["total"] = json.number(total.roundTo(2))
+regions := json.object()
+for region in byRegion.keys().sorted() { regions[region] = json.number(byRegion[region].roundTo(2)) }
+summary["regions"] = regions
+products := json.array()
+for product in unitsByProduct.keys().sorted() {
+    products.add(json.object().put("name", json.string(product)).put("units", json.int(unitsByProduct[product])))
+}
+summary["products"] = products
+println()
+println(summary.pretty())
+
+// ... and read it back.
+again := json.parse(summary.compact())!!
+println("round trip:", again.get("regions")?.getFloat("East"), again.get("products")?.at(0)?.getString("name"), again.get("products")?.size())
+
+// > read 10 sales
+// >
+// > revenue by region
+// >   North                 650.08  ##############################
+// >   East                  555.80  ##########################
+// >   West                  207.00  ##########
+// >   South                 123.45  ######
+// >
+// > revenue by product
+// >   Widget                639.33  ##############################
+// >   Gadget                550.00  ##########################
+// >   Doohickey, large      258.00  ############
+// >   Doohickey              89.00  ####
+// >
+// > revenue by month
+// >   2024-01    364.88
+// >   2024-02    507.75
+// >   2024-03    663.70
+// >
+// > total revenue: 1536.33  average sale: 153.63
+// > biggest sale: 2024-03-30 Widget to North - 269.70
+// >
+// > {
+// >   "total": 1536.33,
+// >   "regions": {
+// >     "East": 555.8,
+// >     "North": 650.08,
+// >     "South": 123.45,
+// >     "West": 207
+// >   },
+// >   "products": [
+// >     {
+// >       "name": "Doohickey",
+// >       "units": 1
+// >     },
+// >     {
+// >       "name": "Doohickey, large",
+// >       "units": 2
+// >     },
+// >     {
+// >       "name": "Gadget",
+// >       "units": 23
+// >     },
+// >     {
+// >       "name": "Widget",
+// >       "units": 67
+// >     }
+// >   ]
+// > }
+// > round trip: 555.8 Doohickey 4

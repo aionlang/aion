@@ -1,0 +1,79 @@
+// A guessing game that reads from standard input: the computer picks a number from 1 to 100 and answers
+// "higher" or "lower" until you find it.  Shows readLine() (null at the end of the input), parsing input safely,
+// the random module, and args().
+//
+//   aion examples/guess_number.aion           play (the secret is different every time)
+//   aion examples/guess_number.aion 7         play with a fixed seed
+//   printf '50\n25\n' | aion examples/guess_number.aion 7      or feed the guesses from a pipe
+//
+// The test suite plays one game with seed 7 and these guesses:
+// args: 7
+// stdin: 50
+// stdin: abc
+// stdin: 0
+// stdin: 75
+// stdin: 90
+// stdin: 97
+// stdin: 95
+
+import random
+
+seed := args().firstOrNull()?.toIntOrNull()
+if seed != null { random.seed(seed) }
+secret := random.range(1, 100)
+
+println("I am thinking of a number from 1 to 100.")
+tries := 0
+won := false
+while !won {
+    print("your guess? ")
+    line := readLine()
+    if line == null {
+        println()
+        println("No more input - the number was $secret.")
+        break
+    }
+    guess := line.trim().toIntOrNull()
+    if guess == null {
+        println("'${line.trim()}' is not a number")
+    } else if guess < 1 || guess > 100 {
+        println("$guess is outside 1..100")
+    } else {
+        tries += 1
+        if guess < secret {
+            println("higher")
+        } else if guess > secret {
+            println("lower")
+        } else {
+            println("correct, in $tries ${if tries == 1 { "try" } else { "tries" }}!")
+            won = true
+        }
+    }
+}
+
+// A computer player does better: binary search always needs at most 7 guesses.
+fn solve(target: Int) -> Int {
+    low := 1
+    high := 100
+    guesses := 0
+    while true {
+        middle := (low + high) / 2
+        guesses += 1
+        if middle == target { return guesses }
+        if middle < target { low = middle + 1 } else { high = middle - 1 }
+    }
+    return guesses
+}
+worst := 0
+for n in 1..=100 { worst = worst.max(solve(n)) }
+println("binary search needs at most $worst guesses for any number from 1 to 100")
+
+// > I am thinking of a number from 1 to 100.
+// > your guess? higher
+// > your guess? 'abc' is not a number
+// > your guess? 0 is outside 1..100
+// > your guess? higher
+// > your guess? higher
+// > your guess? lower
+// > your guess? correct, in 5 tries!
+// > binary search needs at most 7 guesses for any number from 1 to 100

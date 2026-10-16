@@ -1,0 +1,117 @@
+// Mining a log file with regular expressions: parse each line into fields, count by level, find the slowest
+// requests, group errors, and filter by time.  Shows the regex module with named groups, and Maps of lists.
+//
+//   aion examples/log_analyzer.aion
+
+import regex
+import time
+
+log := """
+2024-03-15 08:00:01 INFO  [web] GET /index.html 200 12ms
+2024-03-15 08:00:03 INFO  [web] GET /api/users 200 45ms
+2024-03-15 08:00:04 WARN  [db] slow query on users took 820ms
+2024-03-15 08:01:10 INFO  [web] POST /api/login 302 98ms
+2024-03-15 08:01:12 ERROR [web] GET /api/orders 500 1204ms
+2024-03-15 08:02:30 INFO  [web] GET /static/app.js 200 7ms
+2024-03-15 08:03:01 ERROR [db] connection refused: host=db1 port=5432
+2024-03-15 08:03:02 ERROR [web] GET /api/orders 500 30ms
+2024-03-15 09:15:44 INFO  [web] GET /index.html 304 3ms
+2024-03-15 09:16:00 WARN  [web] GET /api/users 429 2ms
+2024-03-15 09:17:31 ERROR [auth] invalid token for user=ann ip=10.0.0.7
+this line is not a log entry at all
+2024-03-15 09:18:02 INFO  [web] GET /api/users 200 51ms
+"""
+
+line := regex.regex(r"^(?<time>\d{4}-\d\d-\d\d \d\d:\d\d:\d\d) (?<level>[A-Z]+)\s+\[(?<module>\w+)\] (?<message>.*)$")
+request := regex.regex(r"^(?<method>GET|POST|PUT|DELETE) (?<path>\S+) (?<status>\d{3}) (?<ms>\d+)ms$")
+keyValue := regex.regex(r"(\w+)=(\S+)")
+
+type Entry(stamp: String, level: String, module: String, message: String)
+
+entries := List<Entry>()
+skipped := List<String>()
+for text in log.lines() {
+    m := line.find(text)
+    if m == null {
+        skipped.add(text)
+    } else {
+        entries.add(Entry(m.named("time")!!, m.named("level")!!, m.named("module")!!, m.named("message")!!))
+    }
+}
+println("parsed ${entries.size()} entries; skipped ${skipped.size()}: '${skipped.first()}'")
+
+// Count by level and by module.
+levels := Map<String, Int>()
+modules := Map<String, Int>()
+for e in entries {
+    levels[e.level] = levels.getOr(e.level, 0) + 1
+    modules[e.module] = modules.getOr(e.module, 0) + 1
+}
+for level in ["INFO", "WARN", "ERROR"] { println(level.padRight(6), "#".repeat(levels.getOr(level, 0)), levels.getOr(level, 0)) }
+println("by module:", modules.keys().sorted().map { "$it=${modules[it]}" }.join(" "))
+
+// Web requests: status classes and the slowest.
+type Hit(path: String, status: Int, ms: Int)
+hits := List<Hit>()
+for e in entries {
+    r := request.find(e.message)
+    if r != null { hits.add(Hit(r.named("path")!!, r.named("status")!!.toIntOr(0), r.named("ms")!!.toIntOr(0))) }
+}
+println()
+println("${hits.size()} web requests; average ${(hits.fold(0) { a, h -> a + h.ms }.toFloat() / hits.size().toFloat()).format(1)} ms")
+slowest := hits.sortedBy { -it.ms }.take(3)
+for h in slowest { println("  slowest: ${h.path.padRight(16)} ${h.ms.toString().padLeft(5)} ms  (${h.status})") }
+byClass := Map<String, Int>()
+for h in hits { byClass["${h.status / 100}xx"] = byClass.getOr("${h.status / 100}xx", 0) + 1 }
+println("status classes:", byClass.keys().sorted().map { "$it: ${byClass[it]}" }.join(", "))
+
+// Errors, grouped by what they say once numbers and addresses are blanked out.
+println()
+shapes := Map<String, List<String>>()
+digits := regex.regex(r"\d+")
+for e in entries {
+    if e.level == "ERROR" {
+        shape := digits.replaceAll(e.message, "N")
+        if !(shape in shapes) { shapes[shape] = List<String>() }
+        shapes[shape].add(e.stamp[11..])
+    }
+}
+for shape in shapes.keys() { println("${shapes[shape].size()}x $shape  at ${shapes[shape].join(", ")}") }
+
+// key=value pairs inside messages.
+println()
+for e in entries {
+    pairs := keyValue.findAll(e.message)
+    if !pairs.isEmpty() { println(e.module, "->", pairs.map { "${it.group(1)}:${it.group(2)}" }.join(" ")) }
+}
+
+// Time arithmetic on the timestamps.
+first := time.parse(entries.first().stamp)!!
+last := time.parse(entries.last().stamp)!!
+span := last.since(first) / time.minute
+println()
+println("the log spans $span minutes, from ${first.format("%H:%M")} to ${last.format("%H:%M")} on ${first.format("%A %d %B %Y")}")
+morning := entries.filter { it.stamp.substring(11, 13).toIntOr(0) < 9 }
+println("entries before 9am:", morning.size(), "- errors among them:", morning.count { it.level == "ERROR" })
+
+// > parsed 12 entries; skipped 1: 'this line is not a log entry at all'
+// > INFO   ###### 6
+// > WARN   ## 2
+// > ERROR  #### 4
+// > by module: auth=1 db=2 web=9
+// >
+// > 9 web requests; average 161.3 ms
+// >   slowest: /api/orders       1204 ms  (500)
+// >   slowest: /api/login          98 ms  (302)
+// >   slowest: /api/users          51 ms  (200)
+// > status classes: 2xx: 4, 3xx: 2, 4xx: 1, 5xx: 2
+// >
+// > 2x GET /api/orders N Nms  at 08:01:12, 08:03:02
+// > 1x connection refused: host=dbN port=N  at 08:03:01
+// > 1x invalid token for user=ann ip=N.N.N.N  at 09:17:31
+// >
+// > db -> host:db1 port:5432
+// > auth -> user:ann ip:10.0.0.7
+// >
+// > the log spans 78 minutes, from 08:00 to 09:18 on Friday 15 March 2024
+// > entries before 9am: 8 - errors among them: 3

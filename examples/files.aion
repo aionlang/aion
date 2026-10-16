@@ -1,0 +1,121 @@
+// Working with files and folders: create a temporary workspace, write and read text and binary files, list and
+// walk directories, move things around, and clean up.  Shows the fs and path modules and `defer`.
+//
+//   aion examples/files.aion
+
+import fs
+import path
+
+workspace := fs.makeTempDir("aion-files-")!!
+defer fs.removeAll(workspace)       // the whole workspace is deleted when the program ends
+println("created a temporary folder:", fs.isDir(workspace))
+
+// Write and read text.
+notes := path.join(workspace, "notes.txt")
+fs.writeText(notes, "first line\nsecond line\n")
+fs.appendText(notes, "third line\n")
+println("size:", fs.size(notes), "bytes | lines:", fs.readLines(notes))
+println("whole text has", fs.readText(notes)!!.length(), "characters | exists:", fs.exists(notes), "| is a file:", fs.isFile(notes))
+
+// Binary data.
+blob := path.join(workspace, "data.bin")
+fs.writeBytes(blob, bytesOf([0, 1, 2, 255, 254, 253]))
+println("binary round trip:", fs.readBytes(blob)!!.toHex(), "| size", fs.size(blob))
+
+// Missing files give null / false and an explanation.
+println("missing file:", fs.readText(path.join(workspace, "nope.txt")), "-", fs.lastError())
+println("reading a folder as a file:", fs.readText(workspace) == null)
+
+// Build a small tree.
+for dir in ["src", "src/util", "docs", "build/output"] { fs.mkdirs(path.join(workspace, dir)) }
+fs.writeText(path.join(workspace, "src/main.aion"), "println(\"hi\")\n")
+fs.writeText(path.join(workspace, "src/util/strings.aion"), "fn shout(s: String) = s.upper()\n")
+fs.writeText(path.join(workspace, "docs/readme.md"), "# Docs\n")
+fs.writeText(path.join(workspace, "build/output/app.log"), "ok\n")
+
+// Walk it recursively and print an indented tree.
+fn tree(dir: String, indent: String) {
+    for name in fs.listDir(dir) ?: [] {
+        full := path.join(dir, name)
+        if fs.isDir(full) {
+            println("$indent$name/")
+            tree(full, indent + "  ")
+        } else {
+            println("$indent$name (${fs.size(full)} bytes)")
+        }
+    }
+}
+println()
+tree(workspace, "  ")
+
+// Find files by extension anywhere below a folder.
+fn findAll(dir: String, extension: String) -> List<String> {
+    found := List<String>()
+    for name in fs.listDir(dir) ?: [] {
+        full := path.join(dir, name)
+        if fs.isDir(full) {
+            found.addAll(findAll(full, extension))
+        } else if path.extension(full) == extension {
+            found.add(full.substring(workspace.length() + 1, full.length()))
+        }
+    }
+    return found
+}
+println()
+println("*.aion files:", findAll(workspace, "aion"))
+
+// Copy, rename and remove.
+copy := path.join(workspace, "notes-copy.txt")
+fs.copy(notes, copy)
+moved := path.join(workspace, "docs/notes.txt")
+fs.rename(copy, moved)
+println("copied and moved:", fs.exists(copy), fs.exists(moved), "| same text:", fs.readText(moved) == fs.readText(notes))
+fs.remove(moved)
+println("after remove:", fs.exists(moved), "| removing a non-empty folder with remove():", fs.remove(path.join(workspace, "src")))
+fs.removeAll(path.join(workspace, "build"))
+println("after removeAll:", fs.listDir(workspace))
+
+// Taking paths apart.
+println()
+p := "/home/ann/projects/aion/report.final.pdf"
+println(path.basename(p), "|", path.dirname(p), "|", path.extension(p), "|", path.stem(p), "|", path.withExtension(p, "txt"))
+println(path.join("a/b", "../c"), "->", path.normalize(path.join("a/b", "../c")), "|", path.normalize("/x/./y//z/.."), "|", path.isAbsolute(p), path.isAbsolute("rel/path"))
+
+// Process a text file line by line: number the lines and count words.
+words := 0
+for line in fs.readLines(notes)!! { words += line.split(" ").size() }
+println()
+println("words in notes.txt:", words)
+for i in 0..3 { println("  ${(i + 1).toString().padLeft(2)}: ${fs.readLines(notes)!![i]}") }
+
+// > created a temporary folder: true
+// > size: 34 bytes | lines: [first line, second line, third line]
+// > whole text has 34 characters | exists: true | is a file: true
+// > binary round trip: 000102fffefd | size 6
+// > missing file: null - No such file or directory
+// > reading a folder as a file: true
+// >
+// >   build/
+// >     output/
+// >       app.log (3 bytes)
+// >   data.bin (6 bytes)
+// >   docs/
+// >     readme.md (7 bytes)
+// >   notes.txt (34 bytes)
+// >   src/
+// >     main.aion (14 bytes)
+// >     util/
+// >       strings.aion (32 bytes)
+// >
+// > *.aion files: [src/main.aion, src/util/strings.aion]
+// > copied and moved: false true | same text: true
+// > after remove: false | removing a non-empty folder with remove(): false
+// > after removeAll: [data.bin, docs, notes.txt, src]
+// >
+// > report.final.pdf | /home/ann/projects/aion | pdf | report.final | /home/ann/projects/aion/report.final.txt
+// > a/b/../c -> a/c | /x/y | true false
+// >
+// > words in notes.txt: 6
+// >    1: first line
+// >    2: second line
+// >    3: third line

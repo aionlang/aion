@@ -1,0 +1,158 @@
+// A small bank: accounts with a history, transfers that happen completely or not at all, interest, and a
+// statement.  Shows types and methods, error handling with `try`, and money kept as whole cents.
+//
+//   aion examples/bank.aion
+
+type Transaction(kind: String, amount: Int, balanceAfter: Int)
+
+// Money is kept in cents so there are no rounding surprises.
+fn money(cents: Int) -> String {
+    sign := if cents < 0 { "-" } else { "" }
+    absolute := cents.abs()
+    return "$sign$${absolute / 100}.${(absolute % 100).toString().padLeft(2, "0")}"
+}
+
+type Account(owner: String, balance: Int = 0) {
+    history: List<Transaction> = List<Transaction>()
+    frozen: Bool = false
+
+    fn deposit(amount: Int) {
+        if amount <= 0 { panic("a deposit must be positive, not ${money(amount)}") }
+        if frozen { panic("$owner's account is frozen") }
+        balance += amount
+        history.add(Transaction("deposit", amount, balance))
+    }
+
+    fn withdraw(amount: Int) {
+        if amount <= 0 { panic("a withdrawal must be positive, not ${money(amount)}") }
+        if amount > balance { panic("$owner cannot withdraw ${money(amount)}: only ${money(balance)} available") }
+        balance -= amount
+        history.add(Transaction("withdrawal", amount, balance))
+    }
+
+    // `permille` is tenths of a percent: 35 means 3.5%.
+    fn addInterest(permille: Int) {
+        interest := balance * permille / 1000
+        if interest > 0 {
+            balance += interest
+            history.add(Transaction("interest", interest, balance))
+        }
+    }
+
+    fn statement() {
+        println("statement for $owner")
+        for t in history {
+            println("  ${t.kind.padRight(11)} ${money(t.amount).padLeft(10)}   balance ${money(t.balanceAfter).padLeft(10)}")
+        }
+    }
+}
+
+type Bank {
+    accounts: Map<String, Account> = Map<String, Account>()
+    log: List<String> = List<String>()
+
+    fn open(owner: String, deposit: Int = 0) -> Account {
+        if owner in accounts { panic("$owner already has an account") }
+        account := Account(owner)
+        if deposit > 0 { account.deposit(deposit) }
+        accounts[owner] = account
+        return account
+    }
+
+    fn find(owner: String) -> Account {
+        account := accounts.getOrNull(owner)
+        if account == null { panic("there is no account for $owner") }
+        return account
+    }
+
+    // All or nothing: if any step fails, the sender's account goes back to how it was.
+    fn transfer(from: String, to: String, amount: Int) -> Bool {
+        source := find(from)
+        target := find(to)
+        balanceBefore := source.balance
+        historyBefore := source.history.size()
+        ok := try {
+            source.withdraw(amount)
+            target.deposit(amount)
+            true
+        } catch e {
+            source.balance = balanceBefore
+            while source.history.size() > historyBefore { source.history.pop() }
+            log.add("REFUSED ${money(amount)} $from -> $to: $e")
+            false
+        }
+        if ok { log.add("moved ${money(amount)} $from -> $to") }
+        return ok
+    }
+
+    fn total() -> Int {
+        sum := 0
+        for entry in accounts { sum += entry.value.balance }
+        return sum
+    }
+}
+
+bank := Bank()
+ann := bank.open("Ann", 100000)
+bob := bank.open("Bob", 2550)
+cy := bank.open("Cy")
+println("money in the bank:", money(bank.total()))
+
+println(bank.transfer("Ann", "Bob", 25000))        // fine
+println(bank.transfer("Bob", "Cy", 99999))         // Bob does not have that much
+println(bank.transfer("Ann", "Cy", 1))             // fine: one cent
+cy.frozen = true
+println(bank.transfer("Ann", "Cy", 5000))          // Cy is frozen, so Ann's withdrawal is undone
+println("money in the bank:", money(bank.total()), "(unchanged by transfers)")
+
+ann.addInterest(35)
+bob.addInterest(35)
+bob.deposit(1999)
+
+println()
+for line in bank.log { println(line) }
+
+println()
+ann.statement()
+bob.statement()
+cy.statement()
+
+println()
+println("unknown account:", try { bank.find("Zed"); "found" } catch e { "caught: $e" })
+println("duplicate:", try { bank.open("Ann"); "opened" } catch e { "caught: $e" })
+println("bad amount:", try { ann.deposit(-5); "deposited" } catch e { "caught: $e" })
+for name in bank.accounts.keys().sorted() {
+    println(name.padRight(4), money(bank.find(name).balance).padLeft(11))
+}
+
+// > money in the bank: $1025.50
+// > true
+// > false
+// > true
+// > false
+// > money in the bank: $1025.50 (unchanged by transfers)
+// >
+// > moved $250.00 Ann -> Bob
+// > REFUSED $999.99 Bob -> Cy: Bob cannot withdraw $999.99: only $275.50 available
+// > moved $0.01 Ann -> Cy
+// > REFUSED $50.00 Ann -> Cy: Cy's account is frozen
+// >
+// > statement for Ann
+// >   deposit       $1000.00   balance   $1000.00
+// >   withdrawal     $250.00   balance    $750.00
+// >   withdrawal       $0.01   balance    $749.99
+// >   interest        $26.24   balance    $776.23
+// > statement for Bob
+// >   deposit         $25.50   balance     $25.50
+// >   deposit        $250.00   balance    $275.50
+// >   interest         $9.64   balance    $285.14
+// >   deposit         $19.99   balance    $305.13
+// > statement for Cy
+// >   deposit          $0.01   balance      $0.01
+// >
+// > unknown account: caught: there is no account for Zed
+// > duplicate: caught: Ann already has an account
+// > bad amount: caught: a deposit must be positive, not -$0.05
+// > Ann      $776.23
+// > Bob      $305.13
+// > Cy         $0.01

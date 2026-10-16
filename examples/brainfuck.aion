@@ -1,0 +1,81 @@
+// A Brainfuck interpreter: eight commands, a tape of byte cells and a program counter - a complete little
+// virtual machine.  Shows Arrays, a stack for matching brackets, and a `when` dispatch loop.
+//
+//   aion examples/brainfuck.aion
+
+// Run `program` and return what it prints.  `input` supplies the bytes for `,`.
+fn run(program: String, input: String = "") -> String {
+    code := program.chars().filter { "+-<>[],.".contains(it.toString()) }
+    tape := Array(30000, 0)
+    pointer := 0
+    output := StringBuilder()
+    inputBytes := input.toBytes()
+    inputAt := 0
+
+    // Find the matching bracket for every [ and ] before running.
+    jump := Array(code.size(), 0)
+    open := List<Int>()
+    for i in 0..code.size() {
+        if code[i] == '[' {
+            open.add(i)
+        } else if code[i] == ']' {
+            if open.isEmpty() { panic("unmatched ] at position $i") }
+            start := open.pop()
+            jump[start] = i
+            jump[i] = start
+        }
+    }
+    if !open.isEmpty() { panic("unmatched [ at position ${open.last()}") }
+
+    pc := 0
+    steps := 0
+    while pc < code.size() {
+        when code[pc] {
+            '>' -> { pointer += 1 }
+            '<' -> { pointer -= 1 }
+            '+' -> { tape[pointer] = (tape[pointer] + 1) % 256 }
+            '-' -> { tape[pointer] = (tape[pointer] + 255) % 256 }
+            '.' -> { output.appendChar(tape[pointer].toChar()) }
+            ',' -> {
+                tape[pointer] = if inputAt < inputBytes.size() { inputBytes[inputAt] } else { 0 }
+                inputAt += 1
+            }
+            '[' -> { if tape[pointer] == 0 { pc = jump[pc] } }
+            ']' -> { if tape[pointer] != 0 { pc = jump[pc] } }
+        }
+        pc += 1
+        steps += 1
+        if pointer < 0 || pointer >= 30000 { panic("the pointer left the tape") }
+    }
+    return output.toString()
+}
+
+// The classic.
+hello := "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++."
+print(run(hello))
+
+// Print the digits 0..9: cell 1 holds the character code of '0' (6 * 8 = 48) and cell 2 counts ten rounds.
+println(run("++++++++[>++++++<-]>>++++++++++[<.+>-]"))
+
+// Copy the input to the output until it ends (a zero byte).
+echo := ",[.,]"
+println(run(echo, "echoing the input"))
+
+// Add two single digits read from input: "34" prints 7.
+add := ",>,<[->+<]>------------------------------------------------."
+println("3 + 4 =", run(add, "34"))
+
+// Multiply 6 * 7 = 42, shown as the character '*'.
+println("6 * 7 prints", run("++++++[>+++++++<-]>."))
+
+// Mistakes are caught before running.
+println(try { run("[[]") } catch e { "caught: $e" })
+println(try { run("]") } catch e { "caught: $e" })
+
+// > Hello World!
+// > 0123456789
+// > echoing the input
+// > 3 + 4 = 7
+// > 6 * 7 prints *
+// > caught: unmatched [ at position 0
+// > caught: unmatched ] at position 0

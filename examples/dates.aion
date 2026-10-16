@@ -1,0 +1,111 @@
+// Dates and times: build them, take them apart, format and parse them, and do calendar arithmetic.
+// Uses fixed dates (not "now") so the output is always the same.
+//
+//   aion examples/dates.aion
+
+import time
+
+moon := time.of(1969, 7, 20, 20, 17, 40)
+println(moon, "|", moon.iso(), "|", moon.millis, "ms since 1970")
+println(moon.year(), moon.month(), moon.day(), moon.hour(), moon.minute(), moon.second(), "|", moon.weekdayName(), moon.monthName(), "| day of year", moon.dayOfYear())
+
+// Formatting uses strftime patterns.
+d := time.of(2024, 3, 9, 7, 5, 3)
+for pattern in ["%Y-%m-%d", "%d/%m/%y", "%B %d, %Y", "%A", "%H:%M:%S", "%I:%M %p", "%j", "%a %b %e"] {
+    println("  ${pattern.padRight(10)} ${d.format(pattern)}")
+}
+
+// Arithmetic.
+println()
+start := time.of(2024, 1, 31)
+println("30 days after Jan 31:", start.plusDays(30).format("%b %d"), "| 1 month after:", start.plusMonths(1).format("%b %d"), "| 1 year before:", start.plusYears(-1).format("%Y-%m-%d"))
+leap := time.of(2024, 2, 28)
+println("2024 has a Feb 29:", leap.plusDays(1).day() == 29, "| 2023 does not:", time.of(2023, 2, 28).plusDays(1).month() == 3)
+println("noon plus 90 minutes:", time.of(2024, 5, 1, 12, 0).plusMinutes(90).format("%H:%M"), "| minus 13 hours:", time.of(2024, 5, 1, 12, 0).plusHours(-13).format("%d %H:%M"))
+
+// Differences are in milliseconds; the unit constants help.
+a := time.of(2024, 1, 1)
+b := time.of(2024, 12, 25, 18, 30)
+gap := b.since(a)
+println()
+println("Jan 1 to Dec 25:", gap / time.day, "days and", gap % time.day / time.hour, "hours,", gap / time.hour, "hours in all")
+println("a < b:", a.compareTo(b) < 0, " b > a:", b.compareTo(a) > 0, " same instant:", a == time.of(2024, 1, 1), a != b)
+
+// Parsing text into dates; bad input gives null.
+println()
+for text in ["2024-06-30 23:59:59", "1999-12-31 00:00:00", "tomorrow", "2024-13-01 00:00:00"] {
+    parsed := time.parse(text)
+    println(text.padRight(20), if parsed == null { "-> not a date" } else { "-> ${parsed.format("%A %d %B %Y")}" })
+}
+parsed := time.parse("24 Dec 2023 6:45", "%d %b %Y %H:%M")!!
+println("other layouts:", parsed.iso())
+
+// A calendar for one month.
+fn calendar(year: Int, month: Int) {
+    first := time.of(year, month, 1)
+    println(first.format("   %B %Y"))
+    println("Su Mo Tu We Th Fr Sa")
+    line := StringBuilder()
+    line.append("   ".repeat(first.weekday()))
+    day := 1
+    while time.of(year, month, day).month() == month {
+        line.append(day.toString().padLeft(2)).append(" ")
+        if time.of(year, month, day).weekday() == 6 {
+            println(line.toString().trimEnd())
+            line.clear()
+        }
+        day += 1
+    }
+    if line.length() > 0 { println(line.toString().trimEnd()) }
+}
+println()
+calendar(2024, 2)
+
+// Which of the next birthdays comes first?
+birthdays := Map<String, time.DateTime>()
+birthdays["ann"] = time.of(2024, 9, 14)
+birthdays["bob"] = time.of(2024, 4, 2)
+birthdays["cy"] = time.of(2024, 11, 30)
+today := time.of(2024, 5, 20)
+upcoming := birthdays.entries().filter { it.value.compareTo(today) > 0 }.sortedWith { x, y -> x.value.compareTo(y.value) }
+println()
+println("next birthdays after ${today.format("%d %b")}:", upcoming.map { "${it.key} in ${it.value.since(today) / time.day} days" }.join(", "))
+
+// Measuring a duration with the clock: the numbers vary, so just show the kind of result.
+elapsed := time.measure { sleep(20) }
+println("slept for at least 20 ms:", elapsed >= 20)
+
+// > 1969-07-20 20:17:40 | 1969-07-20T20:17:40Z | -14182940000 ms since 1970
+// > 1969 7 20 20 17 40 | Sunday July | day of year 201
+// >   %Y-%m-%d   2024-03-09
+// >   %d/%m/%y   09/03/24
+// >   %B %d, %Y  March 09, 2024
+// >   %A         Saturday
+// >   %H:%M:%S   07:05:03
+// >   %I:%M %p   07:05 AM
+// >   %j         069
+// >   %a %b %e   Sat Mar  9
+// >
+// > 30 days after Jan 31: Mar 01 | 1 month after: Mar 02 | 1 year before: 2023-01-31
+// > 2024 has a Feb 29: true | 2023 does not: true
+// > noon plus 90 minutes: 13:30 | minus 13 hours: 30 23:00
+// >
+// > Jan 1 to Dec 25: 359 days and 18 hours, 8634 hours in all
+// > a < b: true  b > a: true  same instant: true true
+// >
+// > 2024-06-30 23:59:59  -> Sunday 30 June 2024
+// > 1999-12-31 00:00:00  -> Friday 31 December 1999
+// > tomorrow             -> not a date
+// > 2024-13-01 00:00:00  -> not a date
+// > other layouts: 2023-12-24T06:45:00Z
+// >
+// >    February 2024
+// > Su Mo Tu We Th Fr Sa
+// >              1  2  3
+// >  4  5  6  7  8  9 10
+// > 11 12 13 14 15 16 17
+// > 18 19 20 21 22 23 24
+// > 25 26 27 28 29
+// >
+// > next birthdays after 20 May: ann in 117 days, cy in 194 days
+// > slept for at least 20 ms: true
