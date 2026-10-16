@@ -60,14 +60,15 @@ You need **Rust** and **clang 15+** (no LLVM development libraries).
 ```bash
 cargo install --path .       # puts `aion` on your PATH
 
-aion examples/script.aion          # compile and run (re-runs are instant)
+aion examples/tour.aion            # compile and run (re-runs are instant)
 aion new myapp && cd myapp && aion # a project with an aion.project file
 aion build examples/hello.aion     # produce ./hello
 aion emit-ir examples/hello.aion   # print the generated LLVM IR
 ```
 
-More programs live in [`examples/`](examples). Run the test-suite with
-`cargo test`.
+More than forty programs live in [`examples/`](examples) — algorithms, language tours, small
+applications and sample projects, each ending with the output it prints (see
+[examples/README.md](examples/README.md)). Run the test-suite, which runs them all, with `cargo test`.
 
 ## Batteries
 
@@ -134,7 +135,7 @@ aion/
 │   └── toolchain.rs   runs clang
 ├── runtime/           always-linked C runtime (GC, strings, printing)
 ├── stdlib/            standard library: <module>.aion [+ <module>.c]
-├── examples/          sample programs (a script, a project, modules, …)
+├── examples/          over 40 programs and 7 sample projects, each with its expected output
 ├── benchmarks/        count-to-100M in Aion, C, Node and Python
 └── tests/             end-to-end tests (programs/, errors/)
 ```

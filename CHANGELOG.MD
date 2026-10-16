@@ -98,6 +98,14 @@ migration notes at the end of this section.
 - **Packages.** `link = ["sqlite3"]` and `c = ["native/x.c"]` in `aion.project` (system libraries
   and bundled C code); `// link: name` in stdlib modules. See docs/packages.md.
 
+### Examples
+`examples/` now holds over forty programs — algorithms (Fibonacci, primes, sorting, big numbers,
+mazes, tic-tac-toe, a calculator, a Brainfuck interpreter), a tour of each language feature, programs
+that use the standard library — and seven sample projects (a to-do app, a text adventure with a data
+file, a library package with tests and a program that uses it, a project with bundled C code).
+Each example ends with the output it prints, and the test suite runs them all to keep them true.
+Optional functions can now be called after a null check, too (`if f != null { f(1) }`).
+
 ### Standard library
 New modules, all written for this release:
 - `fs`, `path` (files, directories, temporary directories, path arithmetic), `os`
