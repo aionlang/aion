@@ -117,6 +117,7 @@ See **[docs/architecture.md](docs/architecture.md)** for the details.
 | [docs/stdlib.md](docs/stdlib.md) | the standard library, and how to add C-backed functions with `extern fn` |
 | [docs/architecture.md](docs/architecture.md) | compiler internals, memory model, garbage collector |
 | [docs/LOCAL-BUILDING.MD](docs/LOCAL-BUILDING.MD) | setting up a development machine |
+| [docs/docker.md](docs/docker.md) | trying Aion in a container, without Rust or clang installed |
 | [CHANGELOG.MD](CHANGELOG.MD) | what changed between versions |
 
 ## Project layout

@@ -1,0 +1,6 @@
+target
+.git
+benchmarks
+*.exe
+*.o
+*.ll
