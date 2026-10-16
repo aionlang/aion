@@ -33,8 +33,8 @@ println(twice { it * 3 }(2))        // 18
 ```
 
 No `main`, no semicolons, no type noise: types are only written on parameters and
-fields.  Generics, collections, nullable types, interfaces, `defer` and `try` are
-there when you need them:
+fields.  Generics, collections, nullable types, tuples (`lo, hi := minmax(xs)`), operators on your
+own types, `vararg`, `cond ? a : b`, interfaces, `defer` and `try` are there when you need them:
 
 ```aion
 interface Shape { fn area() -> Float }
