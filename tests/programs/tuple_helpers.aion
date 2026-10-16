@@ -1,0 +1,9 @@
+// zip pairs up two lists, enumerate numbers the elements, and a list can be taken apart like a tuple.
+names := ["ann", "bob", "cy"]
+ages := [31, 25, 47]
+for n, age in names.zip(ages) { println("$n is $age") }
+for i, name in enumerate(names) { println("$i: $name") }
+pairs: List<(String, Int)> = names.zip(ages)
+println(pairs)
+first, next := names
+println("$first $next")

@@ -548,6 +548,20 @@ type List<T> {
         }
         return out
     }
+    // Pairs up the elements of two lists, as long as the shorter one: [(1, "a"), (2, "b")].
+    fn zip<U>(other: List<U>) -> List<(T, U)> {
+        out := List<(T, U)>()
+        n := count
+        if other.count < n { n = other.count }
+        for i in 0..n { out.add((items[i], other.items[i])) }
+        return out
+    }
+    // The first elements, so that `a, b := list` works.
+    fn component1() -> T = get(0)
+    fn component2() -> T = get(1)
+    fn component3() -> T = get(2)
+    fn component4() -> T = get(3)
+    fn component5() -> T = get(4)
     fn fold<R>(initial: R, f: (R, T) -> R) -> R {
         acc := initial
         for i in 0..count { acc = f(acc, items[i]) }
@@ -697,6 +711,13 @@ type Tuple5<A, B, C, D, E>(first: A, second: B, third: C, fourth: D, fifth: E) {
     fn equals(other: Tuple5<A, B, C, D, E>) = first == other.first && second == other.second && third == other.third && fourth == other.fourth && fifth == other.fifth
     fn hashCode() = ((((hashOf(first)) * 31 % 1000003 + hashOf(second)) * 31 % 1000003 + hashOf(third)) * 31 % 1000003 + hashOf(fourth)) * 31 % 1000003 + hashOf(fifth)
     fn toString() = "($first, $second, $third, $fourth, $fifth)"
+}
+
+// Each element with its position: `for i, x in enumerate(xs)`.
+fn enumerate<T>(xs: List<T>) -> List<(Int, T)> {
+    out := List<(Int, T)>()
+    for i in 0..xs.size() { out.add((i, xs[i])) }
+    return out
 }
 
 // One key/value pair of a Map.

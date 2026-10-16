@@ -1,0 +1,8 @@
+ann is 31
+bob is 25
+cy is 47
+0: ann
+1: bob
+2: cy
+[(ann, 31), (bob, 25), (cy, 47)]
+ann bob
