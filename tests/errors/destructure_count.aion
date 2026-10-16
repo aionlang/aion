@@ -1,0 +1,2 @@
+// error: 2 names on the left but 3 values on the right
+a, b := 1, 2, 3

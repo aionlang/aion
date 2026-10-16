@@ -249,7 +249,10 @@ impl<'a> Checker<'a> {
     fn build_instance(&self, gt: &Rc<super::GenericType<'a>>, g: usize, args: Vec<Ty>) -> Result<TypeId> {
         let td: &'a ast::TypeDecl = gt.decl;
         let arg_names: Vec<String> = args.iter().map(|&a| self.t.ty_name(a)).collect();
-        let id = self.t.add_type(TypeInfo::new(format!("{}<{}>", td.name.name, arg_names.join(", "))));
+        // The library's `Tuple2<Int, String>` is written `(Int, String)`.
+        let is_tuple = td.name.name.strip_prefix("Tuple").is_some_and(|n| matches!(n, "2" | "3" | "4" | "5"));
+        let name = if is_tuple { format!("({})", arg_names.join(", ")) } else { format!("{}<{}>", td.name.name, arg_names.join(", ")) };
+        let id = self.t.add_type(TypeInfo::new(name));
         // Register before resolving anything, so a self-referential type (`next: Node<T>`) finds itself.
         gt.instances.borrow_mut().insert(args.clone(), id);
         self.instance_of.borrow_mut().insert(id, (g, args.clone()));

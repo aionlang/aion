@@ -1,0 +1,59 @@
+// Tuples hold a few values together: (1, "one") has the type (Int, String).
+// `a, b := pair` takes one apart; the same works in `for` and for assignment.
+fn minmax(xs: List<Int>) -> (Int, Int) {
+    lo := xs[0]
+    hi := xs[0]
+    for x in xs {
+        if x < lo { lo = x }
+        if x > hi { hi = x }
+    }
+    return (lo, hi)
+}
+
+p := (1, "one")
+println(p)
+a, b := p
+println("$a $b")
+(c, d) := (3, 4.5)
+println("$c $d")
+lo, hi := minmax([3, 1, 4, 1, 5])
+println("$lo..$hi")
+
+// several values on the right are all evaluated first, so this swaps
+x, y := 1, 2
+x, y = y, x
+println("$x $y")
+nums := [1, 2, 3]
+nums[0], nums[2] = nums[2], nums[0]
+println(nums)
+
+// nested, and `_` skips a part
+t := (1, (2, 3))
+(q, (r, s)) := t
+println("$q $r $s")
+_, second := (10, 20)
+println(second)
+
+// loops
+m := {"a": 1, "b": 2}
+for (k, v) in m.entries() { println("$k=$v") }
+for k, v in m.entries() { println("$k:$v") }
+
+// tuples compare and hash by value, so they make good keys
+println((1, 2) == (1, 2))
+println((1, 2) == (2, 1))
+seen := Set<(Int, Int)>()
+seen.add((1, 2))
+println(seen.contains((1, 2)))
+println(seen.contains((2, 1)))
+cache := Map<(Int, Int), String>()
+cache[(0, 0)] = "origin"
+println(cache[(0, 0)])
+
+// optional tuples and optional functions
+g: (Int, Int)? = null
+println(g == null)
+g = (1, 2)
+println(g!!)
+f: ((Int) -> Int)? = null
+println(f == null)

@@ -38,11 +38,13 @@ struct Parser<'a> {
     ignore_nl: bool,
     /// While parsing an `if`/`while`/`for`/`when` header, a `{` starts the body.
     no_brace: bool,
+    /// How many temporaries the parser has introduced, to keep their names apart.
+    temps: usize,
 }
 
 impl<'a> Parser<'a> {
     fn new(file: u32, src: &'a str, base: usize) -> Result<Self> {
-        Ok(Parser { file, src, base, toks: lex(file, src, base)?, pos: 0, ignore_nl: false, no_brace: false })
+        Ok(Parser { file, src, base, toks: lex(file, src, base)?, pos: 0, ignore_nl: false, no_brace: false, temps: 0 })
     }
 
     // ── token plumbing ──────────────────────────────────────────
@@ -108,22 +110,41 @@ impl<'a> Parser<'a> {
         Ok(Ident { name: self.text(t).to_string(), span: t.span })
     }
 
+    /// A type that may be followed by `?`.
+    fn nullable(&mut self, ty: TypeRef) -> TypeRef {
+        if self.peek() == Some(Token::Question) {
+            let q = self.bump().span;
+            let span = ty.span.to(q);
+            return TypeRef { kind: TypeKind::Nullable(Box::new(ty)), span };
+        }
+        ty
+    }
+
     fn type_ref(&mut self) -> Result<TypeRef> {
-        // `(A, B) -> R`
+        // `(A, B) -> R`, a tuple `(A, B)`, or a type in parentheses `((A) -> B)?`
         if self.peek() == Some(Token::LParen) {
             let start = self.bump().span;
-            let mut params = Vec::new();
+            let mut items = Vec::new();
             while self.peek() != Some(Token::RParen) {
-                params.push(self.type_ref()?);
+                items.push(self.type_ref()?);
                 if !self.eat(Token::Comma) {
                     break;
                 }
             }
-            self.expect(Token::RParen)?;
-            self.expect(Token::Arrow)?;
-            let ret = self.type_ref()?;
-            let span = start.to(ret.span);
-            return Ok(TypeRef { kind: TypeKind::Fn { params, ret: Box::new(ret) }, span });
+            let close = self.expect(Token::RParen)?.span;
+            if self.eat(Token::Arrow) {
+                let ret = self.type_ref()?;
+                let span = start.to(ret.span);
+                return Ok(TypeRef { kind: TypeKind::Fn { params: items, ret: Box::new(ret) }, span });
+            }
+            let span = start.to(close);
+            let ty = match items.len() {
+                0 => return Err(Diagnostic::new("expected `->` after the parameter types", close)),
+                1 => items.pop().expect("one item"),
+                2..=5 => TypeRef { kind: TypeKind::Named { name: format!("Tuple{}", items.len()), args: items }, span },
+                _ => return Err(Diagnostic::new("a tuple has at most 5 elements", span).hint("use a type with named fields")),
+            };
+            return Ok(self.nullable(ty));
         }
         let id = self.ident()?;
         let mut span = id.span;
@@ -148,12 +169,7 @@ impl<'a> Parser<'a> {
             span = span.to(self.expect(Token::Gt)?.span);
         }
         let named = TypeRef { kind: TypeKind::Named { name, args }, span };
-        if self.peek() == Some(Token::Question) {
-            let q = self.bump().span;
-            let span = named.span.to(q);
-            return Ok(TypeRef { kind: TypeKind::Nullable(Box::new(named)), span });
-        }
-        Ok(named)
+        Ok(self.nullable(named))
     }
 
     /// `<T, R>` after a declaration's name (empty if absent).
@@ -244,7 +260,11 @@ impl<'a> Parser<'a> {
                     let start = self.bump().span;
                     items.push(self.fn_item(start, false)?);
                 }
-                _ => items.push(Item::Stmt(self.stmt()?)),
+                _ => {
+                    let mut stmts = Vec::new();
+                    self.stmt_into(&mut stmts)?;
+                    items.extend(stmts.into_iter().map(Item::Stmt));
+                }
             }
         }
         Ok(Module { imports, items })
@@ -506,7 +526,7 @@ impl<'a> Parser<'a> {
                         p.bump();
                     }
                     None => return Err(p.expected("`}`")),
-                    Some(_) => stmts.push(p.stmt()?),
+                    Some(_) => p.stmt_into(&mut stmts)?,
                 }
             }
         })?;
@@ -514,7 +534,8 @@ impl<'a> Parser<'a> {
         Ok(stmts)
     }
 
-    fn stmt(&mut self) -> Result<Stmt> {
+    /// One statement, appended to `out`.  Destructuring (`a, b := e`) expands to several.
+    fn stmt_into(&mut self, out: &mut Vec<Stmt>) -> Result<()> {
         let start = self.here();
         let kind = match self.peek() {
             Some(Token::Return) => {
@@ -529,7 +550,12 @@ impl<'a> Parser<'a> {
             Some(Token::Defer) => {
                 self.bump();
                 // `defer { … }` is a block of statements; otherwise one statement.
-                let body = if self.peek() == Some(Token::LBrace) { self.block()? } else { vec![self.stmt()?] };
+                let mut body = Vec::new();
+                if self.peek() == Some(Token::LBrace) {
+                    body = self.block()?;
+                } else {
+                    self.stmt_into(&mut body)?;
+                }
                 StmtKind::Defer(body)
             }
             Some(Token::While) => {
@@ -539,10 +565,24 @@ impl<'a> Parser<'a> {
             }
             Some(Token::For) => {
                 self.bump();
-                let var = self.ident()?;
-                self.expect(Token::In)?;
-                let iter = self.header_expr()?;
-                StmtKind::For { var, iter, body: self.block()? }
+                if self.peek() == Some(Token::LParen) || self.peek_at(1) == Some(Token::Comma) {
+                    // `for (k, v) in m` and `for k, v in m` take each element apart.
+                    let pattern = self.for_pattern()?;
+                    self.expect(Token::In)?;
+                    let iter = self.header_expr()?;
+                    let span = pattern.span;
+                    let var = Ident { name: self.temp("e"), span };
+                    let mut body = Vec::new();
+                    let element = Expr { kind: ExprKind::Name(var.name.clone()), span };
+                    self.bind(pattern, element, true, &mut body)?;
+                    body.extend(self.block()?);
+                    StmtKind::For { var, iter, body }
+                } else {
+                    let var = self.ident()?;
+                    self.expect(Token::In)?;
+                    let iter = self.header_expr()?;
+                    StmtKind::For { var, iter, body: self.block()? }
+                }
             }
             Some(Token::Break) => {
                 self.bump();
@@ -565,6 +605,16 @@ impl<'a> Parser<'a> {
             }
             _ => {
                 let lhs = self.expr()?;
+                let mut targets = vec![lhs];
+                while self.peek() == Some(Token::Comma) && !self.nl() {
+                    self.bump();
+                    targets.push(self.expr()?);
+                }
+                let lone_tuple = targets.len() == 1 && Self::is_tuple(&targets[0]);
+                if targets.len() > 1 || (self.peek() == Some(Token::ColonEq) && !self.nl()) || (lone_tuple && self.peek() == Some(Token::Eq)) {
+                    return self.destructure(targets, start, out);
+                }
+                let lhs = targets.pop().expect("one target");
                 let op = match self.peek() {
                     _ if self.nl() => None,
                     Some(Token::Eq) => Some(AssignOp::Set),
@@ -586,7 +636,128 @@ impl<'a> Parser<'a> {
                 }
             }
         };
-        Ok(Stmt { kind, span: start.to(self.prev_span()) })
+        out.push(Stmt { kind, span: start.to(self.prev_span()) });
+        Ok(())
+    }
+
+    /// A fresh name for something the parser introduces; `$` cannot appear in a source identifier.
+    fn temp(&mut self, what: &str) -> String {
+        self.temps += 1;
+        format!("${what}{}", self.temps)
+    }
+
+    fn is_tuple(e: &Expr) -> bool {
+        matches!(&e.kind, ExprKind::Call { callee, .. } if matches!(&callee.kind, ExprKind::Name(n) if n.starts_with("Tuple")))
+    }
+
+    /// The names a `for` loop takes apart: `(k, v)`, or `k, v` without the parentheses.
+    fn for_pattern(&mut self) -> Result<Expr> {
+        let first = self.pattern()?;
+        if self.peek() != Some(Token::Comma) {
+            return Ok(first);
+        }
+        let mut items = vec![first];
+        while self.eat(Token::Comma) {
+            items.push(self.pattern()?);
+        }
+        let span = items[0].span.to(items[items.len() - 1].span);
+        Self::tuple_expr(items, span)
+    }
+
+    /// A name, or names in parentheses (which may nest): `x`, `(a, b)`, `(a, (b, c))`.
+    fn pattern(&mut self) -> Result<Expr> {
+        if self.peek() != Some(Token::LParen) {
+            let id = self.ident()?;
+            return Ok(Expr { kind: ExprKind::Name(id.name), span: id.span });
+        }
+        let start = self.bump().span;
+        let mut items = vec![self.pattern()?];
+        while self.eat(Token::Comma) {
+            items.push(self.pattern()?);
+        }
+        let end = self.expect(Token::RParen)?.span;
+        if items.len() == 1 {
+            return Ok(items.pop().expect("one item"));
+        }
+        Self::tuple_expr(items, start.to(end))
+    }
+
+    /// `a, b := e`, `(a, b) := e`, `a, b = x, y`, `a[i], a[j] = a[j], a[i]`: several targets are
+    /// filled in one go.  A single value is taken apart with `component1()`, `component2()`, …;
+    /// several are first held in temporaries, so that `a, b = b, a` swaps.
+    fn destructure(&mut self, mut targets: Vec<Expr>, start: Span, out: &mut Vec<Stmt>) -> Result<()> {
+        let declare = match self.peek() {
+            Some(Token::ColonEq) => true,
+            Some(Token::Eq) => false,
+            _ => return Err(self.expected("`:=` or `=` after the names")),
+        };
+        self.bump();
+        let mut values = vec![self.expr()?];
+        while self.eat(Token::Comma) {
+            values.push(self.expr()?);
+        }
+        let span = start.to(self.prev_span());
+        if targets.len() == 1 {
+            if values.len() > 1 {
+                return Err(Diagnostic::new("a tuple on the left takes one value", span));
+            }
+            let target = targets.pop().expect("one target");
+            return self.bind(target, values.pop().expect("one value"), declare, out);
+        }
+        if values.len() == 1 {
+            let tmp = self.temp("d");
+            out.push(Self::let_stmt(&tmp, values.pop().expect("one value"), span));
+            for (i, target) in targets.into_iter().enumerate() {
+                self.bind(target, Self::component(&tmp, i + 1, span), declare, out)?;
+            }
+            return Ok(());
+        }
+        if values.len() != targets.len() {
+            return Err(Diagnostic::new(format!("{} names on the left but {} values on the right", targets.len(), values.len()), span));
+        }
+        let mut temps = Vec::new();
+        for value in values {
+            let tmp = self.temp("t");
+            out.push(Self::let_stmt(&tmp, value, span));
+            temps.push(tmp);
+        }
+        for (target, tmp) in targets.into_iter().zip(temps) {
+            let value = Expr { kind: ExprKind::Name(tmp), span };
+            self.bind(target, value, declare, out)?;
+        }
+        Ok(())
+    }
+
+    fn let_stmt(name: &str, init: Expr, span: Span) -> Stmt {
+        Stmt { kind: StmtKind::Let { name: Ident { name: name.to_string(), span }, ty: None, init: Some(init) }, span }
+    }
+
+    /// Store `value` into `pattern`: a name (declared when `declare`, else assigned), `_` (dropped),
+    /// a tuple of patterns (taken apart), or — for assignment — a field or element.
+    fn bind(&mut self, pattern: Expr, value: Expr, declare: bool, out: &mut Vec<Stmt>) -> Result<()> {
+        let span = pattern.span;
+        match pattern.kind {
+            ExprKind::Name(name) if name == "_" => Ok(()),
+            ExprKind::Name(name) if declare => {
+                out.push(Self::let_stmt(&name, value, span));
+                Ok(())
+            }
+            ExprKind::Call { callee, args, .. } if matches!(&callee.kind, ExprKind::Name(n) if n.starts_with("Tuple")) => {
+                let tmp = self.temp("d");
+                out.push(Self::let_stmt(&tmp, value, span));
+                for (i, arg) in args.into_iter().enumerate() {
+                    self.bind(arg.value, Self::component(&tmp, i + 1, span), declare, out)?;
+                }
+                Ok(())
+            }
+            kind @ (ExprKind::Name(_) | ExprKind::Field(..) | ExprKind::Index { .. }) if !declare => {
+                let target = Expr { kind, span };
+                out.push(Stmt { kind: StmtKind::Assign { target, op: AssignOp::Set, value }, span });
+                Ok(())
+            }
+            _ if declare => Err(Diagnostic::new("`:=` declares plain names", span).hint("use `=` to store into a field or an element")),
+            _ => Err(Diagnostic::new("cannot assign to this expression", span)),
+        }
     }
 
     fn expr_stmt(e: Expr) -> Stmt {
@@ -927,10 +1098,22 @@ impl<'a> Parser<'a> {
                 ExprKind::Char(self.char_literal(tok)?)
             }
             Token::LParen => {
-                self.bump();
-                let inner = self.scoped(true, false, |p| p.expr())?;
-                self.expect(Token::RParen)?;
-                return Ok(inner);
+                let start = self.bump().span;
+                let mut items = self.scoped(true, false, |p| {
+                    let mut items = vec![p.expr()?];
+                    while p.eat(Token::Comma) {
+                        if p.peek() == Some(Token::RParen) {
+                            break;
+                        }
+                        items.push(p.expr()?);
+                    }
+                    Ok(items)
+                })?;
+                let end = self.expect(Token::RParen)?.span;
+                if items.len() == 1 {
+                    return Ok(items.pop().expect("one item"));
+                }
+                return Self::tuple_expr(items, start.to(end));
             }
             Token::If => return self.if_expr(),
             Token::Try => return self.try_expr(),
@@ -954,6 +1137,24 @@ impl<'a> Parser<'a> {
             _ => return Err(self.expected("an expression")),
         };
         Ok(Expr { kind, span })
+    }
+
+    /// `(a, b)`: a tuple, which is the library type `Tuple2` (up to `Tuple5`).
+    fn tuple_expr(items: Vec<Expr>, span: Span) -> Result<Expr> {
+        if items.len() > 5 {
+            return Err(Diagnostic::new("a tuple has at most 5 elements", span).hint("use a type with named fields"));
+        }
+        let callee = Expr { kind: ExprKind::Name(format!("Tuple{}", items.len())), span };
+        let args = items.into_iter().map(|value| Arg { name: None, value }).collect();
+        Ok(Expr { kind: ExprKind::Call { callee: Box::new(callee), type_args: Vec::new(), args }, span })
+    }
+
+    /// `$name.componentN()`: the N-th part of a value being taken apart.
+    fn component(name: &str, n: usize, span: Span) -> Expr {
+        let target = Expr { kind: ExprKind::Name(name.to_string()), span };
+        let member = Ident { name: format!("component{n}"), span };
+        let callee = Expr { kind: ExprKind::Field(Box::new(target), member), span };
+        Expr { kind: ExprKind::Call { callee: Box::new(callee), type_args: Vec::new(), args: Vec::new() }, span }
     }
 
     /// `{ … }` in expression position: a lambda, or a map literal `{ "a": 1 }`.
@@ -1015,7 +1216,7 @@ impl<'a> Parser<'a> {
                         p.bump();
                     }
                     None => return Err(p.expected("`}`")),
-                    Some(_) => body.push(p.stmt()?),
+                    Some(_) => p.stmt_into(&mut body)?,
                 }
             }
             Ok((params, explicit, body))
@@ -1490,6 +1691,23 @@ mod tests {
         let err = |src: &str| Parser::new(0, src, 0).and_then(|mut p| p.expr()).unwrap_err().message;
         assert!(err("\"\"\"never closed").contains("unterminated"));
         assert!(err("r\"\"\"never closed").contains("unterminated"));
+    }
+
+    #[test]
+    fn destructuring_expands_to_statements() {
+        // one value taken apart: a temporary, then one `component` call per name
+        let m = module("a, b := f()");
+        assert_eq!(m.items.len(), 3);
+        // several values go through temporaries, so `a, b = b, a` swaps
+        let m = module("a, b = b, a");
+        assert_eq!(m.items.len(), 4);
+        // nested patterns and `_`
+        let m = module("(a, (b, _)) := t");
+        assert_eq!(m.items.len(), 1 + 1 + 1 + 1);
+        // a tuple type and literal are the library's TupleN
+        let m = module("t: (Int, String)? = (1, \"a\")");
+        assert_eq!(m.items.len(), 1);
+        assert!(Parser::new(0, "(1, 2, 3, 4, 5, 6)", 0).and_then(|mut p| p.expr()).is_err());
     }
 
     #[test]

@@ -1,0 +1,4 @@
+// error: `:=` declares plain names
+p := (1, 2)
+q := [0]
+a, q[0] := p

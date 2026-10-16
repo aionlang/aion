@@ -1,0 +1,2 @@
+// error: a tuple has at most 5 elements
+t := (1, 2, 3, 4, 5, 6)

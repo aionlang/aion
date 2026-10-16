@@ -659,8 +659,50 @@ type List<T> {
     fn toString() = "[" + join() + "]"
 }
 
+// Tuples: `(1, "a")` is a Tuple2<Int, String>, written `(Int, String)` in types.  Up to five
+// elements; a value is taken apart with `a, b := pair` (through `component1()`, `component2()`, …).
+type Tuple2<A, B>(first: A, second: B) {
+    fn component1() = first
+    fn component2() = second
+    fn equals(other: Tuple2<A, B>) = first == other.first && second == other.second
+    fn hashCode() = hashOf(first) * 31 % 1000003 + hashOf(second)
+    fn toString() = "($first, $second)"
+}
+
+type Tuple3<A, B, C>(first: A, second: B, third: C) {
+    fn component1() = first
+    fn component2() = second
+    fn component3() = third
+    fn equals(other: Tuple3<A, B, C>) = first == other.first && second == other.second && third == other.third
+    fn hashCode() = ((hashOf(first)) * 31 % 1000003 + hashOf(second)) * 31 % 1000003 + hashOf(third)
+    fn toString() = "($first, $second, $third)"
+}
+
+type Tuple4<A, B, C, D>(first: A, second: B, third: C, fourth: D) {
+    fn component1() = first
+    fn component2() = second
+    fn component3() = third
+    fn component4() = fourth
+    fn equals(other: Tuple4<A, B, C, D>) = first == other.first && second == other.second && third == other.third && fourth == other.fourth
+    fn hashCode() = (((hashOf(first)) * 31 % 1000003 + hashOf(second)) * 31 % 1000003 + hashOf(third)) * 31 % 1000003 + hashOf(fourth)
+    fn toString() = "($first, $second, $third, $fourth)"
+}
+
+type Tuple5<A, B, C, D, E>(first: A, second: B, third: C, fourth: D, fifth: E) {
+    fn component1() = first
+    fn component2() = second
+    fn component3() = third
+    fn component4() = fourth
+    fn component5() = fifth
+    fn equals(other: Tuple5<A, B, C, D, E>) = first == other.first && second == other.second && third == other.third && fourth == other.fourth && fifth == other.fifth
+    fn hashCode() = ((((hashOf(first)) * 31 % 1000003 + hashOf(second)) * 31 % 1000003 + hashOf(third)) * 31 % 1000003 + hashOf(fourth)) * 31 % 1000003 + hashOf(fifth)
+    fn toString() = "($first, $second, $third, $fourth, $fifth)"
+}
+
 // One key/value pair of a Map.
 type Entry<K, V>(key: K, value: V) {
+    fn component1() = key
+    fn component2() = value
     fn toString() = "$key: $value"
 }
 
