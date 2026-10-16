@@ -2521,7 +2521,8 @@ impl<'c, 'a> Cx<'c, 'a> {
             A::Name(n) => {
                 // A variable holding a function.
                 if let Some(id) = self.find_local(n) {
-                    let f = self.local_expr(id);
+                    // an optional function that was just tested against null can be called
+                    let f = self.narrowed_var(self.local_expr(id), self.locals[id].var);
                     return self.call_value(f, args, span, n);
                 }
                 if let Some(ty) = self.this {
@@ -2569,7 +2570,8 @@ impl<'c, 'a> Cx<'c, 'a> {
                     }
                     Some(Sym::Global(g)) => {
                         let ty = self.global_use(g, callee.span)?;
-                        self.call_value(mk(K::Global(g), ty), args, span, n)
+                        let f = self.narrowed_global(mk(K::Global(g), ty), g);
+                        self.call_value(f, args, span, n)
                     }
                     None if n == "Array" => self.array_new(type_args, args, span, expected),
                     None if n == "hashOf" => self.hash_of(args, span),

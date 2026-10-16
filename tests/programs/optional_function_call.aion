@@ -1,0 +1,17 @@
+// A function that came out of a lookup is called once it has been checked against null
+handlers := Map<String, (Int) -> Int>()
+handlers["double"] = { x: Int -> x * 2 }
+
+found := handlers.getOrNull("double")
+if found != null { println(found(4)) }
+if found == null { println("none") } else { println(found(5)) }
+
+fn run(name: String, value: Int) -> String {
+    h := handlers.getOrNull(name)
+    if h == null { return "$name: no such handler" }
+    return "$name: ${h(value)}"
+}
+println(run("double", 21), run("triple", 1))
+
+missing := handlers.getOrNull("missing")
+println(if missing == null { "missing is null" } else { "found" })
