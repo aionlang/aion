@@ -1,0 +1,20 @@
+int 2
+text TWO
+float 7
+yes
+char c
+point 4,5
+[1, two, 3.5, true, c, Point(x=4, y=5)]
+true false true
+42
+null
+41
+big 1
+true 41
+5
+false null
+false null
+9 -1
+36 Ada 3.14
+7
+[1, 2] other [1, 2]

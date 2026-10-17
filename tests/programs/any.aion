@@ -1,0 +1,63 @@
+/**
+ * `Any` holds a value of any type.  Objects and the basic types (`Int`, `Float`, `Bool`, `Char`,
+ * `String`, `Bytes`) convert to it where an `Any` is expected.  To use the value, test it with `is`
+ * (the variable then has that type inside the branch), or take it out with `as` (stops the program
+ * if the type is wrong) or `as?` (gives `null` instead).
+ */
+type Point(x: Int, y: Int)
+
+fn describe(v: Any) -> String {
+    return when v {
+        is Int -> "int ${v + 1}"
+        is String -> "text ${v.upper()}"
+        is Float -> "float ${v * 2.0}"
+        is Bool -> if v { "yes" } else { "no" }
+        is Char -> "char ${v.toString()}"
+        is Point -> "point ${v.x},${v.y}"
+        else -> "other $v"
+    }
+}
+
+fn firstInt(items: List<Any>) -> Int {
+    for item in items {
+        if item !is Int { continue }
+        return item
+    }
+    return -1
+}
+
+fn smart(value: Any?) {
+    if value is Int && value > 40 { println("big ${value - 40}") }
+    if value != null && value is String { println(value.length()) }
+    println(value is Int, value as? Int)
+}
+
+fn main() {
+    things: List<Any> = [1, "two", 3.5, true, 'c', Point(4, 5)]
+    for t in things { println(describe(t)) }
+    println(things)
+
+    answer: Any = 41
+    println(answer is Int, answer is String, answer !is Float)
+    println((answer as Int) + 1)
+    println(answer as? String)
+    println(answer as? Int)
+
+    smart(answer)
+    smart("hello")
+    smart(null)
+
+    println(firstInt(["x", 2.5, 9, 4]), firstInt(["x"]))
+
+    // explicit boxing, and a map of mixed values
+    m := Map<String, Any>()
+    m["age"] = 36
+    m["name"] = "Ada"
+    m["pi"] = 3.14
+    println(m["age"] as Int, m["name"] as String, m["pi"] as Float)
+    boxed := 7 as Any
+    println(boxed)
+
+    other: Any = [1, 2]
+    println(other, describe(other))
+}

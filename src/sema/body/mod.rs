@@ -1965,6 +1965,14 @@ impl<'c, 'a> Cx<'c, 'a> {
                 let (Ty::Obj(a), Ty::Obj(b)) = (self.ck.t.opt_inner(x), self.ck.t.opt_inner(y)) else { unreachable!() };
                 self.upcast(e, a, b, to, span)
             }
+            // a basic value used as `Any` is put in a box
+            (found, Ty::Obj(any)) if super::basic_name(found).is_some() && self.ck.any_type() == Some(any) => {
+                let name = format!("__box_{}", super::basic_name(found).expect("checked"));
+                match self.ck.prelude_fn(&name, span) {
+                    Some(id) => Ok(mk(K::Call { func: id?, args: vec![e] }, to)),
+                    None => Err(self.mismatch(to, found, span)),
+                }
+            }
             // `T` → `T?` (and `Int` → `Float?`)
             (found, Ty::Opt(id)) if !matches!(found, Ty::Opt(_) | Ty::Null | Ty::Void) => {
                 let inner = self.ck.t.opt_inner(id);
@@ -2072,8 +2080,19 @@ impl<'c, 'a> Cx<'c, 'a> {
 
     /// `value as T` / `value as? T`
     fn cast_expr(&mut self, value: &ast::Expr, ty: &ast::TypeRef, safe: bool) -> Result<hir::Expr> {
+        let written = self.ck.resolve_type(self.module, ty, &self.subst)?;
+        let span = value.span.to(ty.span);
+        // `x as Any` boxes it explicitly
+        if matches!(written, Ty::Obj(t) if Some(t) == self.ck.any_type()) {
+            let v = self.value(value)?;
+            let any = self.coerce(v, written, span)?;
+            return Ok(if safe { mk(K::Wrap(Box::new(any)), self.ck.t.opt_of(written)) } else { any });
+        }
+        if let Some(name) = super::basic_name(written) {
+            return self.cast_to_basic(value, written, name, safe, span);
+        }
         let v = self.value(value)?;
-        let target = self.class_target(&v, ty, value.span.to(ty.span))?;
+        let target = self.class_target(&v, ty, span)?;
         let result = if safe { self.ck.t.opt_of(Ty::Obj(target)) } else { Ty::Obj(target) };
         // Going up (or staying) always works, so there is nothing to check.
         let from = match v.ty {
@@ -2090,11 +2109,48 @@ impl<'c, 'a> Cx<'c, 'a> {
         Ok(mk(K::Downcast { value: Box::new(v), target, safe }, result))
     }
 
+    /// `value as Int` and the like: take the value out of an `Any`, or convert between basic types.
+    fn cast_to_basic(&mut self, value: &ast::Expr, to: Ty, to_name: &str, safe: bool, span: Span) -> Result<hir::Expr> {
+        let v = self.value(value)?;
+        let suffix = if safe { "_safe" } else { "" };
+        if self.ck.is_any(v.ty) {
+            return self.prelude_call(&format!("__cast_Any_{to_name}{suffix}"), vec![v], span);
+        }
+        let from = v.ty;
+        let Some(from_name) = super::basic_name(from) else {
+            return Err(Diagnostic::new(format!("a {} cannot be converted to {to_name} with `as`", self.name(from)), span)
+                .hint("`as` converts between Int, Float, Bool, Char and String, takes values out of an `Any`, and casts objects"));
+        };
+        let result = if from == to {
+            v
+        } else {
+            let name = format!("__cast_{from_name}_{to_name}");
+            if safe && self.ck.t.scopes[0].items.contains_key(&format!("{name}_safe")) {
+                return self.prelude_call(&format!("{name}_safe"), vec![v], span);
+            }
+            if !self.ck.t.scopes[0].items.contains_key(&name) {
+                return Err(Diagnostic::new(format!("a {from_name} cannot be converted to {to_name} with `as`"), span)
+                    .hint("convert in steps, e.g. `n as Float`, `c as Int`, or write the conversion as a function"));
+            }
+            self.prelude_call(&name, vec![v], span)?
+        };
+        Ok(if safe { mk(K::Wrap(Box::new(result)), self.ck.t.opt_of(to)) } else { result })
+    }
+
     /// `value is T` / `value !is T`
     fn is_expr(&mut self, value: &ast::Expr, ty: &ast::TypeRef, negated: bool) -> Result<hir::Expr> {
         let v = self.value(value)?;
-        let target = self.class_target(&v, ty, value.span.to(ty.span))?;
-        let test = mk(K::IsInstance { value: Box::new(v), target }, Ty::Bool);
+        let written = self.ck.resolve_type(self.module, ty, &self.subst)?;
+        let test = if let Some(name) = super::basic_name(written) {
+            if !self.ck.is_any(v.ty) {
+                return Err(Diagnostic::new(format!("a {} is never a {name}", self.name(v.ty)), value.span.to(ty.span))
+                    .hint("only an `Any` can hold values of different types"));
+            }
+            self.prelude_call(&format!("__is_{name}"), vec![v], value.span.to(ty.span))?
+        } else {
+            let target = self.class_target(&v, ty, value.span.to(ty.span))?;
+            mk(K::IsInstance { value: Box::new(v), target }, Ty::Bool)
+        };
         Ok(if negated { mk(K::Not(Box::new(test)), Ty::Bool) } else { test })
     }
 

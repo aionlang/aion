@@ -1203,3 +1203,102 @@ extern fn __try_int(body: () -> Int, handler: (String) -> Int) -> Int = "aion_tr
 extern fn __try_float(body: () -> Float, handler: (String) -> Float) -> Float = "aion_try_float"
 extern fn __try_bool(body: () -> Bool, handler: (String) -> Bool) -> Bool = "aion_try_bool"
 extern fn __try_ptr(body: () -> String, handler: (String) -> String) -> String = "aion_try_ptr"
+
+// ── Any and casts ───────────────────────────────────────────────────────────────────────────────
+/**
+ * `Any` holds a value of any type, when the type is only known while the program runs.
+ *
+ *     things: List<Any> = [1, "two", 3.0, true, Point(4, 5)]
+ *     for t in things {
+ *         when t {
+ *             is Int -> println("int ${t + 1}")
+ *             is String -> println("text ${t.upper()}")
+ *             is Point -> println("point ${t.x}")
+ *             else -> println("something else: $t")
+ *         }
+ *     }
+ *
+ * Any object, and any `Int`, `Float`, `Bool`, `Char`, `String` or `Bytes`, converts to `Any` where
+ * an `Any` is expected.  Going back takes a check: `v is Int` tests (and, in the branch, `v` is an `Int`),
+ * `v as Int` stops the program when it is something else, and `v as? Int` gives `null` instead.
+ * Printing an `Any` prints the value inside it.  An `Any` has no methods of its own and no `==`: compare
+ * after checking, e.g. `v is Int && v == 3`.
+ */
+interface Any {}
+
+// A basic value inside an `Any` lives in one of these boxes (the compiler puts values in and takes them out).
+type __IntBox(value: Int) { fn toString() = "$value" }
+type __FloatBox(value: Float) { fn toString() = "$value" }
+type __BoolBox(value: Bool) { fn toString() = "$value" }
+type __CharBox(value: Char) { fn toString() = value.toString() }
+type __StringBox(value: String) { fn toString() = value }
+type __BytesBox(value: Bytes) { fn toString() = "Bytes(${value.size()})" }
+
+fn __box_Int(v: Int) -> Any = __IntBox(v)
+fn __box_Float(v: Float) -> Any = __FloatBox(v)
+fn __box_Bool(v: Bool) -> Any = __BoolBox(v)
+fn __box_Char(v: Char) -> Any = __CharBox(v)
+fn __box_String(v: String) -> Any = __StringBox(v)
+fn __box_Bytes(v: Bytes) -> Any = __BytesBox(v)
+
+fn __is_Int(a: Any?) -> Bool = a is __IntBox
+fn __is_Float(a: Any?) -> Bool = a is __FloatBox
+fn __is_Bool(a: Any?) -> Bool = a is __BoolBox
+fn __is_Char(a: Any?) -> Bool = a is __CharBox
+fn __is_String(a: Any?) -> Bool = a is __StringBox
+fn __is_Bytes(a: Any?) -> Bool = a is __BytesBox
+
+fn __cast_Any_Int(a: Any?) -> Int {
+    if a is __IntBox { return a.value }
+    panic("cannot cast $a to Int")
+}
+fn __cast_Any_Float(a: Any?) -> Float {
+    if a is __FloatBox { return a.value }
+    panic("cannot cast $a to Float")
+}
+fn __cast_Any_Bool(a: Any?) -> Bool {
+    if a is __BoolBox { return a.value }
+    panic("cannot cast $a to Bool")
+}
+fn __cast_Any_Char(a: Any?) -> Char {
+    if a is __CharBox { return a.value }
+    panic("cannot cast $a to Char")
+}
+fn __cast_Any_String(a: Any?) -> String {
+    if a is __StringBox { return a.value }
+    panic("cannot cast $a to String")
+}
+fn __cast_Any_Bytes(a: Any?) -> Bytes {
+    if a is __BytesBox { return a.value }
+    panic("cannot cast $a to Bytes")
+}
+
+fn __cast_Any_Int_safe(a: Any?) -> Int? = if a is __IntBox { a.value } else { null }
+fn __cast_Any_Float_safe(a: Any?) -> Float? = if a is __FloatBox { a.value } else { null }
+fn __cast_Any_Bool_safe(a: Any?) -> Bool? = if a is __BoolBox { a.value } else { null }
+fn __cast_Any_Char_safe(a: Any?) -> Char? = if a is __CharBox { a.value } else { null }
+fn __cast_Any_String_safe(a: Any?) -> String? = if a is __StringBox { a.value } else { null }
+fn __cast_Any_Bytes_safe(a: Any?) -> Bytes? = if a is __BytesBox { a.value } else { null }
+
+// `x as T` between basic types.  `Float as Int` drops the fraction; `Char as Int` is the code point.
+fn __cast_Int_Float(n: Int) -> Float = n + 0.0
+fn __cast_Float_Int(x: Float) -> Int = x.toInt()
+fn __cast_Char_Int(c: Char) -> Int = c - '\0'
+fn __cast_Int_Char(n: Int) -> Char = '\0' + n
+fn __cast_Bool_Int(b: Bool) -> Int = if b { 1 } else { 0 }
+fn __cast_Int_Bool(n: Int) -> Bool = n != 0
+fn __cast_Int_String(n: Int) -> String = "$n"
+fn __cast_Float_String(x: Float) -> String = "$x"
+fn __cast_Bool_String(b: Bool) -> String = "$b"
+fn __cast_Char_String(c: Char) -> String = c.toString()
+
+fn __cast_String_Int(s: String) -> Int = s.toIntOrNull() ?: panic("cannot cast '$s' to Int")
+fn __cast_String_Float(s: String) -> Float = s.toFloatOrNull() ?: panic("cannot cast '$s' to Float")
+fn __cast_String_Bool(s: String) -> Bool {
+    if s == "true" { return true }
+    if s == "false" { return false }
+    panic("cannot cast '$s' to Bool")
+}
+fn __cast_String_Int_safe(s: String) -> Int? = s.toIntOrNull()
+fn __cast_String_Float_safe(s: String) -> Float? = s.toFloatOrNull()
+fn __cast_String_Bool_safe(s: String) -> Bool? = if s == "true" { true } else if s == "false" { false } else { null }

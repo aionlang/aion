@@ -22,6 +22,7 @@
 use std::collections::HashSet;
 
 use super::{Cx, K, mk};
+use crate::diag::Span;
 use crate::sema::hir::{self, GlobalId, Ty};
 use crate::syntax::ast::{self, ExprKind as A, InterpPart, StmtKind};
 
@@ -202,7 +203,12 @@ impl Cx<'_, '_> {
 
     /// The variable `name`, if it holds an object that `x is T` could narrow to `target`.
     fn narrow_to_class(&mut self, name: &str, target: Ty) -> Option<Narrow> {
-        let Ty::Obj(want) = target else { return None };
+        let basic = super::super::basic_name(target).is_some();
+        let want = match target {
+            Ty::Obj(want) => Some(want),
+            _ if basic => None,
+            _ => return None,
+        };
         let (key, declared) = match self.resolve(name)? {
             super::Named::Local(id) if !self.lambda_assigned.contains(name) => {
                 (Key::Var(self.locals[id].var), self.locals[id].ty)
@@ -219,6 +225,8 @@ impl Cx<'_, '_> {
             other => other,
         };
         let Ty::Obj(from) = current else { return None };
+        // an `Any` tested for a basic type is known to hold that type
+        let Some(want) = want else { return (self.ck.is_any(current)).then(|| Narrow { key, name: name.to_string(), plain: target }) };
         // only ever narrow to a proper subtype (or to a class from an interface)
         let narrower = self.ck.is_subtype(want, from) || self.ck.t.ty(from).iface.is_some();
         (narrower && from != want).then(|| Narrow { key, name: name.to_string(), plain: target })
@@ -294,6 +302,15 @@ impl Cx<'_, '_> {
         if let Ty::Opt(o) = value.ty {
             let inner = self.ck.t.opt_inner(o);
             value = mk(K::Unwrap(Box::new(value)), inner);
+        }
+        if super::super::basic_name(plain).is_some() && self.ck.is_any(value.ty) {
+            // out of the box: `Any` tested for `Int`, say
+            let name = format!("__cast_Any_{}", super::super::basic_name(plain).expect("checked"));
+            if let Some(Ok(func)) = self.ck.prelude_fn(&name, Span::default()) {
+                let any = self.ck.any_type().map(Ty::Obj).expect("`Any` is in the prelude");
+                let arg = mk(K::Wrap(Box::new(value)), self.ck.t.opt_of(any));
+                return mk(K::Call { func, args: vec![arg] }, plain);
+            }
         }
         if value.ty != plain {
             value = mk(K::Upcast(Box::new(value)), plain);

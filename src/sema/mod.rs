@@ -1401,6 +1401,31 @@ impl<'a> Checker<'a> {
         None
     }
 
+    /// The prelude's `Any`.
+    pub fn any_type(&self) -> Option<TypeId> {
+        match self.t.scopes[0].items.get("Any") {
+            Some(&Sym::Type(id)) => Some(id),
+            _ => None,
+        }
+    }
+
+    /// Is `ty` `Any` or `Any?`?
+    pub fn is_any(&self, ty: Ty) -> bool {
+        let inner = match ty {
+            Ty::Opt(o) => self.t.opt_inner(o),
+            other => other,
+        };
+        matches!(inner, Ty::Obj(t) if Some(t) == self.any_type())
+    }
+
+    /// A call of the prelude function `name`, if it exists (its result type is known from its signature).
+    pub fn prelude_fn(&self, name: &str, span: Span) -> Option<Result<FnId>> {
+        match self.t.scopes[0].items.get(name) {
+            Some(&Sym::Fn(id)) => Some(self.ret_of(id, span).map(|_| id)),
+            _ => None,
+        }
+    }
+
     /// Note that values of `ty` are used as `iface`, so dispatch tables include it.
     pub fn register_upcast(&self, ty: TypeId, iface: TypeId) {
         self.upcasts.borrow_mut().insert((ty, iface));
@@ -1641,4 +1666,18 @@ fn const_default(e: &ast::Expr, ty: Ty, t: &Tables) -> Result<Option<Const>> {
             e.span,
         )),
     }
+}
+
+/// The name by which the prelude's `Any` and cast helpers know a basic type: `Int`, `Float`, `Bool`, `Char`,
+/// `String` or `Bytes`.
+pub fn basic_name(ty: Ty) -> Option<&'static str> {
+    Some(match ty {
+        Ty::Int => "Int",
+        Ty::Float => "Float",
+        Ty::Bool => "Bool",
+        Ty::Char => "Char",
+        Ty::Str => "String",
+        Ty::Bytes => "Bytes",
+        _ => return None,
+    })
 }

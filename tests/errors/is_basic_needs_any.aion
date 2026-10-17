@@ -1,0 +1,5 @@
+// error: a Int is never a String
+fn main() {
+    n := 3
+    println(n is String)
+}

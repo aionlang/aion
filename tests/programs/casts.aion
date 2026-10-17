@@ -1,20 +1,33 @@
-// exit: 1
-// stderr: cannot cast to Dog
-// as checks and converts; as? gives null instead of failing
+/**
+ * `value as Type` converts between the basic types where you say so (an `Int` is never turned into a
+ * `Float` behind your back, except where a `Float` is expected):
+ *
+ *   Int -> Float, Bool, String, Char       Float -> Int (drops the fraction), String
+ *   Char -> Int, String                    Bool -> Int, String
+ *   String -> Int, Float, Bool             (stops the program if the text does not read as one)
+ *
+ * `value as? Type` gives `null` instead of stopping, so `"12" as? Int` is `12` and `"x" as? Int` is `null`.
+ * The same two forms take a value out of an `Any` and cast objects to a subtype.
+ */
 open type Animal(name: String)
-open type Dog(name: String) : Animal(name) { fn fetch() = "$name fetches" }
-type Cat(name: String) : Animal(name) { fn purr() = "$name purrs" }
+type Dog(name: String) : Animal(name)
 
-a: Animal = Dog("Rex")
-b: Animal = Cat("Tom")
-println((a as Dog).fetch(), (b as Cat).purr())
-println((a as? Dog)?.fetch(), (a as? Cat)?.purr(), (b as? Cat)?.name)
-println((a as? Cat) == null, (a as? Dog) != null)
-up: Animal = Dog("U") as Animal
-println(up.name, (up as? Animal)?.name)
-maybe: Animal? = null
-println((maybe as? Dog)?.name)
-animals: List<Animal> = [Dog("d1"), Cat("c1"), Dog("d2")]
-dogs := animals.filter { it is Dog }.map { (it as Dog).fetch() }
-println(dogs)
-println((b as Dog).fetch())
+fn main() {
+    n := 7
+    x := 2.75
+    println(n as Float, x as Int, -x as Int)
+    println('A' as Int, 66 as Char, true as Int, 0 as Bool, 5 as Bool)
+    println(n as String, x as String, true as String, 'z' as String, "same" as String)
+    println("42" as Int, "2.5" as Float, "true" as Bool, "false" as Bool)
+    println("42" as? Int, "x" as? Int, "2.5" as? Float, "nope" as? Float, "yes" as? Bool, "true" as? Bool)
+    println(n as? Float, x as? Int, 3 as? Int)
+    println(3.0 as Float, 'c' as Char)
+
+    // a cast is an expression like any other
+    total := ("40" as Int) + ("2" as Int)
+    println(total, (total as Float) / 8.0)
+
+    // objects: down to a subtype
+    pet: Animal = Dog("Rex")
+    println((pet as Dog).name, pet as? Dog, (Animal("Tom") as? Dog) == null)
+}

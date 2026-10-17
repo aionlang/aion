@@ -1,0 +1,5 @@
+// error: cannot apply `+` to Any and Int
+fn main() {
+    v: Any = 1
+    println(v + 1)
+}

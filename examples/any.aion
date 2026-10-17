@@ -1,0 +1,66 @@
+/**
+ * `Any` and casts: values whose type is only known while the program runs.
+ *
+ *   aion examples/any.aion
+ *
+ * Anything converts to an `Any`; to use the value again, test it with `is` (the variable then has that
+ * type in the branch) or take it out with `as` / `as?`.  `as` also converts between the basic types:
+ * `3 as Float`, `2.9 as Int`, `"42" as Int`, `7 as String`; `"x" as? Int` is `null` instead of an error.
+ */
+type Point(x: Int, y: Int)
+
+fn show(label: String, v: Any?) {
+    text := when v {
+        null -> "nothing"
+        is Int -> "the number ${v * 2} (doubled)"
+        is Float -> "the fraction $v"
+        is String -> "the text '$v' (${v.length()} letters)"
+        is Bool -> if v { "a yes" } else { "a no" }
+        is Point -> "a point at ${v.x}, ${v.y}"
+        else -> "something else: $v"
+    }
+    println("$label: $text")
+}
+
+fn sum(values: List<Any>) -> Float {
+    total := 0.0
+    for v in values {
+        total += when v {
+            is Int -> v as Float
+            is Float -> v
+            is String -> (v as? Float) ?: 0.0
+            else -> 0.0
+        }
+    }
+    return total
+}
+
+fn main() {
+    show("a", 21)
+    show("b", 2.5)
+    show("c", "hello")
+    show("d", false)
+    show("e", Point(3, 4))
+    show("f", null)
+    show("g", [1, 2, 3])
+
+    row: List<Any> = [1, 2.5, "4", "not a number", true]
+    println(sum(row))
+
+    record := Map<String, Any>()
+    record["name"] = "Ada"
+    record["born"] = 1815
+    println("${record["name"] as String} was born in ${record["born"] as Int}")
+    println((record["born"] as? String) ?: "born is not a string")
+}
+
+// > a: the number 42 (doubled)
+// > b: the fraction 2.5
+// > c: the text 'hello' (5 letters)
+// > d: a no
+// > e: a point at 3, 4
+// > f: nothing
+// > g: something else: [1, 2, 3]
+// > 7.5
+// > Ada was born in 1815
+// > born is not a string

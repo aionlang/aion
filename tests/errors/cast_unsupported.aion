@@ -1,0 +1,4 @@
+// error: a String cannot be converted to Char with `as`
+fn main() {
+    c := "a" as Char
+}

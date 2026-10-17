@@ -1,0 +1,4 @@
+// error: expected Any, found (Int) -> Int
+fn main() {
+    v: Any = { x: Int -> x }
+}

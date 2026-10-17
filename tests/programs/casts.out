@@ -1,6 +1,9 @@
-Rex fetches Tom purrs
-Rex fetches null Tom
-true true
-U U
-null
-[d1 fetches, d2 fetches]
+7 2 -2
+65 B 1 false true
+7 2.75 true z same
+42 2.5 true false
+42 null 2.5 null null true
+7 2 3
+3 c
+42 5.25
+Rex Dog(name=Rex) true
