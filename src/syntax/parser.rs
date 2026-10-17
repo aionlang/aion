@@ -680,6 +680,13 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+
+    /// A `when` arm that starts with `is` or `!is`: a test of the subject's type.
+    fn at_is_arm(&self) -> bool {
+        let is = |at: usize| self.peek_at(at) == Some(Token::Ident) && self.text(self.toks[self.pos + at]) == "is";
+        let type_follows = |at: usize| self.peek_at(at + 1) == Some(Token::Ident);
+        (is(0) && type_follows(0)) || (self.peek() == Some(Token::Bang) && is(1) && type_follows(1))
+    }
     /// Does the next token start a member of a type body (rather than an enum variant)?
     fn member_starts(&self) -> bool {
         let word = self.text(self.toks[self.pos]);
@@ -1776,6 +1783,10 @@ impl<'a> Parser<'a> {
     fn when_expr(&mut self) -> Result<Expr> {
         let start = self.bump().span;
         let subject = if self.peek() == Some(Token::LBrace) { None } else { Some(self.header_expr()?) };
+        let subject_name = match &subject {
+            Some(Expr { kind: ExprKind::Name(n), .. }) => Some(n.clone()),
+            _ => None,
+        };
         self.expect(Token::LBrace)?;
 
         let tmp = format!("$w{}", start.start);
@@ -1803,7 +1814,18 @@ impl<'a> Parser<'a> {
                 }
                 let mut cond: Option<Expr> = None;
                 loop {
-                    let c = if p.peek() == Some(Token::In) {
+                    let c = if p.at_is_arm() {
+                        let negated = p.eat(Token::Bang);
+                        let at = p.bump().span; // `is`
+                        let Some(subject_span) = subject_span else {
+                            return Err(Diagnostic::new("`is` arms need a `when <value>`", at));
+                        };
+                        let ty = p.type_ref()?;
+                        // a plain variable is tested itself, so it is smart-cast inside the branch
+                        let tested = subject_name.clone().unwrap_or_else(|| tmp.clone());
+                        let value = Expr { kind: ExprKind::Name(tested), span: subject_span };
+                        Expr { kind: ExprKind::Is { value: Box::new(value), ty, negated }, span: at.to(p.prev_span()) }
+                    } else if p.peek() == Some(Token::In) {
                         let at = p.bump().span;
                         let Some(subject_span) = subject_span else {
                             return Err(Diagnostic::new("`in` arms need a `when <value>`", at));

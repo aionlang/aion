@@ -1,0 +1,42 @@
+/**
+ * `is` and `!is` arms in a `when` test the type of its subject.  When the subject is a plain
+ * variable it is smart-cast inside the branch, as after `if x is Dog`.
+ */
+open type Animal(name: String)
+type Dog(name: String) : Animal(name) {
+    fn bark() = "$name says woof"
+}
+type Cat(name: String) : Animal(name) {
+    fn purr() = "$name purrs"
+}
+type Fish(name: String) : Animal(name)
+
+fn speak(a: Animal) = when a {
+    is Dog -> a.bark()
+    is Cat -> a.purr()
+    else -> "${a.name} is silent"
+}
+println(speak(Dog("Rex")))
+println(speak(Cat("Tom")))
+println(speak(Fish("Nemo")))
+
+fn kind(a: Animal) = when a {
+    is Dog, is Cat -> "pet"
+    !is Fish -> "other"
+    else -> "fish"
+}
+println(kind(Dog("a")), kind(Fish("b")), kind(Animal("c")))
+
+// the subject can be any expression; it is evaluated once
+n := 0
+fn pick() -> Animal {
+    n += 1
+    return n == 1 ? Dog("first") : Cat("later")
+}
+println(when pick() { is Dog -> "dog"; is Cat -> "cat"; else -> "?" }, n)
+
+// with interfaces
+interface Named { fn label() -> String }
+type Box(v: Int) { fn label() = "box $v" }
+shape: Named = Box(3)
+println(when shape { is Box -> "a box"; else -> "unknown" })
