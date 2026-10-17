@@ -1177,6 +1177,22 @@ fn Err<T, E>(error: E) -> Result<T, E> = Result<T, E>(false, error: error)
 // Run `action`; a panic inside it becomes an `Err` holding the message.
 fn runCatching<T>(action: () -> T) -> Result<T, String> = try { Ok(action()) } catch e { Err(e) }
 
+// ── Assertions, for tests (`aion test`) ─────────────────────────────────────────────────────────
+/**
+ * Stop the program with `message` unless `condition` holds.  `aion test` counts a program that stops as failed.
+ */
+fn assert(condition: Bool, message: String = "assertion failed") {
+    if !condition { panic(message) }
+}
+
+/** Stop the program unless `actual == expected`, saying what each was. */
+fn assertEq<T>(actual: T, expected: T, message: String = "") {
+    if actual != expected {
+        prefix := message.isEmpty() ? "" : "$message: "
+        panic("${prefix}expected $expected but got $actual")
+    }
+}
+
 // ── Support for `defer` and `try` (the compiler calls these; not for direct use) ──
 extern fn __defer_push(action: () -> Unit) = "aion_defer_push"
 extern fn __defer_mark() -> Int = "aion_defer_mark"

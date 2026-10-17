@@ -8,11 +8,13 @@ mod cache;
 mod codegen;
 mod diag;
 mod embedded;
+mod format;
 mod loader;
 mod manage;
 mod project;
 mod sema;
 mod syntax;
+mod testing;
 mod toolchain;
 
 use std::path::{Path, PathBuf};
@@ -27,6 +29,9 @@ usage:
   aion [run] [file.aion] [args…]      compile and run (default: the project's entry)
   aion build [file.aion] [-o <out>]   compile to a native executable
   aion emit-ir [file.aion]            print the generated LLVM IR
+  aion check [file.aion]              type-check without building anything
+  aion test [path…]                   run the programs in tests/ (each passes if it exits with status 0)
+  aion fmt [--check] [path…]          tidy whitespace in .aion files
   aion new <name>                     create a project directory
   aion add <source> [--as NAME] [--tag T|--branch B|--rev R] [--script FILE] [--yes]
                                       add a dependency (a git repo like github.com/me/http@v1, or a path)
@@ -55,6 +60,7 @@ enum Subcommand {
     Run,
     Build,
     EmitIr,
+    Check,
     New,
     Fetch,
     Clean,
@@ -86,11 +92,12 @@ fn parse_args(args: &[String]) -> Result<Cli, String> {
                 program_args.extend(it.by_ref().cloned());
                 break;
             }
-            "run" | "build" | "emit-ir" | "new" | "fetch" | "clean" if command.is_none() && input.is_none() => {
+            "run" | "build" | "emit-ir" | "check" | "new" | "fetch" | "clean" if command.is_none() && input.is_none() => {
                 command = Some(match arg.as_str() {
                     "run" => Subcommand::Run,
                     "build" => Subcommand::Build,
                     "emit-ir" => Subcommand::EmitIr,
+                    "check" => Subcommand::Check,
                     "new" => Subcommand::New,
                     "fetch" => Subcommand::Fetch,
                     _ => Subcommand::Clean,
@@ -294,6 +301,11 @@ fn manage_command(command: &str, args: &[String]) -> ExitCode {
 
 fn run() -> Result<ExitCode, Failure> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    match args.first().map(String::as_str) {
+        Some("test") => return Ok(testing::test(&args[1..])),
+        Some("fmt") => return Ok(testing::fmt(&args[1..])),
+        _ => {}
+    }
     if let Some(command) = args.first().map(String::as_str).filter(|c| ["add", "remove", "update", "tree"].contains(c)) {
         return Ok(manage_command(command, &args[1..]));
     }
@@ -341,6 +353,10 @@ fn run() -> Result<ExitCode, Failure> {
     let program = compile(&mut map, &entry, proj.as_ref(), cli.opts.trace).map_err(|(d, _)| (d, Some(map)))?;
 
     match cli.command {
+        Subcommand::Check => {
+            eprintln!("ok");
+            Ok(ExitCode::SUCCESS)
+        }
         Subcommand::EmitIr => {
             print!("{}", program.ir);
             Ok(ExitCode::SUCCESS)

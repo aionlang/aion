@@ -1,0 +1,13 @@
+// exit: 1
+// stderr: expected 4 but got 5
+/**
+ * `assert(condition, message?)` and `assertEq(actual, expected, message?)` stop the program when they do not
+ * hold; `aion test` treats a program that stops as a failed test.
+ */
+assert(1 + 1 == 2)
+assertEq("a" + "b", "ab")
+assertEq([1, 2].size(), 2)
+assertEq(2.5, 2.5, "floats")
+println("so far so good")
+assertEq(2 + 3, 4, "arithmetic")
+println("not reached")

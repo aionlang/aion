@@ -967,3 +967,40 @@ fn enums_work_across_modules() {
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(stdout(&out), "lib loaded\nRed Green true [Red, Green]\n2\n");
 }
+
+#[test]
+fn aion_check_aion_fmt_and_aion_test() {
+    let root = scratch("tooling");
+    write(&root.join("good.aion"), "println(\"hi\")\n");
+    write(&root.join("bad.aion"), "x: Int := \"no\"\n");
+    let ok = aion_in(&root, &["check", "good.aion"]);
+    assert!(ok.status.success(), "{}", stderr(&ok));
+    assert_eq!(stdout(&ok), "", "check must not run the program");
+    let bad = aion_in(&root, &["check", "bad.aion"]);
+    assert!(!bad.status.success());
+    assert!(stderr(&bad).contains("type_mismatch") || stderr(&bad).contains("bad.aion"), "{}", stderr(&bad));
+
+    // fmt
+    write(&root.join("messy.aion"), "fn f() {  \n\treturn 1\n}\n\n\n\nx := f()");
+    let check = aion_in(&root, &["fmt", "--check", "messy.aion"]);
+    assert!(!check.status.success(), "a messy file fails --check");
+    let before = "fn f() {  \n\treturn 1\n}\n\n\n\nx := f()";
+    assert_eq!(std::fs::read_to_string(root.join("messy.aion")).unwrap(), before, "--check must not write");
+    let done = aion_in(&root, &["fmt", "messy.aion"]);
+    assert!(done.status.success(), "{}", stderr(&done));
+    assert_eq!(std::fs::read_to_string(root.join("messy.aion")).unwrap(), "fn f() {\n    return 1\n}\n\nx := f()\n");
+    assert!(aion_in(&root, &["fmt", "--check", "messy.aion"]).status.success());
+
+    // test
+    write(&root.join("tests/passes.aion"), "assertEq(1 + 1, 2)\n");
+    write(&root.join("tests/_helper.aion"), "panic(\"a helper is not a test\")\n");
+    write(&root.join("tests/more/fails.aion"), "assertEq(1 + 1, 3, \"sum\")\n");
+    let run = aion_in(&root, &["test", "tests/passes.aion"]);
+    assert!(run.status.success(), "{}", stderr(&run));
+    assert!(stderr(&run).contains("1 passed, 0 failed"), "{}", stderr(&run));
+    let all = aion_in(&root, &["test"]);
+    let text = stderr(&all);
+    assert!(!all.status.success(), "{text}");
+    assert!(text.contains("ok") && text.contains("FAIL") && text.contains("sum: expected 3 but got 2"), "{text}");
+    assert!(text.contains("1 passed, 1 failed") && !text.contains("helper"), "{text}");
+}

@@ -4,4 +4,5 @@ pub mod ast;
 mod lexer;
 mod parser;
 
+pub use lexer::{Token, lex};
 pub use parser::parse_module;
