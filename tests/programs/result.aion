@@ -1,0 +1,51 @@
+/**
+ * `Result<T, E>` is either `Ok(value)` or `Err(error)`.  `r?` unwraps an `Ok`; for an `Err` it returns that
+ * error from the enclosing function, so a chain of fallible steps reads straight down.
+ * `r?.method()` is `(r?).method()`.
+ */
+fn parse(text: String) -> Result<Int, String> {
+    n := text.toIntOrNull() ?: return Err("not a number: $text")
+    return Ok(n)
+}
+
+fn half(n: Int) -> Result<Int, String> = n % 2 == 0 ? Ok(n / 2) : Err("$n is odd")
+
+fn parseAndHalf(text: String) -> Result<Int, String> {
+    n := parse(text)?
+    return half(n)
+}
+
+fn total(texts: List<String>) -> Result<Int, String> {
+    sum := 0
+    for t in texts { sum += parse(t)? }
+    return Ok(sum)
+}
+
+fn shout(text: String) -> Result<String, String> = Ok(parse(text)?.toString().upper() + "!")
+
+println(parse("42"), parse("x"))
+println(parseAndHalf("10"), parseAndHalf("7"), parseAndHalf("seven"))
+println(total(["1", "2", "3"]), total(["1", "two", "3"]))
+println(shout("5"), shout("five"))
+
+r := parse("8")
+println(r.isOk(), r.isErr(), r.unwrap(), r.unwrapOr(0), parse("z").unwrapOr(-1))
+println(parse("3").map { it * 10 }, parse("q").map { it * 10 })
+println(parse("4").andThen { half(it) }, parse("5").andThen { half(it) })
+println(parse("q").mapError { it.length() }, parse("q").unwrapErr(), parse("1").getOrNull(), parse("1").errorOrNull())
+println(runCatching { [1, 2][5] }, runCatching { 3 })
+
+// a Result of your own type, and the function-level defer still runs when `?` returns
+type Point(x: Int, y: Int)
+fn point(a: String, b: String) -> Result<Point, String> {
+    defer println("  (point done)")
+    return Ok(Point(parse(a)?, parse(b)?))
+}
+println(point("1", "2"))
+println(point("1", "b"))
+
+fn first(xs: List<String>) -> Result<Float, String> {
+    if xs.isEmpty() { return Err("empty") }
+    return Ok(parse(xs[0])?.toFloat() / 2.0)
+}
+println(first(["5"]), first([]), first(["x"]))

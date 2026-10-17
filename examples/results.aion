@@ -1,0 +1,40 @@
+/**
+ * Errors as values: `Result<T, E>` is `Ok(value)` or `Err(error)`.
+ *
+ *   aion examples/results.aion
+ *
+ * A function that can fail says so in its type.  `r?` gives the value of an `Ok` and, for an `Err`, returns
+ * that error from the enclosing function right away, so the steps of a job read in a straight line.  Panics are
+ * for bugs; `runCatching { … }` turns one into an `Err` when you need to.
+ */
+fn parseAge(text: String) -> Result<Int, String> {
+    age := text.trim().toIntOrNull() ?: return Err("'$text' is not a number")
+    if age < 0 || age > 150 { return Err("$age is not a believable age") }
+    return Ok(age)
+}
+
+type Person(name: String, age: Int)
+
+fn parsePerson(line: String) -> Result<Person, String> {
+    parts := line.split(",")
+    if parts.size() != 2 { return Err("expected 'name,age' but got '$line'") }
+    return Ok(Person(parts[0].trim(), parseAge(parts[1])?))
+}
+
+for line in ["Ada, 36", "Bob, x", "Cy, 200", "no comma"] {
+    when {
+        parsePerson(line).isOk() -> println("ok:", parsePerson(line).unwrap())
+        else -> println("error:", parsePerson(line).unwrapErr())
+    }
+}
+
+people := ["Ann, 30", "Ben, 25"].map { parsePerson(it) }
+println(people.map { it.map { p -> p.name } })
+println(parseAge("40").map { it + 1 }.unwrapOr(0), parseAge("-5").unwrapOr(0))
+
+// > ok: Person(name=Ada, age=36)
+// > error: ' x' is not a number
+// > error: 200 is not a believable age
+// > error: expected 'name,age' but got 'no comma'
+// > [Ok(Ann), Ok(Ben)]
+// > 41 0

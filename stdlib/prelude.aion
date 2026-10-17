@@ -1117,6 +1117,66 @@ type Channel<T>(capacity: Int = 0) {
     }
 }
 
+// ── Result ──────────────────────────────────────────────────────────────────────────────────────
+/**
+ * Either a success value (`Ok(v)`) or an error (`Err(e)`), for operations that can fail in ordinary ways.
+ *
+ *     fn parse(text: String) -> Result<Int, String> {
+ *         n := text.toIntOrNull() ?: return Err("not a number: $text")
+ *         return Ok(n)
+ *     }
+ *     fn doubled(text: String) -> Result<Int, String> = Ok(parse(text)? * 2)
+ *
+ * `r?` is the value of `r` if it is an `Ok`; if it is an `Err`, the function returns that error at once
+ * (its own result type must be a `Result` with the same error type).  `r?.method()` means `(r?).method()`.
+ * Elsewhere take a result apart with `isOk()`, `getOrNull()`, `unwrapOr(x)`, `map`, `andThen`, or a `when`
+ * over `r.isOk()`.  The compiler reads the fields `ok`, `value` and `error` in this order for `?`.
+ */
+type Result<T, E>(ok: Bool, value: T? = null, error: E? = null) {
+    fn isOk() = ok
+    fn isErr() = !ok
+
+    // The value; stops the program with the error if there is none.
+    fn unwrap() -> T {
+        if !ok { panic("called unwrap on an Err: $error") }
+        return value!!
+    }
+
+    fn unwrapOr(fallback: T) -> T = ok ? value!! : fallback
+
+    // The error; stops the program if the result is an Ok.
+    fn unwrapErr() -> E {
+        if ok { panic("called unwrapErr on an Ok") }
+        return error!!
+    }
+
+    fn getOrNull() -> T? = value
+    fn errorOrNull() -> E? = error
+
+    fn map<R>(transform: (T) -> R) -> Result<R, E> {
+        if !ok { return Err(error!!) }
+        return Ok(transform(value!!))
+    }
+
+    fn mapError<F>(transform: (E) -> F) -> Result<T, F> {
+        if ok { return Ok(value!!) }
+        return Err(transform(error!!))
+    }
+
+    fn andThen<R>(next: (T) -> Result<R, E>) -> Result<R, E> {
+        if !ok { return Err(error!!) }
+        return next(value!!)
+    }
+
+    fn toString() = ok ? "Ok($value)" : "Err($error)"
+}
+
+fn Ok<T, E>(value: T) -> Result<T, E> = Result<T, E>(true, value: value)
+fn Err<T, E>(error: E) -> Result<T, E> = Result<T, E>(false, error: error)
+
+// Run `action`; a panic inside it becomes an `Err` holding the message.
+fn runCatching<T>(action: () -> T) -> Result<T, String> = try { Ok(action()) } catch e { Err(e) }
+
 // ── Support for `defer` and `try` (the compiler calls these; not for direct use) ──
 extern fn __defer_push(action: () -> Unit) = "aion_defer_push"
 extern fn __defer_mark() -> Int = "aion_defer_mark"

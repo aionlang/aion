@@ -1435,6 +1435,12 @@ impl<'a> Parser<'a> {
                     let span = e.span.to(field.span);
                     e = Expr { kind: ExprKind::Field(Box::new(e), field), span };
                 }
+                // `r?`: unless an expression follows it, which would make it a conditional `c ? a : b`
+                Some(Token::Question) if !self.nl() && !self.expression_follows_question() => {
+                    let end = self.bump().span;
+                    let span = e.span.to(end);
+                    e = Expr { kind: ExprKind::Propagate(Box::new(e)), span };
+                }
                 Some(Token::QuestionDot) => {
                     self.bump();
                     let field = self.ident()?;

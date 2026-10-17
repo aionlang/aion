@@ -1929,6 +1929,8 @@ impl<'c, 'a> Cx<'c, 'a> {
             A::Try { body, catch_name, handler } => {
                 self.try_expr(body, catch_name.as_ref(), handler, expected, e.span)
             }
+            A::If { cond, then, otherwise } => self.if_value(cond, then, otherwise.as_deref(), e.span, expected),
+            A::Block(stmts) => self.block_value(stmts, expected),
             _ => self.expr(e),
         }
     }
@@ -2368,9 +2370,9 @@ impl<'c, 'a> Cx<'c, 'a> {
                 self.binary(*op, l, r, e.span)?
             }
 
-            A::If { cond, then, otherwise } => self.if_value(cond, then, otherwise.as_deref(), e.span)?,
+            A::If { cond, then, otherwise } => self.if_value(cond, then, otherwise.as_deref(), e.span, None)?,
 
-            A::Block(stmts) => self.block_value(stmts)?,
+            A::Block(stmts) => self.block_value(stmts, None)?,
 
             A::Index { obj, index } => {
                 let o = self.value(obj)?;
@@ -2397,6 +2399,11 @@ impl<'c, 'a> Cx<'c, 'a> {
             }
 
             A::Elvis(value, fallback) => self.elvis(value, fallback)?,
+
+            A::Propagate(inner) => {
+                let recv = self.value(inner)?;
+                self.propagate(recv, e.span)?
+            }
 
             A::SafeField(obj, field) => {
                 let recv = self.value(obj)?;
@@ -2449,7 +2456,7 @@ impl<'c, 'a> Cx<'c, 'a> {
     }
 
     /// Statements followed by a value: the last expression of the block.
-    fn block_value(&mut self, stmts: &[ast::Stmt]) -> Result<hir::Expr> {
+    fn block_value(&mut self, stmts: &[ast::Stmt], expected: Option<Ty>) -> Result<hir::Expr> {
         self.scopes.push(HashMap::new());
         self.block_defers.push(None);
         let saved = self.narrowed.clone();
@@ -2460,7 +2467,7 @@ impl<'c, 'a> Cx<'c, 'a> {
                 match &s.kind {
                     StmtKind::Expr(e) if i + 1 == stmts.len() => {
                         self.kill_before(s);
-                        tail = self.expr(e)?;
+                        tail = self.expr_expected(e, expected)?;
                     }
                     _ => self.stmt_narrowing(s, &mut out)?,
                 }
@@ -2497,13 +2504,14 @@ impl<'c, 'a> Cx<'c, 'a> {
         then: &[ast::Stmt],
         otherwise: Option<&[ast::Stmt]>,
         span: Span,
+        expected: Option<Ty>,
     ) -> Result<hir::Expr> {
         let test = cond;
         let cond = self.condition(test)?;
         let (when_true, when_false) = (self.facts(test, true), self.facts(test, false));
-        let mut then = self.with_facts(when_true, |cx| cx.block_value(then))?;
+        let mut then = self.with_facts(when_true, |cx| cx.block_value(then, expected))?;
         let mut other = match otherwise {
-            Some(b) => self.with_facts(when_false, |cx| cx.block_value(b))?,
+            Some(b) => self.with_facts(when_false, |cx| cx.block_value(b, expected))?,
             None => unit(),
         };
         if otherwise.is_none() && then.ty != Ty::Void {
@@ -3185,12 +3193,69 @@ impl<'c, 'a> Cx<'c, 'a> {
     /// ```
     ///
     /// The result is optional (a plain `R` becomes `R?`); an access that produces nothing runs for effect.
+    /// The `Result<T, E>` type behind `ty`, if it is one (the prelude's, whose fields are `ok`, `value`, `error`).
+    fn result_type(&self, ty: Ty) -> Option<TypeId> {
+        let Ty::Obj(t) = ty else { return None };
+        let info = self.ck.t.ty(t);
+        let names = ["ok", "value", "error"];
+        let shape = info.fields.len() == 3 && info.fields.iter().zip(names).all(|(f, n)| f.name == n);
+        (info.name.starts_with("Result<") && shape).then_some(t)
+    }
+
+    /// `result?`: the value of an `Ok`; for an `Err`, return from the function with the same error.
+    ///
+    /// ```text
+    /// { $r := result; if !$r.ok { return Result<U, E>(false, null, $r.error) }; $r.value!! }
+    /// ```
+    fn propagate(&mut self, recv: hir::Expr, span: Span) -> Result<hir::Expr> {
+        let Some(from) = self.result_type(recv.ty) else {
+            return Err(Diagnostic::new(format!("`?` needs a Result, found a {}", self.name(recv.ty)), span)
+                .hint("for a value that may be null, use `?:` or `!!`"));
+        };
+        let Some((to, Ty::Obj(_))) = self.ret.and_then(|r| self.result_type(r).map(|t| (t, r))) else {
+            return Err(Diagnostic::new("`?` can only be used in a function that returns a Result", span)
+                .hint("declare it with a result type, e.g. `-> Result<Int, String>`"));
+        };
+        let (from_fields, to_fields) = (self.ck.t.ty(from).fields.clone(), self.ck.t.ty(to).fields.clone());
+        if from_fields[2].ty != to_fields[2].ty {
+            let plain = |t: Ty| self.nullable_parts(t).map_or(t, |p| p.0);
+            let (a, b) = (self.name(plain(from_fields[2].ty)), self.name(plain(to_fields[2].ty)));
+            return Err(Diagnostic::new(format!("this Result has the error type {a}, but the function's has {b}"), span)
+                .hint("convert the error first with `mapError`"));
+        }
+        let tmp = self.new_local("$res", recv.ty);
+        let field = |cx: &Self, index: usize| mk(K::Field { obj: Box::new(cx.local_expr(tmp)), index }, from_fields[index].ty);
+        let (ok, error) = (field(self, 0), field(self, 2));
+        let no_value = self.coerce(mk(K::Null, Ty::Null), to_fields[1].ty, span)?;
+        let ctor = self.ctor_of(to, span)?;
+        let failure = self.call_values(
+            ctor,
+            None,
+            vec![(mk(K::Bool(false), Ty::Bool), span), (no_value, span), (error, span)],
+            span,
+        )?;
+        let mut leave = Vec::new();
+        self.emit_return(Some(failure), &mut leave)?;
+        let bail = mk(K::Block(leave, Box::new(unit())), Ty::Void);
+        let check = mk(K::Cond { cond: Box::new(mk(K::Not(Box::new(ok)), Ty::Bool)), then: Box::new(bail), otherwise: Box::new(unit()) }, Ty::Void);
+        let Some((plain, _)) = self.nullable_parts(from_fields[1].ty) else {
+            return Err(Diagnostic::new("a Result's value cannot be read here", span));
+        };
+        let value = mk(K::Unwrap(Box::new(field(self, 1))), plain);
+        Ok(mk(K::Block(vec![hir::Stmt::Let(tmp, Some(recv)), hir::Stmt::Expr(check)], Box::new(value)), plain))
+    }
+
     fn safe_access(
         &mut self,
         recv: hir::Expr,
         span: Span,
         access: impl FnOnce(&mut Self, hir::Expr) -> Result<hir::Expr>,
     ) -> Result<hir::Expr> {
+        // `result?.name` is `(result?).name`: a Result is never null, so `?.` can only mean that
+        if self.result_type(recv.ty).is_some() {
+            let plain = self.propagate(recv, span)?;
+            return access(self, plain);
+        }
         let Some((plain, boxed)) = self.nullable_parts(recv.ty) else {
             return Err(Diagnostic::new(format!("a {} is never null, so `?.` is pointless", self.name(recv.ty)), span)
                 .hint("use `.` instead"));

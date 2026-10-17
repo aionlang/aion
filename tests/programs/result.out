@@ -1,0 +1,14 @@
+Ok(42) Err(not a number: x)
+Ok(5) Err(7 is odd) Err(not a number: seven)
+Ok(6) Err(not a number: two)
+Ok(5!) Err(not a number: five)
+true false 8 8 -1
+Ok(30) Err(not a number: q)
+Ok(2) Err(5 is odd)
+Err(15) not a number: q 1 null
+Err(index 5 is out of bounds for size 2) Ok(3)
+  (point done)
+Ok(Point(x=1, y=2))
+  (point done)
+Err(not a number: b)
+Ok(2.5) Err(empty) Err(not a number: x)

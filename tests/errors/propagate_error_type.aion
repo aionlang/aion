@@ -1,0 +1,5 @@
+// error: this Result has the error type String, but the function's has Int
+fn parse(s: String) -> Result<Int, String> = Ok(1)
+fn run() -> Result<Int, Int> {
+    return Ok(parse("1")?)
+}

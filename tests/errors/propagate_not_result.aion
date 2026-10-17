@@ -1,0 +1,5 @@
+// error: `?` needs a Result, found a Int
+fn run() -> Result<Int, String> {
+    x := 5
+    return Ok(x?)
+}

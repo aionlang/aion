@@ -251,6 +251,8 @@ pub enum ExprKind {
     Null,
     /// `x is Dog` / `x !is Dog`
     Is { value: Box<Expr>, ty: TypeRef, negated: bool },
+    /// `r?` on a `Result`: its value, or return its error from the function.
+    Propagate(Box<Expr>),
     /// `x as Dog` (fails if it is not one) / `x as? Dog` (null if it is not one)
     Cast { value: Box<Expr>, ty: TypeRef, safe: bool },
     /// `try { … } catch e { … }`: the value of the block, or of the handler if something panicked.
