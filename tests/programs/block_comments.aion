@@ -1,0 +1,21 @@
+/*
+ * Block comments, `/* … */`, span lines and nest.
+ *
+ * /** This form documents the declaration after it. */
+ */
+
+/** Adds two numbers.  `/* inside */` is just text here. */
+fn add(a: Int, b: Int) = a + b
+
+println(add(1, 2)) /* trailing */ // 3
+x := 1 /* in the middle */ + /* of an expression */ 2
+println(x)                                    // 3
+
+/* a comment does not end a statement by itself,
+   but the line break inside it counts as one */
+y := 10
+/*
+println("commented out /* even with a nested comment */")
+*/
+println(y)
+println("/* not a comment */")

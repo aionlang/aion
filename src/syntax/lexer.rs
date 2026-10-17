@@ -161,6 +161,7 @@ pub enum Token {
     // ── trivia ──────────────────────────────────────────────────
     #[regex(r"[ \t\r\n\f]+", logos::skip)]
     #[regex(r"//[^\n]*", logos::skip, allow_greedy = true)]
+    #[token("/*", lex_block_comment)]
     Trivia,
 }
 
@@ -233,6 +234,31 @@ impl Token {
             Token::Trivia => "whitespace",
         }
     }
+}
+
+/// A block comment (slash-star ... star-slash) may span lines and nest, so a stretch of code that
+/// already holds comments can be commented out.  The doc form, with two stars, is a comment like
+/// any other to the compiler.  The callback runs after the opening slash-star.
+fn lex_block_comment(lex: &mut logos::Lexer<Token>) -> logos::FilterResult<(), ()> {
+    let rest = lex.remainder().as_bytes();
+    let (mut depth, mut i) = (1, 0);
+    while i < rest.len() {
+        if rest[i..].starts_with(b"/*") {
+            depth += 1;
+            i += 2;
+        } else if rest[i..].starts_with(b"*/") {
+            depth -= 1;
+            i += 2;
+            if depth == 0 {
+                lex.bump(i);
+                return logos::FilterResult::Skip;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    lex.bump(rest.len());
+    logos::FilterResult::Error(())
 }
 
 /// Consume the rest of a string literal after its opening quote.
@@ -344,6 +370,9 @@ pub fn lex(file: u32, src: &str, base: usize) -> Result<Vec<Tok>> {
             Ok(kind) => out.push(Tok { kind, span, nl }),
             Err(()) if lexer.source()[r.start..].starts_with('"') || lexer.source()[r.start..].starts_with("r\"") => {
                 return Err(Diagnostic::new("unterminated string literal", span));
+            }
+            Err(()) if lexer.source()[r.start..].starts_with("/*") => {
+                return Err(Diagnostic::new("unterminated block comment", span));
             }
             Err(()) => {
                 return Err(Diagnostic::new(
