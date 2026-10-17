@@ -969,6 +969,25 @@ fn enums_work_across_modules() {
 }
 
 #[test]
+fn synonyms_work_across_modules() {
+    let root = scratch("synonyms");
+    write(
+        &root.join("lib.aion"),
+        "synonym Stock = Map<String, Int>\nsynonym Pair<A> = (A, A)\nfn fresh() -> Stock { s := Stock()\n s[\"a\"] = 1\n return s }\n",
+    );
+    write(
+        &root.join("main.aion"),
+        "import lib\nfrom lib import Stock\n\
+         a: Stock = lib.fresh()\nb: lib.Stock = lib.Stock()\nb[\"z\"] = 2\n\
+         p: lib.Pair<Int> = (1, 2)\n\
+         println(a.size(), b.size(), p)\n",
+    );
+    let out = aion_in(&root, &["main.aion"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "1 1 (1, 2)\n");
+}
+
+#[test]
 fn aion_check_aion_fmt_and_aion_test() {
     let root = scratch("tooling");
     write(&root.join("good.aion"), "println(\"hi\")\n");

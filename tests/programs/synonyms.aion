@@ -1,0 +1,56 @@
+/**
+ * `synonym Name = Type` gives a type another name.  The two are the very same type, so they can be
+ * mixed freely: a function taking a `Cache` accepts a `Map<String, Int>` and the other way round.
+ * A synonym can take type parameters (`synonym Table<V> = Map<String, V>`), can name a function type
+ * or an optional, and can be called like the type's constructor.  `typealias` is a second spelling.
+ */
+synonym Cache = Map<String, Int>
+synonym Table<V> = Map<String, V>
+synonym Callback = (Int) -> Int
+synonym MaybeName = String?
+typealias Names = List<String>
+
+type Point(x: Int, y: Int)
+synonym Pt = Point
+
+fn fill(c: Cache) -> Cache {
+    c["a"] = 1
+    c["b"] = 2
+    return c
+}
+
+fn total(c: Map<String, Int>) -> Int {
+    sum := 0
+    for k in c.keys() { sum += c[k] }
+    return sum
+}
+
+fn apply(f: Callback, x: Int) -> Int = f(x)
+
+fn greet(n: MaybeName) -> String = if n == null { "nobody" } else { "hi " + n }
+
+c := Cache()
+fill(c)
+println(total(c), c.size())
+
+t: Table<Bool> = Table<Bool>()
+t["yes"] = true
+println(t["yes"], t.size())
+
+println(apply({ x -> x * 2 }, 21))
+println(greet(null), greet("sam"))
+
+names := Names()
+names.add("x")
+names.add("y")
+println(names.size(), names)
+
+p := Pt(3, 4)
+q: Point = p
+println(p.x + q.y)
+
+// a synonym of a synonym
+synonym Index = Cache
+i: Index = Cache()
+i["z"] = 26
+println(i["z"])

@@ -60,6 +60,8 @@ pub enum Item {
     Fn(FnDecl),
     Type(TypeDecl),
     Interface(InterfaceDecl),
+    /// `synonym Name = Type` (or `typealias`)
+    Alias(AliasDecl),
     /// `fn Animal.speak() { ... }` — a method declared outside its type.
     /// For a generic type, `fn List<T>.first()` names the type's parameters.
     Method { owner: Ident, owner_params: Vec<Ident>, decl: FnDecl },
@@ -155,6 +157,14 @@ pub struct ParentRef {
     /// Arguments for the parent's constructor, evaluated with the child's parameters in scope.
     pub args: Vec<Arg>,
     pub span: Span,
+}
+
+/// `synonym Scope<V> = Map<String, V>`: another name for a type.
+#[derive(Debug)]
+pub struct AliasDecl {
+    pub name: Ident,
+    pub type_params: Vec<Ident>,
+    pub target: TypeRef,
 }
 
 /// `interface Shape { fn area() -> Float }`: the methods a type must have to be used as a `Shape`.

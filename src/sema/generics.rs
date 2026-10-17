@@ -69,6 +69,13 @@ impl<'a> Checker<'a> {
                         };
                         Ok(self.t.array_of(self.resolve_value_type(module, elem, subst)?))
                     }
+                    Some(Sym::Alias(a)) => {
+                        let targs = args
+                            .iter()
+                            .map(|a| self.resolve_value_type(module, a, subst))
+                            .collect::<Result<Vec<_>>>()?;
+                        self.resolve_alias(a, targs, ty.span)
+                    }
                     Some(Sym::GenericIface(g)) => {
                         if args.is_empty() {
                             return Err(Diagnostic::new(format!("`{name}` needs type arguments"), ty.span)
@@ -94,6 +101,80 @@ impl<'a> Checker<'a> {
                 Ok(self.t.intern_fn(params, ret))
             }
         }
+    }
+
+    /// The type a `synonym` stands for, with its type parameters (if any) replaced by `targs`.
+    pub fn resolve_alias(&self, a: usize, targs: Vec<Ty>, span: Span) -> Result<Ty> {
+        let alias = self.aliases.borrow()[a].clone();
+        let name = &alias.decl.name.name;
+        let want = alias.decl.type_params.len();
+        if want == 0 && !targs.is_empty() {
+            return Err(Diagnostic::new(format!("`{name}` is not generic"), span));
+        }
+        if targs.len() != want {
+            let params = alias.decl.type_params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", ");
+            return Err(Diagnostic::new(format!("`{name}` takes {want} type argument(s), not {}", targs.len()), span)
+                .hint(format!("write it like `{name}<{params}>`")));
+        }
+        if self.depth.get() > MAX_DEPTH {
+            return Err(Diagnostic::new(format!("`{name}` is defined in terms of itself"), alias.decl.name.span));
+        }
+        let subst: Subst = Rc::new(alias.decl.type_params.iter().map(|p| p.name.clone()).zip(targs).collect());
+        self.depth.set(self.depth.get() + 1);
+        let ty = self.resolve_type(alias.module, &alias.decl.target, &subst);
+        self.depth.set(self.depth.get() - 1);
+        ty
+    }
+
+    /// `ty` with every `synonym` in it replaced by what it stands for, so code that reads a type as written
+    /// (inferring type arguments from it, say) sees the real shape.
+    pub fn expand_synonyms(&self, module: usize, ty: &ast::TypeRef) -> ast::TypeRef {
+        self.expand_synonyms_at(module, ty, 0)
+    }
+
+    fn expand_synonyms_at(&self, module: usize, ty: &ast::TypeRef, depth: u32) -> ast::TypeRef {
+        let kind = match &ty.kind {
+            TypeKind::Named { name, args } => {
+                let args: Vec<ast::TypeRef> = args.iter().map(|a| self.expand_synonyms_at(module, a, depth)).collect();
+                if let Some(Sym::Alias(a)) = self.t.lookup(module, name)
+                    && depth < MAX_DEPTH
+                {
+                    let alias = self.aliases.borrow()[a].clone();
+                    if alias.decl.type_params.len() == args.len() {
+                        let target = self.expand_synonyms_at(alias.module, &alias.decl.target, depth + 1);
+                        let params: Vec<&str> = alias.decl.type_params.iter().map(|p| p.name.as_str()).collect();
+                        return Self::substitute_written(&target, &params, &args);
+                    }
+                }
+                TypeKind::Named { name: name.clone(), args }
+            }
+            TypeKind::Nullable(inner) => TypeKind::Nullable(Box::new(self.expand_synonyms_at(module, inner, depth))),
+            TypeKind::Fn { params, ret } => TypeKind::Fn {
+                params: params.iter().map(|p| self.expand_synonyms_at(module, p, depth)).collect(),
+                ret: Box::new(self.expand_synonyms_at(module, ret, depth)),
+            },
+        };
+        ast::TypeRef { kind, span: ty.span }
+    }
+
+    /// `ty` with the parameter names in `params` replaced by the written types `args`.
+    fn substitute_written(ty: &ast::TypeRef, params: &[&str], args: &[ast::TypeRef]) -> ast::TypeRef {
+        let kind = match &ty.kind {
+            TypeKind::Named { name, args: inner } if inner.is_empty() => match params.iter().position(|p| p == name) {
+                Some(i) => return args[i].clone(),
+                None => TypeKind::Named { name: name.clone(), args: Vec::new() },
+            },
+            TypeKind::Named { name, args: inner } => TypeKind::Named {
+                name: name.clone(),
+                args: inner.iter().map(|a| Self::substitute_written(a, params, args)).collect(),
+            },
+            TypeKind::Nullable(inner) => TypeKind::Nullable(Box::new(Self::substitute_written(inner, params, args))),
+            TypeKind::Fn { params: ps, ret } => TypeKind::Fn {
+                params: ps.iter().map(|p| Self::substitute_written(p, params, args)).collect(),
+                ret: Box::new(Self::substitute_written(ret, params, args)),
+            },
+        };
+        ast::TypeRef { kind, span: ty.span }
     }
 
     /// Like [`Self::resolve_type`], for places that hold a value (variables, fields, parameters).

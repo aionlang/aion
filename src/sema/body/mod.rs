@@ -600,6 +600,10 @@ impl<'c, 'a> Cx<'c, 'a> {
             Some(Sym::Type(id)) => Some(Named::Type(id)),
             Some(Sym::Global(id)) => Some(Named::Global(id)),
             Some(Sym::GenericFn(_) | Sym::GenericType(_) | Sym::GenericIface(_)) => Some(Named::Generic),
+            Some(Sym::Alias(a)) => Some(match self.ck.resolve_alias(a, Vec::new(), Span::default()) {
+                Ok(Ty::Obj(id)) => Named::Type(id),
+                _ => Named::Generic,
+            }),
             None => self.ck.t.scopes[self.module].modules.get(n).map(|&m| Named::Module(m)),
         }
     }
@@ -2104,6 +2108,21 @@ impl<'c, 'a> Cx<'c, 'a> {
         Ok(info.ctor)
     }
 
+    /// `Cache(…)` where `synonym Cache = Map<String, Int>`: a call of the constructor of the type it stands for.
+    fn call_alias(&mut self, a: usize, type_args: &[ast::TypeRef], args: &[ast::Arg], span: Span, name_span: Span) -> Result<hir::Expr> {
+        let targs = type_args
+            .iter()
+            .map(|t| self.ck.resolve_value_type(self.module, t, &self.subst))
+            .collect::<Result<Vec<_>>>()?;
+        match self.ck.resolve_alias(a, targs, name_span)? {
+            Ty::Obj(ty) => {
+                let ctor = self.ctor_of(ty, name_span)?;
+                self.call_fn(ctor, None, args, span)
+            }
+            other => Err(Diagnostic::new(format!("`{}` is not a type with a constructor", self.ck.t.ty_name(other)), name_span)),
+        }
+    }
+
     /// Is `to` an interface and `from` an ordinary type?
     fn is_upcast(&self, from: TypeId, to: TypeId) -> bool {
         self.ck.t.ty(to).iface.is_some() && self.ck.t.ty(from).iface.is_none() && self.ck.t.ty(from).array_elem.is_none()
@@ -2936,6 +2955,7 @@ impl<'c, 'a> Cx<'c, 'a> {
                     Some(Sym::Fn(_) | Sym::Type(_)) => Err(not_generic(n)),
                     Some(Sym::GenericFn(g)) => self.call_generic_fn(g, None, type_args, args, span, expected),
                     Some(Sym::GenericType(g)) => self.call_generic_type(g, type_args, args, span, expected),
+                    Some(Sym::Alias(a)) => self.call_alias(a, type_args, args, span, callee.span),
                     Some(Sym::GenericIface(_)) => {
                         Err(Diagnostic::new(format!("`{n}` is an interface, so it has no constructor"), callee.span)
                             .hint("create a type that implements it"))
@@ -2976,6 +2996,7 @@ impl<'c, 'a> Cx<'c, 'a> {
                                 Some(Sym::GenericType(g)) => {
                                     self.call_generic_type(g, type_args, args, span, expected)
                                 }
+                                Some(Sym::Alias(a)) => self.call_alias(a, type_args, args, span, member.span),
                                 Some(Sym::GenericIface(_)) => Err(Diagnostic::new(
                                     format!("`{what}` is an interface, so it has no constructor"),
                                     member.span,

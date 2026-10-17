@@ -184,6 +184,7 @@ impl Cx<'_, '_> {
     /// type an argument actually has, recording what each type parameter is.
     /// Mismatches are ignored here; they surface when the call is type-checked.
     fn unify(&self, tpl: &Template<'_>, written: &TypeRef, actual: Ty, bind: &mut [Option<Ty>]) {
+        let written = &self.ck.expand_synonyms(tpl.module, written);
         match &written.kind {
             TypeKind::Named { name, args } => {
                 if args.is_empty() {
@@ -237,6 +238,7 @@ impl Cx<'_, '_> {
     /// What a lambda passed for parameter type `written` must look like, as far
     /// as the type parameters bound so far tell.
     fn lambda_expectation(&self, tpl: &Template<'_>, written: &TypeRef, bind: &[Option<Ty>]) -> Option<LamSig> {
+        let written = &self.ck.expand_synonyms(tpl.module, written);
         let TypeKind::Fn { params, ret } = &written.kind else { return None };
         let mut map: HashMap<String, Ty> = (*tpl.base).clone();
         for (name, b) in tpl.tparams.iter().zip(bind) {

@@ -116,6 +116,12 @@ pub struct GenericType<'a> {
     pub instances: RefCell<HashMap<Vec<Ty>, TypeId>>,
 }
 
+/// `synonym Name<T> = Type`: resolved where it is used, with its parameters filled in.
+pub struct Alias<'a> {
+    pub module: usize,
+    pub decl: &'a ast::AliasDecl,
+}
+
 /// A generic interface: a template instantiated per list of type arguments.
 pub struct GenericIface<'a> {
     pub module: usize,
@@ -187,6 +193,8 @@ pub enum Sym {
     GenericType(usize),
     /// Index into the checker's generic interface templates.
     GenericIface(usize),
+    /// Index into the checker's `synonym` declarations.
+    Alias(usize),
 }
 
 /// Everything visible inside one module.
@@ -261,6 +269,7 @@ pub struct Checker<'a> {
     generic_fns: RefCell<Vec<Rc<GenericFn<'a>>>>,
     generic_types: RefCell<Vec<Rc<GenericType<'a>>>>,
     generic_ifaces: RefCell<Vec<Rc<GenericIface<'a>>>>,
+    aliases: RefCell<Vec<Rc<Alias<'a>>>>,
     /// For a type that is an instance of a generic one: which, and with what arguments.
     instance_of: RefCell<HashMap<TypeId, (usize, Vec<Ty>)>>,
     /// The same for instances of generic interfaces.
@@ -501,6 +510,7 @@ impl<'a> Checker<'a> {
             generic_fns: RefCell::new(Vec::new()),
             generic_types: RefCell::new(Vec::new()),
             generic_ifaces: RefCell::new(Vec::new()),
+            aliases: RefCell::new(Vec::new()),
             instance_of: RefCell::new(HashMap::new()),
             iface_instance_of: RefCell::new(HashMap::new()),
             module_names: loaded.modules.iter().map(|m| m.name.clone()).collect(),
@@ -552,6 +562,13 @@ impl<'a> Checker<'a> {
                     let g = v.len() - 1;
                     drop(v);
                     self.t.define(mi, &d.name, Sym::GenericIface(g))?;
+                }
+                Item::Alias(decl) => {
+                    let mut v = self.aliases.borrow_mut();
+                    v.push(Rc::new(Alias { module: mi, decl }));
+                    let a = v.len() - 1;
+                    drop(v);
+                    self.t.define(mi, &decl.name, Sym::Alias(a))?;
                 }
                 Item::Interface(d) => {
                     let id = self.t.add_type(TypeInfo {
@@ -1514,7 +1531,7 @@ fn unstable_globals(loaded: &Loaded) -> HashSet<String> {
                     td.methods.iter().for_each(|m| fn_decl(m, &mut anywhere));
                 }
                 Item::Stmt(s) => top_level.push(s),
-                Item::Interface(_) => {}
+                Item::Interface(_) | Item::Alias(_) => {}
             }
         }
     }

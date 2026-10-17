@@ -306,6 +306,8 @@ impl<'a> Parser<'a> {
                     variables.extend(lets);
                 }
                 Token::Interface => items.push(Item::Interface(self.interface_decl()?)),
+                // `synonym Scope<V> = Map<String, V>`; `typealias` means the same
+                Token::Ident if self.at_alias() => items.push(Item::Alias(self.alias_decl()?)),
                 Token::Extern => {
                     let start = self.bump().span;
                     self.expect(Token::Fn)?;
@@ -682,6 +684,22 @@ impl<'a> Parser<'a> {
 
 
     /// `val name =` / `val name:`: a read-only variable (`val` is a keyword only here).
+    /// `synonym Name =` / `typealias Name<T> =`: two names in a row can't start anything else.
+    fn at_alias(&self) -> bool {
+        matches!(self.text(self.toks[self.pos]), "synonym" | "typealias")
+            && self.peek_at(1) == Some(Token::Ident)
+            && matches!(self.peek_at(2), Some(Token::Eq | Token::Lt))
+    }
+
+    fn alias_decl(&mut self) -> Result<AliasDecl> {
+        self.bump(); // synonym
+        let name = self.ident()?;
+        let type_params = self.type_params()?;
+        self.expect(Token::Eq)?;
+        let target = self.type_ref()?;
+        Ok(AliasDecl { name, type_params, target })
+    }
+
     fn at_val(&self) -> bool {
         self.text(self.toks[self.pos]) == "val"
             && self.peek_at(1) == Some(Token::Ident)

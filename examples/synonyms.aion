@@ -1,0 +1,42 @@
+/**
+ * Synonyms: `synonym Name = Type` gives a type a shorter or more telling name.
+ *
+ *   aion examples/synonyms.aion
+ *
+ * A synonym is only another name, so it is the same type as what it names: a `Prices` can be passed
+ * where a `Map<String, Float>` is expected and the other way round.  It can take type parameters, and
+ * it can be called like the constructor of the type it names.  `typealias` is a second spelling.
+ */
+synonym Prices = Map<String, Float>
+synonym Table<V> = Map<String, V>
+synonym Predicate<T> = (T) -> Bool
+
+fn cheap(prices: Prices, limit: Float) -> List<String> {
+    names := List<String>()
+    for name in prices.keys() {
+        if prices[name] <= limit { names.add(name) }
+    }
+    return names.sorted()
+}
+
+fn count<T>(items: List<T>, test: Predicate<T>) -> Int {
+    n := 0
+    for item in items { if test(item) { n += 1 } }
+    return n
+}
+
+prices := Prices()
+prices["tea"] = 2.5
+prices["coffee"] = 3.0
+prices["cake"] = 4.5
+println(cheap(prices, 3.0))
+
+stock: Table<Int> = Table<Int>()
+stock["tea"] = 10
+println(stock.size())
+
+println(count([1, 2, 3, 4, 5], { n -> n > 2 }))
+
+// > [coffee, tea]
+// > 1
+// > 3
