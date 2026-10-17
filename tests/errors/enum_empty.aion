@@ -1,0 +1,2 @@
+// error: an enum needs at least one variant
+enum Nothing { }

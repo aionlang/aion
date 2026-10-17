@@ -987,6 +987,7 @@ impl<'c, 'a> Cx<'c, 'a> {
 
             StmtKind::For { var, iter, body } => self.for_loop(var, iter, body, out)?,
 
+            StmtKind::WhenCheck { subject, covered } => self.when_check(subject, covered, s.span, out)?,
             StmtKind::Break | StmtKind::Continue => self.jump_stmt(matches!(s.kind, StmtKind::Break), s.span, out)?,
 
             StmtKind::Defer(body) => {
@@ -1794,6 +1795,38 @@ impl<'c, 'a> Cx<'c, 'a> {
     }
 
     /// `module.name` where `module` is an imported module alias and `name` a global.
+    /// `Color.Red` / `module.Color.Red`: the variable holding an enum's variant.
+    fn enum_variant(&mut self, obj: &ast::Expr, field: &ast::Ident) -> Result<Option<GlobalId>> {
+        let Some(ty) = self.static_receiver(obj)? else { return Ok(None) };
+        let info = self.ck.t.ty(ty);
+        if info.variants.is_none() {
+            return Ok(None);
+        }
+        match info.variant_globals.get(&field.name) {
+            Some(&g) => Ok(Some(g)),
+            None => Err(Diagnostic::new(format!("`{}` has no variant `{}`", info.name, field.name), field.span)
+                .hint(format!("its variants are {}", info.variants.iter().flatten().cloned().collect::<Vec<_>>().join(", ")))),
+        }
+    }
+
+    /// The branch a `when` without `else` falls into.  When it is over an enum, every variant must have
+    /// a branch, and falling through is impossible (it panics, so the `when` can be used as a value).
+    fn when_check(&mut self, subject: &str, covered: &[ast::Ident], span: Span, out: &mut Vec<hir::Stmt>) -> Result<()> {
+        let Some(local) = self.find_local(subject) else { return Ok(()) };
+        let Ty::Obj(ty) = self.locals[local].ty else { return Ok(()) };
+        let info = self.ck.t.ty(ty);
+        let Some(all) = &info.variants else { return Ok(()) };
+        let missing: Vec<String> =
+            all.iter().filter(|v| !covered.iter().any(|c| &c.name == *v)).map(|v| format!("`{}.{v}`", info.name)).collect();
+        if !missing.is_empty() {
+            return Err(Diagnostic::new(format!("this `when` does not cover {}", missing.join(", ")), span)
+                .hint("add a branch for each, or an `else ->` branch"));
+        }
+        let message = mk(K::Str("no branch of the `when` matched".into()), Ty::Str);
+        out.push(hir::Stmt::Expr(self.prelude_call("panic", vec![message], span)?));
+        Ok(())
+    }
+
     fn module_global(&mut self, obj: &ast::Expr, field: &ast::Ident) -> Result<Option<GlobalId>> {
         let A::Name(a) = &obj.kind else { return Ok(None) };
         let Some(Named::Module(m)) = self.resolve(a) else { return Ok(None) };
@@ -2197,6 +2230,10 @@ impl<'c, 'a> Cx<'c, 'a> {
             },
 
             A::Field(obj, field) => {
+                if let Some(g) = self.enum_variant(obj, field)? {
+                    let ty = self.global_use(g, field.span)?;
+                    return Ok(mk(K::Global(g), ty));
+                }
                 if let Some(g) = self.module_global(obj, field)? {
                     let ty = self.global_use(g, field.span)?;
                     return Ok(mk(K::Global(g), ty));

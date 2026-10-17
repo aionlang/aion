@@ -28,6 +28,12 @@ pub fn parse_module(file: u32, text: &str) -> Result<Module> {
     Parser::new(file, text, 0)?.module()
 }
 
+/// An `enum` variant as written: `Red` or `Earth(5.97e24)`.
+struct Variant {
+    name: Ident,
+    args: Vec<Arg>,
+}
+
 struct Parser<'a> {
     file: u32,
     src: &'a str,
@@ -270,6 +276,8 @@ impl<'a> Parser<'a> {
     fn module(&mut self) -> Result<Module> {
         let mut imports = Vec::new();
         let mut items = Vec::new();
+        // The variables holding enum variants run before any other top-level code.
+        let mut variables: Vec<Stmt> = Vec::new();
         while let Some(tok) = self.peek() {
             match tok {
                 Token::Semi => {
@@ -290,6 +298,12 @@ impl<'a> Parser<'a> {
                     let mut decl = self.type_decl()?;
                     Self::data_members(&mut decl)?;
                     items.push(Item::Type(decl));
+                }
+                // `enum Color { Red, Green }`: see [`Parser::enum_decl`]
+                Token::Ident if self.text(self.toks[self.pos]) == "enum" && self.peek_at(1) == Some(Token::Ident) => {
+                    let (decl, lets) = self.enum_decl()?;
+                    items.push(Item::Type(decl));
+                    variables.extend(lets);
                 }
                 Token::Interface => items.push(Item::Interface(self.interface_decl()?)),
                 Token::Extern => {
@@ -323,6 +337,7 @@ impl<'a> Parser<'a> {
                 }
             }
         }
+        items.splice(0..0, variables.into_iter().map(Item::Stmt));
         Ok(Module { imports, items })
     }
 
@@ -568,9 +583,41 @@ impl<'a> Parser<'a> {
         };
 
         let (mut fields, mut methods, mut ctor, mut inits) = (Vec::new(), Vec::new(), None, Vec::new());
+        self.type_body(None, &mut fields, &mut methods, &mut ctor, &mut inits)?;
+        Ok(TypeDecl { name, type_params, bounds, primary, fields, ctor, inits, methods, open: false, variants: None, parent })
+    }
+
+    /// The `{ … }` of a type: fields, methods, a constructor and `init` blocks.  An `enum` passes
+    /// `variants`, which are read first (see [`Parser::enum_decl`]).
+    fn type_body(
+        &mut self,
+        mut variants: Option<&mut Vec<Variant>>,
+        fields: &mut Vec<FieldDecl>,
+        methods: &mut Vec<FnDecl>,
+        ctor: &mut Option<CtorDecl>,
+        inits: &mut Vec<Vec<Stmt>>,
+    ) -> Result<()> {
         if self.peek() == Some(Token::LBrace) && !self.nl() {
             self.bump();
             self.scoped(false, false, |p| {
+                if let Some(list) = variants.as_deref_mut() {
+                    while p.peek() == Some(Token::Ident) && !p.member_starts() {
+                        let name = p.ident()?;
+                        let args = if p.peek() == Some(Token::LParen) && !p.nl() {
+                            p.bump();
+                            let args = p.scoped(true, false, |p| p.args())?;
+                            p.expect(Token::RParen)?;
+                            args
+                        } else {
+                            Vec::new()
+                        };
+                        list.push(Variant { name, args });
+                        if !p.eat(Token::Comma) && p.peek() == Some(Token::Ident) && !p.nl() && !p.member_starts() {
+                            return Err(p.expected("`,` between enum variants"));
+                        }
+                    }
+                    p.eat(Token::Semi);
+                }
                 while p.peek() != Some(Token::RBrace) {
                     match p.peek() {
                         Some(Token::Semi) => {
@@ -608,7 +655,7 @@ impl<'a> Parser<'a> {
                             if ctor.is_some() {
                                 return Err(Diagnostic::new("a type can have only one constructor", s));
                             }
-                            ctor = Some(CtorDecl { params, body });
+                            *ctor = Some(CtorDecl { params, body });
                         }
                         Some(Token::Ident)
                             if p.text(p.toks[p.pos]) == "init" && p.peek_at(1) == Some(Token::LBrace) =>
@@ -630,7 +677,155 @@ impl<'a> Parser<'a> {
             })?;
             self.expect(Token::RBrace)?;
         }
-        Ok(TypeDecl { name, type_params, bounds, primary, fields, ctor, inits, methods, open: false, parent })
+        Ok(())
+    }
+
+    /// Does the next token start a member of a type body (rather than an enum variant)?
+    fn member_starts(&self) -> bool {
+        let word = self.text(self.toks[self.pos]);
+        match self.peek_at(1) {
+            Some(Token::Colon) => true,
+            Some(Token::Fn) => matches!(word, "open" | "override" | "static"),
+            Some(Token::LBrace) => word == "init",
+            _ => false,
+        }
+    }
+
+    /// `enum Color { Red, Green, Blue }` or `enum Planet(mass: Float) { Earth(5.97e24), … }`, optionally
+    /// followed by `;` and the members of a type (`fn`, `static fn`, fields, …).
+    ///
+    /// An enum is an ordinary type whose only instances are its variants, so nothing downstream needs
+    /// to know about it, except that the checker reads `variants` for `Color.Red` and exhaustive `when`:
+    ///
+    /// ```text
+    /// type Color(name: String, ordinal: Int, …your parameters)
+    /// Color$Red := Color("Red", 0, …)           // one module variable per variant, hoisted to the top
+    /// fn toString() = name;  fn compareTo(other: Color) = ordinal - other.ordinal
+    /// static fn values() -> List<Color> = [Color.Red, …]
+    /// static fn valueOf(text: String) -> Color? { for e in values() { if e.name == text { return e } }; return null }
+    /// ```
+    fn enum_decl(&mut self) -> Result<(TypeDecl, Vec<Stmt>)> {
+        self.bump(); // `enum`
+        let name = self.ident()?;
+        let span = name.span;
+        let extra = if self.peek() == Some(Token::LParen) && !self.nl() { self.params()? } else { Vec::new() };
+        if let Some(p) = extra.iter().find(|p| p.vararg) {
+            return Err(Diagnostic::new("an enum cannot take a `vararg`", p.name.span));
+        }
+        if let Some(p) = extra.iter().find(|p| p.name.name == "name" || p.name.name == "ordinal") {
+            return Err(Diagnostic::new(format!("`{}` is already a field of every enum", p.name.name), p.name.span));
+        }
+        if self.peek() != Some(Token::LBrace) || self.nl() {
+            return Err(self.expected("`{` and the enum's variants"));
+        }
+
+        let (mut fields, mut methods, mut ctor, mut inits) = (Vec::new(), Vec::new(), None, Vec::new());
+        let mut list: Vec<Variant> = Vec::new();
+        self.type_body(Some(&mut list), &mut fields, &mut methods, &mut ctor, &mut inits)?;
+        if list.is_empty() {
+            return Err(Diagnostic::new("an enum needs at least one variant", span));
+        }
+        for (i, v) in list.iter().enumerate() {
+            if list[..i].iter().any(|u| u.name.name == v.name.name) {
+                return Err(Diagnostic::new(format!("`{}` has two variants called `{}`", name.name, v.name.name), v.name.span));
+            }
+        }
+        if ctor.is_some() {
+            return Err(Diagnostic::new("an enum cannot declare a constructor", span)
+                .hint("its variants are built from the parameters after its name"));
+        }
+
+        let named = |n: &str, args: Vec<TypeRef>| TypeRef { kind: TypeKind::Named { name: n.to_string(), args }, span };
+        let me = named(&name.name, Vec::new());
+        let ident = |n: &str| Ident { name: n.to_string(), span };
+        let expr = |kind: ExprKind| Expr { kind, span };
+        let variable = |n: &str| expr(ExprKind::Name(n.to_string()));
+        let param = |n: &str, ty: TypeRef| Param { name: ident(n), ty, default: None, vararg: false };
+        let function = |n: &str, is_static: bool, params: Vec<Param>, ret: TypeRef, body: FnBody| FnDecl {
+            name: ident(n),
+            type_params: Vec::new(),
+            bounds: Vec::new(),
+            params,
+            ret: Some(ret),
+            body,
+            span,
+            modifier: Modifier::None,
+            is_static,
+        };
+        let global = |variant: &str| format!("{}${variant}", name.name);
+        let declared = |m: &str, methods: &[FnDecl]| methods.iter().any(|d| d.name.name == m);
+
+        if !declared("toString", &methods) {
+            methods.push(function("toString", false, Vec::new(), named("String", Vec::new()), FnBody::Expr(variable("name"))));
+        }
+        if !declared("compareTo", &methods) {
+            let difference = expr(ExprKind::Binary(
+                BinOp::Sub,
+                Box::new(variable("ordinal")),
+                Box::new(expr(ExprKind::Field(Box::new(variable("other")), ident("ordinal")))),
+            ));
+            let params = vec![param("other", me.clone())];
+            methods.push(function("compareTo", false, params, named("Int", Vec::new()), FnBody::Expr(difference)));
+        }
+        if !declared("values", &methods) {
+            let items = expr(ExprKind::List(list.iter().map(|v| variable(&global(&v.name.name))).collect()));
+            methods.push(function("values", true, Vec::new(), named("List", vec![me.clone()]), FnBody::Expr(items)));
+        }
+        if !declared("valueOf", &methods) {
+            let each = expr(ExprKind::Call { callee: Box::new(variable("values")), type_args: Vec::new(), args: Vec::new() });
+            let same = expr(ExprKind::Binary(
+                BinOp::Eq,
+                Box::new(expr(ExprKind::Field(Box::new(variable("e")), ident("name")))),
+                Box::new(variable("text")),
+            ));
+            let found = Stmt {
+                kind: StmtKind::Expr(expr(ExprKind::If {
+                    cond: Box::new(same),
+                    then: vec![Stmt { kind: StmtKind::Return(Some(variable("e"))), span }],
+                    otherwise: None,
+                })),
+                span,
+            };
+            let body = vec![
+                Stmt { kind: StmtKind::For { var: ident("e"), iter: each, body: vec![found] }, span },
+                Stmt { kind: StmtKind::Return(Some(expr(ExprKind::Null))), span },
+            ];
+            let optional = TypeRef { kind: TypeKind::Nullable(Box::new(me.clone())), span };
+            let params = vec![param("text", named("String", Vec::new()))];
+            methods.push(function("valueOf", true, params, optional, FnBody::Block(body)));
+        }
+
+        // One module variable per variant, `Color$Red := Color("Red", 0, …)` (no one can write that name).
+        let variants: Vec<Ident> = list.iter().map(|v| v.name.clone()).collect();
+        let mut lets = Vec::new();
+        for (ordinal, v) in list.into_iter().enumerate() {
+            let site = v.name.span;
+            let mut args = vec![
+                Arg { name: None, value: expr(ExprKind::Str(v.name.name.clone())) },
+                Arg { name: None, value: expr(ExprKind::Int(ordinal as i64)) },
+            ];
+            args.extend(v.args);
+            let call = Expr { kind: ExprKind::Call { callee: Box::new(variable(&name.name)), type_args: Vec::new(), args }, span: site };
+            let var = Ident { name: global(&v.name.name), span: site };
+            lets.push(Stmt { kind: StmtKind::Let { name: var, ty: Some(me.clone()), init: Some(call) }, span: site });
+        }
+
+        let mut primary = vec![param("name", named("String", Vec::new())), param("ordinal", named("Int", Vec::new()))];
+        primary.extend(extra);
+        let decl = TypeDecl {
+            name,
+            type_params: Vec::new(),
+            bounds: Vec::new(),
+            primary: Some(primary),
+            fields,
+            ctor: None,
+            inits,
+            methods,
+            open: false,
+            variants: Some(variants),
+            parent: None,
+        };
+        Ok((decl, lets))
     }
 
     /// The members a `data type` gets from its primary parameters (unless it declares them itself):
@@ -1587,6 +1782,7 @@ impl<'a> Parser<'a> {
         let subject_span = subject.as_ref().map(|s| s.span);
         let mut arms: Vec<(Expr, Vec<Stmt>)> = Vec::new();
         let mut fallback: Option<Vec<Stmt>> = None;
+        let mut covered: Vec<Ident> = Vec::new();
 
         self.scoped(false, false, |p| {
             loop {
@@ -1621,6 +1817,9 @@ impl<'a> Parser<'a> {
                         }
                     } else {
                         let e = p.expr()?;
+                        if subject_span.is_some() && let ExprKind::Field(_, variant) = &e.kind {
+                            covered.push(variant.clone());
+                        }
                         match subject_span {
                             Some(s) => {
                                 let span = e.span;
@@ -1651,13 +1850,16 @@ impl<'a> Parser<'a> {
         if arms.is_empty() && fallback.is_none() {
             return Err(Diagnostic::new("`when` needs at least one branch", span));
         }
+        // Without an `else`, a subject that is an enum must have all its variants covered (the checker looks).
+        let check = (subject.is_some() && !covered.is_empty())
+            .then(|| vec![Stmt { kind: StmtKind::WhenCheck { subject: tmp.clone(), covered }, span }]);
         // Fold the arms into `if … else if … else …`.
         let mut top = match fallback {
             Some(body) => Expr { kind: ExprKind::Block(body), span },
             None => {
                 // No `else`: the innermost arm is an `if` without one.
                 let (cond, body) = arms.pop().expect("checked above");
-                Expr { span: cond.span, kind: ExprKind::If { cond: Box::new(cond), then: body, otherwise: None } }
+                Expr { span: cond.span, kind: ExprKind::If { cond: Box::new(cond), then: body, otherwise: check } }
             }
         };
         for (cond, body) in arms.into_iter().rev() {

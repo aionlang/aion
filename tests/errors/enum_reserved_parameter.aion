@@ -1,0 +1,2 @@
+// error: `name` is already a field of every enum
+enum Color(name: String) { Red("r") }

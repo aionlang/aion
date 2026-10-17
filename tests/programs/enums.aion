@@ -1,0 +1,63 @@
+/**
+ * Enums.  `enum Color { Red, Green, Blue }` is a type whose only instances are its variants:
+ *
+ *   Color.Red                an expression, compared by identity (`==`)
+ *   c.name  c.ordinal        the variant's name and its position, from 0
+ *   Color.values()           a new List of all variants, in order
+ *   Color.valueOf("Red")     the variant with that name, or null
+ *
+ * A `when` over an enum with no `else` must have a branch for every variant; because it then
+ * cannot fall through, it can be used as a value.  Parameters after the name give every variant
+ * data, and a `;` after the last variant starts ordinary members (`fn`, `static fn`, fields).
+ */
+enum Color { Red, Green, Blue }
+
+enum Planet(mass: Float, radius: Float) {
+    Mercury(3.3, 2.4),
+    Earth(5.97, 6.37);
+
+    /** Surface gravity in made-up units. */
+    fn gravity() = mass / (radius * radius)
+
+    static fn heaviest() -> Planet = Planet.Earth
+}
+
+enum Op {
+    Add, Sub
+
+    fn apply(a: Int, b: Int) = when this {
+        Op.Add -> a + b
+        Op.Sub -> a - b
+    }
+}
+
+c := Color.Green
+println(c, c.name, c.ordinal)                           // Green Green 1
+println(c == Color.Green, c == Color.Red, c != Color.Red)
+println(Color.values(), Color.values().size())          // [Red, Green, Blue] 3
+println(Color.valueOf("Blue"), Color.valueOf("Pink"))   // Blue null
+
+fn warmth(c: Color) = when c {
+    Color.Red -> "warm"
+    Color.Green, Color.Blue -> "cool"
+}
+println(warmth(Color.Red), warmth(Color.Blue))
+
+for p in Planet.values() {
+    println(p, p.ordinal, p.mass, p.gravity().format(3))
+}
+println(Planet.heaviest(), Planet.Mercury.radius)
+println(Op.Add.apply(2, 3), Op.Sub.apply(2, 3))
+
+println(Color.Red < Color.Blue, Color.Blue < Color.Green, Color.values().sortedDescending())
+counts := Map<Color, Int>()
+for k in [Color.Red, Color.Blue, Color.Red] { counts[k] = counts.getOr(k, 0) + 1 }
+println(counts[Color.Red], counts[Color.Blue], counts.containsKey(Color.Green))
+println("it is $c, in a string: ${Color.Blue}")
+
+// a `when` as a statement, with the same check
+when c {
+    Color.Red -> println("red")
+    Color.Green -> println("green")
+    Color.Blue -> println("blue")
+}

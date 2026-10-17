@@ -142,6 +142,8 @@ pub struct TypeDecl {
     pub methods: Vec<FnDecl>,
     /// `open type Animal(…)`: other types may extend it.
     pub open: bool,
+    /// `enum Color { Red, Green }`: the variant names, in order (the type is an ordinary one, see the parser).
+    pub variants: Option<Vec<Ident>>,
     /// `type Dog(…) : Animal(name)`
     pub parent: Option<ParentRef>,
 }
@@ -193,6 +195,9 @@ pub enum StmtKind {
     Return(Option<Expr>),
     /// `defer cleanup()` / `defer { … }`: runs when the enclosing block is left.
     Defer(Vec<Stmt>),
+    /// Made by `when x { Color.Red -> … }` without an `else`: if `x` is an enum, every variant must be
+    /// among `covered`.  Produces no code.
+    WhenCheck { subject: String, covered: Vec<Ident> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

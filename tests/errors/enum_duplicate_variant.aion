@@ -1,0 +1,2 @@
+// error: `Color` has two variants called `Red`
+enum Color { Red, Green, Red }

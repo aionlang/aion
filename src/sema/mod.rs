@@ -54,6 +54,10 @@ pub struct TypeInfo {
     pub virtuals: HashMap<String, (TypeId, usize)>,
     /// The methods this type declared `open`, in order.
     pub vlist: Vec<String>,
+    /// `Some` for an `enum`: its variants, in order.
+    pub variants: Option<Vec<String>>,
+    /// An enum's variants and the module variables that hold them.
+    pub variant_globals: HashMap<String, GlobalId>,
 }
 
 impl TypeInfo {
@@ -74,6 +78,8 @@ impl TypeInfo {
             inherited: HashSet::new(),
             virtuals: HashMap::new(),
             vlist: Vec::new(),
+            variants: None,
+            variant_globals: HashMap::new(),
         }
     }
 }
@@ -528,7 +534,8 @@ impl<'a> Checker<'a> {
                     return Err(Diagnostic::new("generic types cannot take part in inheritance", td.name.span));
                 }
                 Item::Type(td) if td.type_params.is_empty() => {
-                    let id = self.t.add_type(TypeInfo { open: td.open, ..TypeInfo::new(td.name.name.clone()) });
+                    let variants = td.variants.as_ref().map(|vs| vs.iter().map(|v| v.name.clone()).collect());
+                    let id = self.t.add_type(TypeInfo { open: td.open, variants, ..TypeInfo::new(td.name.name.clone()) });
                     self.t.define(mi, &td.name, Sym::Type(id))?;
                     own_types.push((id, td));
                 }
@@ -714,6 +721,14 @@ impl<'a> Checker<'a> {
                         init_fn,
                     });
                     self.t.define(mi, name, Sym::Global(gid))?;
+                    // `Color$Red` is the variable of an enum's variant
+                    if let Some((owner, variant)) = name.name.split_once('$')
+                        && let Some(Sym::Type(ty)) = self.t.scopes[mi].items.get(owner).copied()
+                    {
+                        self.t.update_type(ty, |ti| {
+                            ti.variant_globals.insert(variant.to_string(), gid);
+                        });
+                    }
                 }
             }
             self.inits.push(init_fn);

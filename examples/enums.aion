@@ -1,0 +1,59 @@
+/**
+ * Enums: a fixed set of named values.
+ *
+ *   aion examples/enums.aion
+ *
+ * `enum Light { Red, Green, Yellow }` makes a type whose only instances are `Light.Red`,
+ * `Light.Green` and `Light.Yellow`.  Each has a `name` and an `ordinal` (its position from 0),
+ * prints as its name, compares with `==` and `<`, and works as a `Map` key.  `Light.values()`
+ * lists them and `Light.valueOf("Red")` finds one by name (or null).
+ *
+ * A `when` over an enum needs a branch for every variant, or an `else`.  Leave one out and the
+ * compiler names it.  Without an `else` the `when` cannot fall through, so it is a value too.
+ *
+ * Variants can carry data (`enum Planet(mass: Float) { Earth(5.97) }`) and an enum can have methods
+ * and `static fn`s after a `;`.
+ */
+enum Light {
+    Red, Green, Yellow
+
+    /** The light that follows this one. */
+    fn next() = when this {
+        Light.Red -> Light.Green
+        Light.Green -> Light.Yellow
+        Light.Yellow -> Light.Red
+    }
+
+    fn seconds() = when this {
+        Light.Red -> 30
+        Light.Green -> 25
+        Light.Yellow -> 5
+    }
+}
+
+light := Light.Red
+for i in 0..4 {
+    println("${light.name.padRight(7)} for ${light.seconds()}s")
+    light = light.next()
+}
+
+println(Light.values())
+println(Light.valueOf("Green")?.seconds() ?: -1, Light.valueOf("Blue")?.seconds() ?: -1)
+
+/** An enum whose variants carry data. */
+enum Coin(cents: Int) {
+    Penny(1), Nickel(5), Dime(10), Quarter(25)
+}
+
+fn total(coins: List<Coin>) = coins.fold(0) { sum, c -> sum + c.cents }
+println(total([Coin.Quarter, Coin.Dime, Coin.Dime, Coin.Penny]), "cents")
+println(Coin.values().filter { it.cents >= 10 }.map { it.name })
+
+// > Red     for 30s
+// > Green   for 25s
+// > Yellow  for 5s
+// > Red     for 30s
+// > [Red, Green, Yellow]
+// > 25 -1
+// > 46 cents
+// > [Dime, Quarter]

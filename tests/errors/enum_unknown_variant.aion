@@ -1,0 +1,3 @@
+// error: `Color` has no variant `Pink`
+enum Color { Red, Green }
+println(Color.Pink)

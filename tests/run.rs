@@ -952,3 +952,18 @@ fn sources_in(dir: &Path) -> Vec<PathBuf> {
     files.sort();
     files
 }
+
+#[test]
+fn enums_work_across_modules() {
+    let root = scratch("enums");
+    write(&root.join("lib.aion"), "enum Color { Red, Green }\nfn favourite() = Color.Green\nprintln(\"lib loaded\")\n");
+    write(
+        &root.join("main.aion"),
+        "import lib\nfrom lib import Color\n\
+         println(lib.Color.Red, Color.Green, lib.favourite() == Color.Green, lib.Color.values())\n\
+         println(when lib.favourite() { Color.Red -> 1\n Color.Green -> 2 })\n",
+    );
+    let out = aion_in(&root, &["main.aion"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "lib loaded\nRed Green true [Red, Green]\n2\n");
+}

@@ -1,0 +1,7 @@
+// error: this `when` does not cover `Color.Blue`
+enum Color { Red, Green, Blue }
+c := Color.Red
+when c {
+    Color.Red -> println("r")
+    Color.Green -> println("g")
+}
