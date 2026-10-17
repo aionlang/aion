@@ -1,0 +1,5 @@
+// error: cannot assign to `limit`: it was declared with `val`
+fn main() {
+    val limit = 10
+    limit = 20
+}

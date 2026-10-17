@@ -200,6 +200,8 @@ pub enum StmtKind {
     WhenCheck { subject: String, covered: Vec<Ident> },
     /// `outer@ for … { }`: a loop that `break@outer` and `continue@outer` can name.
     Labeled { label: Ident, stmt: Box<Stmt> },
+    /// Follows the `Let` of `val x = 1`: nothing may assign to `x` afterwards.
+    Val(Ident),
     /// `break@outer` / `continue@outer`: leave, or go on with the next round of, an enclosing loop.
     JumpTo { label: Ident, is_break: bool },
 }

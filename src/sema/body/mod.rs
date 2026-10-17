@@ -388,6 +388,8 @@ struct LocalInfo {
 struct VarInfo {
     captured: bool,
     mutated: bool,
+    /// Declared with `val`: assigning to it is an error.
+    immutable: bool,
 }
 
 /// The per-function state that is swapped out while checking a lambda body.
@@ -1004,6 +1006,14 @@ impl<'c, 'a> Cx<'c, 'a> {
             StmtKind::JumpTo { label, is_break } => self.jump_to(label, *is_break, out)?,
 
             StmtKind::WhenCheck { subject, covered } => self.when_check(subject, covered, s.span, out)?,
+
+            // top-level `val`s are marked when the module is declared
+            StmtKind::Val(name) => {
+                if let Some(id) = lookup_scopes(&self.scopes, &name.name) {
+                    let var = self.locals[id].var;
+                    self.vars[var].immutable = true;
+                }
+            }
             StmtKind::Break | StmtKind::Continue => self.jump_stmt(matches!(s.kind, StmtKind::Break), s.span, out)?,
 
             StmtKind::Defer(body) => {
@@ -1295,17 +1305,36 @@ impl<'c, 'a> Cx<'c, 'a> {
     fn target(&mut self, target: &ast::Expr) -> Result<(Target, Ty)> {
         match &target.kind {
             A::Name(n) => match self.resolve(n) {
-                Some(Named::Local(id)) => Ok((Target::Local(id), self.locals[id].ty)),
+                Some(Named::Local(id)) => {
+                    if self.vars[self.locals[id].var].immutable {
+                        return Err(read_only(n, target.span));
+                    }
+                    Ok((Target::Local(id), self.locals[id].ty))
+                }
                 Some(Named::Field(index, ty)) => {
                     let obj = self.this_expr().expect("fields imply `this`");
                     Ok((Target::Field { obj, index }, ty))
                 }
-                Some(Named::Global(g)) => Ok((Target::Global(g), self.global_use(g, target.span)?)),
+                Some(Named::Global(g)) => {
+                    if self.ck.t.globals[g].immutable {
+                        return Err(read_only(n, target.span));
+                    }
+                    Ok((Target::Global(g), self.global_use(g, target.span)?))
+                }
                 Some(_) => Err(Diagnostic::new(format!("cannot assign to `{n}`"), target.span)),
                 None => Err(Diagnostic::new(format!("undefined variable `{n}`"), target.span)),
             },
             A::Field(obj, field) => {
+                if self.enum_variant(obj, field)?.is_some() {
+                    return Err(Diagnostic::new(
+                        format!("cannot assign to `{}`: it is an enum variant", field.name),
+                        field.span,
+                    ));
+                }
                 if let Some(g) = self.module_global(obj, field)? {
+                    if self.ck.t.globals[g].immutable {
+                        return Err(read_only(&field.name, field.span));
+                    }
                     return Ok((Target::Global(g), self.global_use(g, field.span)?));
                 }
                 let obj = self.value(obj)?;
@@ -3419,4 +3448,10 @@ fn const_expr(c: &Const) -> hir::Expr {
         Const::Str(s) => mk(K::Str(s.clone()), Ty::Str),
         Const::Null => mk(K::Null, Ty::Null),
     }
+}
+
+/// Assigning to a `val` (or to an enum variant).
+fn read_only(name: &str, span: Span) -> Diagnostic {
+    Diagnostic::new(format!("cannot assign to `{name}`: it was declared with `val`"), span)
+        .hint("declare it with `:=` if it has to change")
 }

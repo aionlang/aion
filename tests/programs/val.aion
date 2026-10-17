@@ -1,0 +1,31 @@
+/**
+ * `val name = value` declares a variable that cannot be assigned again.  The type can be written
+ * (`val limit: Int = 10`).  It works for locals, parameters-by-copy, top-level variables, and
+ * closures see the same variable.  Use `:=` for a variable that changes.
+ */
+val limit = 10
+val greeting: String = "hello"
+total := 0
+for i in 0..limit { total += i }
+println(total, greeting, limit)
+
+fn area(w: Int, h: Int) -> Int {
+    val product = w * h
+    return product
+}
+println(area(3, 4))
+
+fn counter() {
+    val step = 2
+    n := 0
+    add := { n += step }
+    add()
+    add()
+    println(n, step)
+}
+counter()
+
+// a val holding a mutable object still lets the object change
+val names = ["a"]
+names.add("b")
+println(names)

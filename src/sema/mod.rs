@@ -172,6 +172,8 @@ pub struct GlobalInfo {
     pub ty: Cell<Option<Ty>>,
     /// The module initialiser that assigns it.
     pub init_fn: FnId,
+    /// Declared with `val` (or the variable of an enum variant): it cannot be assigned.
+    pub immutable: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -710,6 +712,8 @@ impl<'a> Checker<'a> {
                 },
                 Work::Init { stmts: top.clone() },
             );
+            let read_only: HashSet<&str> =
+                top.iter().filter_map(|s| if let StmtKind::Val(n) = &s.kind { Some(n.name.as_str()) } else { None }).collect();
             for s in &top {
                 if let StmtKind::Let { name, ty, .. } = &s.kind {
                     let declared = ty.as_ref().map(|t| self.resolve_value_type(mi, t, &empty)).transpose()?;
@@ -719,6 +723,7 @@ impl<'a> Checker<'a> {
                         symbol: format!("{}__g_{}", module.name, name.name),
                         ty: Cell::new(declared),
                         init_fn,
+                        immutable: name.name.contains('$') || read_only.contains(name.name.as_str()),
                     });
                     self.t.define(mi, name, Sym::Global(gid))?;
                     // `Color$Red` is the variable of an enum's variant

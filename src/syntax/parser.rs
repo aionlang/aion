@@ -681,6 +681,14 @@ impl<'a> Parser<'a> {
     }
 
 
+    /// `val name =` / `val name:`: a read-only variable (`val` is a keyword only here).
+    fn at_val(&self) -> bool {
+        self.text(self.toks[self.pos]) == "val"
+            && self.peek_at(1) == Some(Token::Ident)
+            && matches!(self.peek_at(2), Some(Token::Eq | Token::Colon | Token::ColonEq))
+            && !self.toks[self.pos + 1].nl
+    }
+
     /// A `when` arm that starts with `is` or `!is`: a test of the subject's type.
     fn at_is_arm(&self) -> bool {
         let is = |at: usize| self.peek_at(at) == Some(Token::Ident) && self.text(self.toks[self.pos + at]) == "is";
@@ -1019,6 +1027,19 @@ impl<'a> Parser<'a> {
                 } else {
                     StmtKind::Continue
                 }
+            }
+            // `val name = value`: a variable that cannot be assigned again
+            Some(Token::Ident) if self.at_val() => {
+                self.bump(); // `val`
+                let name = self.ident()?;
+                let ty = if self.eat(Token::Colon) { Some(self.type_ref()?) } else { None };
+                if !self.eat(Token::Eq) && !self.eat(Token::ColonEq) {
+                    return Err(Diagnostic::new(format!("`val {}` needs a value", name.name), name.span)
+                        .hint(format!("e.g. `val {} = 10`; a variable without a value can't be set later", name.name)));
+                }
+                let init = Some(self.expr()?);
+                out.push(Stmt { kind: StmtKind::Let { name: name.clone(), ty, init }, span: start.to(self.prev_span()) });
+                StmtKind::Val(name)
             }
             Some(Token::Ident) if matches!(self.peek_at(1), Some(Token::Colon | Token::ColonEq)) => {
                 let name = self.ident()?;

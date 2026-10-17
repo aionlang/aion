@@ -1,0 +1,3 @@
+// error: cannot assign to `x`: it was declared with `val`
+val x = 1
+f := { x = 2 }

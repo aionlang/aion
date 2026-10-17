@@ -1,0 +1,2 @@
+// error: `val x` needs a value
+val x: Int
