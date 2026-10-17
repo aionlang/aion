@@ -1850,6 +1850,7 @@ impl<'a> Parser<'a> {
                     fallback = Some(p.arm_body()?);
                     continue;
                 }
+                let covered_before = covered.len();
                 let mut cond: Option<Expr> = None;
                 loop {
                     let c = if p.at_is_arm() {
@@ -1899,6 +1900,15 @@ impl<'a> Parser<'a> {
                     if !p.eat(Token::Comma) {
                         break;
                     }
+                }
+                // `1, 2 if x > 0 ->`: the arm applies only when the guard holds too (and then covers nothing for a
+                // `when` over an enum)
+                if p.peek() == Some(Token::If) {
+                    p.bump();
+                    let guard = p.expr()?;
+                    let span = cond.as_ref().expect("an arm has a pattern").span.to(guard.span);
+                    cond = Some(Expr { kind: ExprKind::Binary(BinOp::And, Box::new(cond.take().unwrap()), Box::new(guard)), span });
+                    covered.truncate(covered_before);
                 }
                 p.expect(Token::Arrow)?;
                 arms.push((cond.unwrap(), p.arm_body()?));

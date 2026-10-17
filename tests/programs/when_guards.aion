@@ -1,0 +1,35 @@
+/**
+ * An arm can carry a guard: `pattern if condition -> result`.  The arm is used only when the pattern
+ * matches and the condition holds; otherwise the next arm is tried.  Works with values, ranges, `in`,
+ * `is`, and subject-less `when`.  An enum branch with a guard does not count as covering its variant.
+ */
+fn grade(score: Int, bonus: Bool) = when score {
+    in 90..100 -> "A"
+    in 80..90 if bonus -> "A-"
+    in 80..90 -> "B"
+    0 if !bonus -> "zero"
+    else -> "C"
+}
+println(grade(95, false), grade(85, true), grade(85, false), grade(0, false), grade(0, true), grade(10, false))
+
+open type Shape()
+type Circle(r: Int) : Shape()
+type Square(s: Int) : Shape()
+fn describe(s: Shape) = when s {
+    is Circle if s.r > 10 -> "big circle"
+    is Circle -> "circle"
+    is Square if s.s == 1 -> "unit square"
+    else -> "other"
+}
+println(describe(Circle(20)), describe(Circle(2)), describe(Square(1)), describe(Square(5)))
+
+enum Level { Low, High }
+fn label(l: Level, loud: Bool) = when l {
+    Level.Low -> "low"
+    Level.High if loud -> "HIGH!"
+    Level.High -> "high"
+}
+println(label(Level.Low, true), label(Level.High, true), label(Level.High, false))
+
+n := 7
+println(when { n < 0 -> "neg"; n % 2 == 1 if n > 5 -> "big odd"; else -> "other" })

@@ -1,0 +1,6 @@
+// error: this `when` does not cover `Level.High`
+enum Level { Low, High }
+fn label(l: Level, loud: Bool) = when l {
+    Level.Low -> "low"
+    Level.High if loud -> "HIGH!"
+}
