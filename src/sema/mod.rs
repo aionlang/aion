@@ -31,6 +31,8 @@ pub struct TypeInfo {
     pub name: String,
     pub fields: Vec<hir::Field>,
     pub methods: HashMap<String, FnId>,
+    /// `static fn`s: called as `Type.name(…)`, with no `this`.
+    pub statics: HashMap<String, FnId>,
     /// Methods with their own type parameters, by name → index into the checker's templates.
     pub generic_methods: HashMap<String, usize>,
     pub ctor: FnId,
@@ -61,6 +63,7 @@ impl TypeInfo {
             name,
             fields: Vec::new(),
             methods: HashMap::new(),
+            statics: HashMap::new(),
             generic_methods: HashMap::new(),
             ctor: usize::MAX,
             array_elem: None,
@@ -205,7 +208,8 @@ pub struct Tables {
 /// What a declared function needs when its body is checked.
 #[derive(Clone)]
 pub enum Work<'a> {
-    Fn { decl: &'a ast::FnDecl, subst: Subst },
+    /// `owner` is the type of a `static fn`.
+    Fn { decl: &'a ast::FnDecl, subst: Subst, owner: Option<TypeId> },
     Method { decl: &'a ast::FnDecl, subst: Subst },
     /// A computed default argument (see [`ParamDefault::Computed`]); its parameters are those before it.
     Default { expr: &'a ast::Expr, subst: Subst },
@@ -380,6 +384,19 @@ impl Tables {
         types.len() - 1
     }
 
+    /// The `static fn` called `name` of type `ty`, or of the nearest type it extends that has one.
+    pub fn static_of(&self, ty: TypeId, name: &str) -> Option<FnId> {
+        let mut cur = Some(ty);
+        while let Some(t) = cur {
+            let info = self.ty(t);
+            if let Some(&id) = info.statics.get(name) {
+                return Some(id);
+            }
+            cur = info.parent;
+        }
+        None
+    }
+
     fn update_type(&self, id: TypeId, f: impl FnOnce(&mut TypeInfo)) {
         f(Rc::make_mut(&mut self.types.borrow_mut()[id]));
     }
@@ -536,6 +553,10 @@ impl<'a> Checker<'a> {
                     own_ifaces.push((id, d));
                 }
                 Item::Type(td) => {
+                    if let Some(m) = td.methods.iter().find(|m| m.is_static) {
+                        return Err(Diagnostic::new("`static fn` is not supported on generic types", m.name.span)
+                            .hint("write a top-level function instead"));
+                    }
                     let g = self.add_generic_type(mi, td);
                     self.t.define(mi, &td.name, Sym::GenericType(g))?;
                 }
@@ -635,7 +656,7 @@ impl<'a> Checker<'a> {
                 Item::Fn(decl) if decl.type_params.is_empty() => {
                     let info =
                         self.signature(mi, decl, FuncKind::Free, None, symbol_for(&module.name, None, decl), &empty)?;
-                    let id = self.declare_fn(info, Work::Fn { decl, subst: empty.clone() });
+                    let id = self.declare_fn(info, Work::Fn { decl, subst: empty.clone(), owner: None });
                     self.t.define(mi, &decl.name, Sym::Fn(id))?;
                 }
                 Item::Method { owner, owner_params, decl } if builtin_type(&owner.name).is_some() => {
@@ -913,6 +934,9 @@ impl<'a> Checker<'a> {
         if matches!(decl.body, ast::FnBody::Extern { .. }) {
             return Err(Diagnostic::new("methods cannot be `extern`", decl.span));
         }
+        if decl.is_static {
+            return self.declare_static(module_name, mi, ty, decl, subst);
+        }
         let owner = self.t.ty(ty).name.clone();
         let existing = self.t.ty(ty);
         let name = &decl.name.name;
@@ -945,7 +969,9 @@ impl<'a> Checker<'a> {
             return Err(Diagnostic::new("a generic method cannot be `open`", decl.name.span));
         }
         if !inherited
-            && (existing.methods.contains_key(name) || existing.generic_methods.contains_key(name))
+            && (existing.methods.contains_key(name)
+                || existing.generic_methods.contains_key(name)
+                || existing.statics.contains_key(name))
         {
             return Err(Diagnostic::new(
                 format!("`{owner}` already has a method `{}`", decl.name.name),
@@ -982,6 +1008,30 @@ impl<'a> Checker<'a> {
         if let (ast::Modifier::Override, Some(parent_fn)) = (decl.modifier, replaced) {
             self.overrides.borrow_mut().push((id, parent_fn, decl.name.span));
         }
+        Ok(())
+    }
+
+    /// Declare `static fn` `decl` of type `ty`: an ordinary function with no `this`, reached as `Type.name(…)`.
+    fn declare_static(&self, module_name: &str, mi: usize, ty: TypeId, decl: &'a ast::FnDecl, subst: &Subst) -> Result<()> {
+        let owner = self.t.ty(ty).name.clone();
+        let name = &decl.name.name;
+        if !subst.is_empty() {
+            return Err(Diagnostic::new("`static fn` is not supported on generic types", decl.name.span)
+                .hint("write a top-level function instead"));
+        }
+        if !decl.type_params.is_empty() {
+            return Err(Diagnostic::new("a `static fn` cannot be generic", decl.name.span));
+        }
+        let existing = self.t.ty(ty);
+        if existing.statics.contains_key(name) || existing.methods.contains_key(name) || existing.generic_methods.contains_key(name) {
+            return Err(Diagnostic::new(format!("`{owner}` already has a method `{name}`"), decl.name.span));
+        }
+        let symbol = method_symbol(module_name, &owner, ty, name);
+        let info = self.signature(mi, decl, FuncKind::Free, None, symbol, subst)?;
+        let id = self.declare_fn(info, Work::Fn { decl, subst: subst.clone(), owner: Some(ty) });
+        self.t.update_type(ty, |ti| {
+            ti.statics.insert(name.clone(), id);
+        });
         Ok(())
     }
 
@@ -1039,6 +1089,10 @@ impl<'a> Checker<'a> {
                 format!("`{}` already has a method `{}`", self.t.ty_name(ty), decl.name.name),
                 decl.name.span,
             ));
+        }
+        if decl.is_static {
+            return Err(Diagnostic::new("`static fn` is not supported on built-in types", decl.name.span)
+                .hint("write a top-level function instead"));
         }
         if !decl.type_params.is_empty() {
             return Err(Diagnostic::new("methods on built-in types cannot be generic", decl.name.span));

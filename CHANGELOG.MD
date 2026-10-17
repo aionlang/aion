@@ -19,7 +19,8 @@ migration notes at the end of this section.
 - **Types.** Primary constructors `type User(name: String, age: Int = 0)`, field
   initialisers, `init { }` blocks, implicit `this` (fields and methods in scope by
   bare name), `fn User.label()` for methods outside the type, and a generated
-  `toString` so objects can be printed and interpolated.
+  `toString` so objects can be printed and interpolated.  `static fn make()` (or
+  `static fn User.make()` outside the type) declares a function called as `User.make()`.
 - **Expressions.** `if` and `when` are expressions; `x in 1..10`; `for i in a..b`
   and `a..=b` with `break` / `continue`; `$name` interpolation; `print`/`println`
   take several arguments.

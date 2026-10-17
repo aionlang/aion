@@ -1,0 +1,5 @@
+// error: `static fn` is not supported on generic types
+type Box<T>(value: T) {
+    static fn empty() = 0
+}
+fn main() {}

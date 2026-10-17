@@ -114,6 +114,10 @@ impl<'a> Checker<'a> {
         decl: &'a ast::FnDecl,
     ) -> Result<()> {
         let gt = self.generic_types.borrow()[g].clone();
+        if decl.is_static {
+            return Err(Diagnostic::new("`static fn` is not supported on generic types", decl.name.span)
+                .hint("write a top-level function instead"));
+        }
         if owner_params.len() != gt.tparams.len() {
             return Err(Diagnostic::new(
                 format!(
@@ -304,7 +308,7 @@ impl<'a> Checker<'a> {
             let work = if gf.owner.is_some() {
                 Work::Method { decl: gf.decl, subst }
             } else {
-                Work::Fn { decl: gf.decl, subst }
+                Work::Fn { decl: gf.decl, subst, owner: None }
             };
             let id = self.declare_fn(info, work);
             gf.instances.borrow_mut().insert(targs, id);

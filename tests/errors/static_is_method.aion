@@ -1,0 +1,7 @@
+// error: `show` is a method: call it on a value, not on the type
+type Point(x: Int) {
+    fn show() = x
+}
+fn main() {
+    println(Point.show())
+}

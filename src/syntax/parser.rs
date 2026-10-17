@@ -301,6 +301,21 @@ impl<'a> Parser<'a> {
                     let start = self.bump().span;
                     items.push(self.fn_item(start, false)?);
                 }
+                // `static fn Type.make() = …`: a function that belongs to a type
+                Token::Ident if self.text(self.toks[self.pos]) == "static" && self.peek_at(1) == Some(Token::Fn) => {
+                    self.bump();
+                    let start = self.bump().span;
+                    let mut item = self.fn_item(start, false)?;
+                    match &mut item {
+                        Item::Method { decl, .. } => decl.is_static = true,
+                        Item::Fn(decl) => {
+                            return Err(Diagnostic::new("a `static fn` written outside a type needs the type's name", decl.name.span)
+                                .hint(format!("e.g. `static fn Type.{}(…)`", decl.name.name)));
+                        }
+                        _ => {}
+                    }
+                    items.push(item);
+                }
                 _ => {
                     let mut stmts = Vec::new();
                     self.stmt_into(&mut stmts)?;
@@ -485,7 +500,7 @@ impl<'a> Parser<'a> {
         } else {
             return Err(self.expected("`{` or `=`"));
         };
-        Ok(FnDecl { name, type_params, bounds, params, ret, body, span: start.to(self.prev_span()), modifier: Modifier::None })
+        Ok(FnDecl { name, type_params, bounds, params, ret, body, span: start.to(self.prev_span()), modifier: Modifier::None, is_static: false })
     }
 
     /// `interface Name { fn method(params) -> Type … }`
@@ -576,6 +591,16 @@ impl<'a> Parser<'a> {
                             decl.modifier = modifier;
                             methods.push(decl);
                         }
+                        // `static fn`: belongs to the type itself
+                        Some(Token::Ident)
+                            if p.text(p.toks[p.pos]) == "static" && p.peek_at(1) == Some(Token::Fn) =>
+                        {
+                            p.bump();
+                            let s = p.bump().span;
+                            let mut decl = p.fn_decl(s, false)?;
+                            decl.is_static = true;
+                            methods.push(decl);
+                        }
                         Some(Token::Constructor) => {
                             let s = p.bump().span;
                             let params = p.params()?;
@@ -598,7 +623,7 @@ impl<'a> Parser<'a> {
                             let init = if p.eat(Token::Eq) { Some(p.expr()?) } else { None };
                             fields.push(FieldDecl { name, ty, init });
                         }
-                        _ => return Err(p.expected("a field, `fn`, `constructor` or `init`")),
+                        _ => return Err(p.expected("a field, `fn`, `static fn`, `constructor` or `init`")),
                     }
                 }
                 Ok(())
@@ -646,6 +671,7 @@ impl<'a> Parser<'a> {
                 body: FnBody::Expr(body),
                 span,
                 modifier: Modifier::None,
+                is_static: false,
             });
         };
         let param = |n: &str, ty: TypeRef, default: Option<Expr>| Param { name: Ident { name: n.to_string(), span }, ty, default, vararg: false };

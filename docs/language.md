@@ -363,6 +363,35 @@ println(c.show())                            // hits=1
   checked against being unset.
 * A type can extend an `open` type; see [Inheritance](#inheritance).
 
+### Static functions
+
+A `static fn` belongs to the type itself rather than to an instance: it has no `this`, so it cannot
+read fields, and it is called on the type's name.  Use it for factories and helpers that go with a type.
+
+```aion
+type Point(x: Int, y: Int) {
+    static fn origin() = Point(0, 0)
+    static fn parse(s: String) -> Point {
+        parts := s.split(",")
+        return Point(parts.get(0).toIntOr(0), parts.get(1).toIntOr(0))
+    }
+    static fn diagonal(n: Int) = Point(n, n)
+
+    fn doubled() = diagonal(x * 2)           // a method calls a static of its own type bare
+}
+
+static fn Point.unit() = Point(1, 1)         // written outside the type, like a method
+
+println(Point.origin(), Point.parse("3,4"), Point.unit())
+```
+
+* Inside the type, other statics are called bare (`diagonal(n)`), from methods and from statics alike;
+  from anywhere else write `Point.diagonal(n)`, or `shapes.Point.diagonal(n)` through a module.
+* A subtype finds its parent's statics: `Circle.kinds()` works when `Shape` declares `kinds`.  A
+  static is not virtual: it cannot be `open` or `override`n.
+* A static and a method of one type cannot share a name.
+* Not supported on generic types or on built-in types (`fn Int.parse()`); write a top-level function.
+
 ### Data types
 
 `data type` writes the comparing and copying for you.  Its instances are equal when all their

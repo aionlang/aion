@@ -59,8 +59,11 @@ pub(super) fn check_fn(ck: &Checker, id: FnId, work: &Work) -> Result<hir::Func>
             let v = cx.value_expected(expr, Some(ret))?;
             Some(vec![hir::Stmt::Return(Some(cx.coerce(v, ret, expr.span)?))])
         }
-        Work::Fn { decl, subst } | Work::Method { decl, subst } => {
+        Work::Fn { decl, subst, .. } | Work::Method { decl, subst } => {
             cx.subst = subst.clone();
+            if let Work::Fn { owner, .. } = work {
+                cx.static_owner = *owner;
+            }
             if matches!(work, Work::Method { .. })
                 && let Ty::Obj(ty) = info.params[0].ty
             {
@@ -423,6 +426,8 @@ struct Cx<'c, 'a> {
     ret: Option<Ty>,
     /// Inside a method or constructor: the type of `this`.
     this: Option<TypeId>,
+    /// Inside a `static fn`: the type it belongs to, whose other statics can be called bare.
+    static_owner: Option<TypeId>,
     in_ctor: bool,
     init: Option<InitState>,
     loops: u32,
@@ -494,6 +499,7 @@ impl<'c, 'a> Cx<'c, 'a> {
             scopes: vec![HashMap::new()],
             ret: Some(Ty::Void),
             this: None,
+            static_owner: None,
             in_ctor: false,
             init: None,
             loops: 0,
@@ -2799,6 +2805,15 @@ impl<'c, 'a> Cx<'c, 'a> {
                         return self.call_value(f, args, span, n);
                     }
                 }
+                // Inside a type (a method or a `static fn`), its static functions can be called bare.
+                if let Some(ty) = self.this.or(self.static_owner)
+                    && let Some(id) = self.ck.t.static_of(ty, n)
+                {
+                    if !type_args.is_empty() {
+                        return Err(not_generic(n));
+                    }
+                    return self.call_fn(id, None, args, span);
+                }
                 // Inside a method added to a built-in type, its siblings can be called bare.
                 if self.this.is_none()
                     && let Some(this) = self.find_local("this")
@@ -2878,6 +2893,23 @@ impl<'c, 'a> Cx<'c, 'a> {
                     }
                 }
 
+                // `Type.make(...)` / `module.Type.make(...)`: a static function
+                if let Some(ty) = self.static_receiver(obj)? {
+                    let Some(id) = self.ck.t.static_of(ty, &member.name) else {
+                        let what = self.ck.t.ty(ty).name.clone();
+                        let d = Diagnostic::new(format!("`{what}` has no static function `{}`", member.name), member.span);
+                        return Err(if self.ck.t.ty(ty).methods.contains_key(&member.name) {
+                            d.hint(format!("`{}` is a method: call it on a value, not on the type", member.name))
+                        } else {
+                            d
+                        });
+                    };
+                    if !type_args.is_empty() {
+                        return Err(not_generic(&format!("{}.{}", self.ck.t.ty(ty).name, member.name)));
+                    }
+                    return self.call_fn(id, None, args, span);
+                }
+
                 // `value.method(...)`, or a function stored in a field: `value.callback(...)`
                 let recv = self.value(obj)?;
                 self.method_call(recv, member, type_args, args, span, expected)
@@ -2896,6 +2928,29 @@ impl<'c, 'a> Cx<'c, 'a> {
                 let f = self.value(callee)?;
                 self.call_value(f, args, span, "this expression")
             }
+        }
+    }
+
+    /// `obj` of `obj.name(…)` when it names a (non-generic) type, directly or as `module.Type`.
+    fn static_receiver(&mut self, obj: &ast::Expr) -> Result<Option<TypeId>> {
+        use ast::ExprKind as A;
+        match &obj.kind {
+            A::Name(n) => Ok(match self.resolve(n) {
+                Some(Named::Type(ty)) => Some(ty),
+                _ => None,
+            }),
+            A::Field(inner, ty_name) => {
+                let A::Name(m) = &inner.kind else { return Ok(None) };
+                let Some(Named::Module(target)) = self.resolve(m) else { return Ok(None) };
+                match self.ck.t.scopes[target].items.get(&ty_name.name).copied() {
+                    Some(Sym::Type(ty)) => {
+                        self.check_public(target, ty_name)?;
+                        Ok(Some(ty))
+                    }
+                    _ => Ok(None),
+                }
+            }
+            _ => Ok(None),
         }
     }
 

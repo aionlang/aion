@@ -1,0 +1,6 @@
+// error: `Point` already has a method `make`
+type Point(x: Int) {
+    static fn make() = 1
+    fn make() = 2
+}
+fn main() {}

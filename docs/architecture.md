@@ -117,6 +117,11 @@ so a method whose signature mentions an ever-larger instance of its own type is
 cut off by the nesting cap (this is why `setOf` is a function, not a `List`
 method).
 
+A `static fn` is an ordinary `FuncKind::Free` function with no receiver, kept in
+`TypeInfo::statics` instead of `methods`; `Work::Fn { owner }` lets its body call its
+siblings bare.  `Type.name(…)` is resolved in the body checker before the receiver is
+evaluated as a value (`static_receiver`), and `Checker::static_of` walks up `parent`.
+
 Methods on built-in types (`fn String.shout()`) live in `Checker::ext_methods`,
 keyed by type and name; `extern` ones take the receiver as their first C argument.
 

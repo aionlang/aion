@@ -90,6 +90,8 @@ pub struct FnDecl {
     pub span: Span,
     /// `open fn` / `override fn` inside a type.
     pub modifier: Modifier,
+    /// `static fn`: belongs to the type, not to an instance (no `this`); called as `Type.name(…)`.
+    pub is_static: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

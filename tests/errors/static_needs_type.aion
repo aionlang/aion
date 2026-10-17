@@ -1,0 +1,3 @@
+// error: a `static fn` written outside a type needs the type's name
+static fn make() = 1
+fn main() {}

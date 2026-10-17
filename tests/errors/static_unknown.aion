@@ -1,0 +1,5 @@
+// error: `Point` has no static function `make`
+type Point(x: Int)
+fn main() {
+    p := Point.make(1)
+}

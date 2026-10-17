@@ -1,0 +1,44 @@
+// static fn: functions that belong to a type, called as Type.name(...) with no instance.
+
+type Point(x: Int, y: Int) {
+    static fn origin() = Point(0, 0)
+    static fn of(n: Int) = Point(n, n)
+    static fn diagonal(n: Int) = of(n)           // a sibling is called bare
+    static fn parse(s: String) -> Point {
+        parts := s.split(",")
+        return Point(parts.get(0).toIntOr(0), parts.get(1).toIntOr(0))
+    }
+    static fn dims() -> Int { return 2 }
+
+    fn mirrored() = Point(y, x)
+    fn doubled() = of(x * 2)                     // a method calls a static bare
+}
+
+static fn Point.unit() = Point(1, 1)             // written outside the type
+
+open type Shape(name: String) {
+    static fn kinds() = 3
+}
+type Circle(r: Int) : Shape("circle") {}
+
+counter := 0
+type Registry {
+    static fn next() -> Int {
+        counter += 1
+        return counter
+    }
+}
+
+fn main() {
+    println(Point.origin())
+    println(Point.of(4))
+    println(Point.diagonal(5))
+    println(Point.parse("7,9").mirrored())
+    println(Point.unit())
+    println(Point.of(3).doubled())
+    println(Point.dims())
+    println(Circle.kinds(), Shape.kinds())       // a subtype finds its parent's statics
+    println(Registry.next(), Registry.next(), Registry.next())
+    p := Point.of(1)
+    println(p.x + Point.dims())
+}
