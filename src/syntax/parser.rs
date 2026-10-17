@@ -970,6 +970,14 @@ impl<'a> Parser<'a> {
                 }
                 StmtKind::Defer(body)
             }
+            Some(Token::Ident) if self.peek_at(1) == Some(Token::At) && matches!(self.peek_at(2), Some(Token::While | Token::For)) => {
+                let label = self.ident()?;
+                self.bump(); // `@`
+                let mut inner = Vec::new();
+                self.stmt_into(&mut inner)?;
+                let stmt = inner.pop().expect("a loop is one statement");
+                StmtKind::Labeled { label, stmt: Box::new(stmt) }
+            }
             Some(Token::While) => {
                 self.bump();
                 let cond = self.header_expr()?;
@@ -1001,13 +1009,16 @@ impl<'a> Parser<'a> {
                 let decl = self.fn_decl(fn_start, false)?;
                 StmtKind::Let { name: decl.name.clone(), ty: Self::nested_fn_type(&decl)?, init: Some(Self::nested_fn(decl)?) }
             }
-            Some(Token::Break) => {
-                self.bump();
-                StmtKind::Break
-            }
-            Some(Token::Continue) => {
-                self.bump();
-                StmtKind::Continue
+            Some(Token::Break | Token::Continue) => {
+                let is_break = self.bump().kind == Token::Break;
+                if self.peek() == Some(Token::At) && !self.nl() {
+                    self.bump();
+                    StmtKind::JumpTo { label: self.ident()?, is_break }
+                } else if is_break {
+                    StmtKind::Break
+                } else {
+                    StmtKind::Continue
+                }
             }
             Some(Token::Ident) if matches!(self.peek_at(1), Some(Token::Colon | Token::ColonEq)) => {
                 let name = self.ident()?;

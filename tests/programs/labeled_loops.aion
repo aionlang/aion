@@ -1,0 +1,52 @@
+/**
+ * `name@` before a loop labels it; `break@name` leaves that loop and `continue@name` starts its next
+ * round, from any depth of nested loops.  `defer`s of the blocks being left run first.
+ */
+found := ""
+outer@ for i in 1..10 {
+    for j in 1..10 {
+        if i * j == 42 {
+            found = "$i x $j"
+            break@outer
+        }
+    }
+}
+println(found)
+
+// continue@outer skips the rest of the inner loop and moves the outer one on
+pairs := 0
+rows@ for r in 0..4 {
+    for c in 0..4 {
+        if c > r { continue@rows }
+        pairs += 1
+    }
+}
+println(pairs)
+
+// while loops, three levels deep, and a for over a list
+i := 0
+a@ while i < 100 {
+    i += 1
+    b@ for x in [1, 2, 3] {
+        for y in 0..5 {
+            if y == 2 { continue@b }
+            if x == 3 && i == 3 { break@a }
+            if i == 2 { continue@a }
+        }
+    }
+}
+println(i)
+
+// a deferred statement runs when the jump leaves its block
+loop@ for k in 0..3 {
+    defer println("done with", k)
+    for m in 0..3 {
+        if m == 1 { continue@loop }
+        println("k", k, "m", m)
+    }
+}
+
+// the same label can be used again by a later loop
+t@ for q in 0..3 { if q == 1 { break@t } }
+t@ for q in 0..3 { if q == 2 { break@t } }
+println("end")

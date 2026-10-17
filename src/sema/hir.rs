@@ -171,6 +171,8 @@ pub enum Stmt {
     While { cond: Expr, body: Vec<Stmt>, step: Vec<Stmt> },
     Break,
     Continue,
+    /// `break@label` / `continue@label`: `levels` loops outward from the innermost (0 is the same as a plain one).
+    JumpOut { levels: usize, is_break: bool },
     Return(Option<Expr>),
 }
 

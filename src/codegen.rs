@@ -629,6 +629,10 @@ impl<'a> FnGen<'a> {
                 let end = self.loops.last().expect("the checker rejects `break` outside loops").1.clone();
                 self.term(format!("br label %{end}"));
             }
+            Stmt::JumpOut { levels, is_break } => {
+                let (next, end) = self.loops[self.loops.len() - 1 - levels].clone();
+                self.term(format!("br label %{}", if *is_break { end } else { next }));
+            }
             Stmt::Continue => {
                 let next = self.loops.last().expect("the checker rejects `continue` outside loops").0.clone();
                 self.term(format!("br label %{next}"));

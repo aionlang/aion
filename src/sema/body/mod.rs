@@ -337,7 +337,7 @@ fn diverges(ck: &Checker, e: &hir::Expr) -> bool {
         K::Cond { then, otherwise, .. } => diverges(ck, then) && diverges(ck, otherwise),
         K::Block(stmts, tail) => {
             let leaves = |s: &hir::Stmt| match s {
-                hir::Stmt::Return(_) | hir::Stmt::Break | hir::Stmt::Continue => true,
+                hir::Stmt::Return(_) | hir::Stmt::Break | hir::Stmt::Continue | hir::Stmt::JumpOut { .. } => true,
                 hir::Stmt::Expr(e) => diverges(ck, e),
                 _ => false,
             };
@@ -401,7 +401,7 @@ struct Frame {
     loops: u32,
     captures: Vec<hir::Capture>,
     block_defers: Vec<Option<LocalId>>,
-    loop_bases: Vec<usize>,
+    loop_bases: Vec<(usize, Option<String>)>,
     in_try: bool,
 }
 
@@ -445,7 +445,9 @@ struct Cx<'c, 'a> {
     /// `defer` stack depth at its first `defer`, if it has one.
     block_defers: Vec<Option<LocalId>>,
     /// `block_defers.len()` at the start of each enclosing loop body.
-    loop_bases: Vec<usize>,
+    loop_bases: Vec<(usize, Option<String>)>,
+    /// A `outer@` label seen, to be taken by the loop that follows it.
+    pending_label: Option<String>,
     /// Checking the body or handler of a `try` (which run as closures)?
     in_try: bool,
     /// The next lambda frame is the body of a `try`.
@@ -511,6 +513,7 @@ impl<'c, 'a> Cx<'c, 'a> {
             trace_file: None,
             block_defers: Vec::new(),
             loop_bases: Vec::new(),
+            pending_label: None,
             in_try: false,
             pending_try: false,
             narrowed: Vec::new(),
@@ -800,7 +803,7 @@ impl<'c, 'a> Cx<'c, 'a> {
         }
         self.narrowed = saved;
         if let Some(Some(mark)) = self.block_defers.pop()
-            && !matches!(out.last(), Some(hir::Stmt::Return(_) | hir::Stmt::Break | hir::Stmt::Continue))
+            && !matches!(out.last(), Some(hir::Stmt::Return(_) | hir::Stmt::Break | hir::Stmt::Continue | hir::Stmt::JumpOut { .. }))
         {
             out.push(self.run_defers(mark)?);
         }
@@ -848,7 +851,7 @@ impl<'c, 'a> Cx<'c, 'a> {
         self.scopes.pop();
         result?;
         if let Some(mark) = mark
-            && !matches!(out.last(), Some(hir::Stmt::Return(_) | hir::Stmt::Break | hir::Stmt::Continue))
+            && !matches!(out.last(), Some(hir::Stmt::Return(_) | hir::Stmt::Break | hir::Stmt::Continue | hir::Stmt::JumpOut { .. }))
         {
             out.push(self.run_defers(mark)?);
         }
@@ -892,7 +895,7 @@ impl<'c, 'a> Cx<'c, 'a> {
 
     /// Run the `defer`s of the blocks a `break` / `continue` leaves.
     fn leave_loop_body(&mut self, out: &mut Vec<hir::Stmt>) -> Result<()> {
-        let base = self.loop_bases.last().copied().unwrap_or(0);
+        let base = self.loop_bases.last().map_or(0, |l| l.0);
         if let Some(&mark) = self.block_defers[base.min(self.block_defers.len())..].iter().flatten().next() {
             out.push(self.run_defers(mark)?);
         }
@@ -975,17 +978,30 @@ impl<'c, 'a> Cx<'c, 'a> {
             StmtKind::Expr(e) => out.push(self.stmt_expr(e)?),
 
             StmtKind::While { cond: test, body } => {
+                let label = self.pending_label.take();
                 let cond = self.condition(test)?;
                 let facts = self.facts(test, true);
                 self.loops += 1;
-                self.loop_bases.push(self.block_defers.len());
+                self.loop_bases.push((self.block_defers.len(), label));
                 let body = self.with_facts(facts, |cx| cx.block(body));
                 self.loop_bases.pop();
                 self.loops -= 1;
                 out.push(hir::Stmt::While { cond, body: body?, step: Vec::new() });
             }
 
-            StmtKind::For { var, iter, body } => self.for_loop(var, iter, body, out)?,
+            StmtKind::For { var, iter, body } => {
+                let label = self.pending_label.take();
+                self.for_loop(var, iter, body, label, out)?
+            }
+
+            StmtKind::Labeled { label, stmt } => {
+                self.pending_label = Some(label.name.clone());
+                let result = self.stmt(stmt, out);
+                self.pending_label = None;
+                result?
+            }
+
+            StmtKind::JumpTo { label, is_break } => self.jump_to(label, *is_break, out)?,
 
             StmtKind::WhenCheck { subject, covered } => self.when_check(subject, covered, s.span, out)?,
             StmtKind::Break | StmtKind::Continue => self.jump_stmt(matches!(s.kind, StmtKind::Break), s.span, out)?,
@@ -1050,6 +1066,21 @@ impl<'c, 'a> Cx<'c, 'a> {
         Ok(())
     }
 
+    /// `break@outer` / `continue@outer`: jump out of the loop labelled `outer`, running the `defer`s on the way.
+    fn jump_to(&mut self, label: &ast::Ident, is_break: bool, out: &mut Vec<hir::Stmt>) -> Result<()> {
+        let word = if is_break { "break" } else { "continue" };
+        let Some(at) = self.loop_bases.iter().rposition(|l| l.1.as_deref() == Some(label.name.as_str())) else {
+            return Err(Diagnostic::new(format!("`{word}@{}` is not inside a loop labelled `{}`", label.name, label.name), label.span)
+                .hint(format!("label a loop by writing `{}@` before it: `{}@ for …`", label.name, label.name)));
+        };
+        let base = self.loop_bases[at].0;
+        if let Some(&mark) = self.block_defers[base.min(self.block_defers.len())..].iter().flatten().next() {
+            out.push(self.run_defers(mark)?);
+        }
+        out.push(hir::Stmt::JumpOut { levels: self.loop_bases.len() - 1 - at, is_break });
+        Ok(())
+    }
+
     /// An expression used as a statement: its value (if any) is discarded.
     fn stmt_expr(&mut self, e: &ast::Expr) -> Result<hir::Stmt> {
         Ok(hir::Stmt::Expr(match &e.kind {
@@ -1075,9 +1106,9 @@ impl<'c, 'a> Cx<'c, 'a> {
         }))
     }
 
-    fn for_loop(&mut self, var: &ast::Ident, iter: &ast::Expr, body: &[ast::Stmt], out: &mut Vec<hir::Stmt>) -> Result<()> {
+    fn for_loop(&mut self, var: &ast::Ident, iter: &ast::Expr, body: &[ast::Stmt], label: Option<String>, out: &mut Vec<hir::Stmt>) -> Result<()> {
         let A::Range { start, end, inclusive } = &iter.kind else {
-            return self.for_each(var, iter, body, out);
+            return self.for_each(var, iter, body, label, out);
         };
         // The bounds are Ints, or Chars (`'a'..='z'`), and the loop variable has their type.
         let first = self.value(start)?;
@@ -1102,7 +1133,7 @@ impl<'c, 'a> Cx<'c, 'a> {
         let v = self.new_local(&var.name, kind);
         self.scopes.last_mut().unwrap().insert(var.name.clone(), v);
         self.loops += 1;
-        self.loop_bases.push(self.block_defers.len());
+        self.loop_bases.push((self.block_defers.len(), label));
         let inner = self.block(body);
         self.loop_bases.pop();
         self.loops -= 1;
@@ -1125,7 +1156,7 @@ impl<'c, 'a> Cx<'c, 'a> {
     /// $coll := collection; $i := 0
     /// while $i < $coll.size() { x := $coll.get($i); body; $i += 1 }
     /// ```
-    fn for_each(&mut self, var: &ast::Ident, iter: &ast::Expr, body: &[ast::Stmt], out: &mut Vec<hir::Stmt>) -> Result<()> {
+    fn for_each(&mut self, var: &ast::Ident, iter: &ast::Expr, body: &[ast::Stmt], label: Option<String>, out: &mut Vec<hir::Stmt>) -> Result<()> {
         let mut coll = self.value(iter)?;
         // A type can say what to loop over with `iter()` (a Map loops over its entries,
         // a String over its characters).
@@ -1163,7 +1194,7 @@ impl<'c, 'a> Cx<'c, 'a> {
         let v = self.new_local(&var.name, item.ty);
         self.scopes.last_mut().unwrap().insert(var.name.clone(), v);
         self.loops += 1;
-        self.loop_bases.push(self.block_defers.len());
+        self.loop_bases.push((self.block_defers.len(), label));
         let inner = self.block(body);
         self.loop_bases.pop();
         self.loops -= 1;

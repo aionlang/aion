@@ -198,6 +198,10 @@ pub enum StmtKind {
     /// Made by `when x { Color.Red -> … }` without an `else`: if `x` is an enum, every variant must be
     /// among `covered`.  Produces no code.
     WhenCheck { subject: String, covered: Vec<Ident> },
+    /// `outer@ for … { }`: a loop that `break@outer` and `continue@outer` can name.
+    Labeled { label: Ident, stmt: Box<Stmt> },
+    /// `break@outer` / `continue@outer`: leave, or go on with the next round of, an enclosing loop.
+    JumpTo { label: Ident, is_break: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -85,7 +85,8 @@ pub(crate) fn walk_stmt<'a>(s: &'a ast::Stmt, lambda: bool, f: &mut dyn FnMut(As
         StmtKind::Return(Some(e)) => walk_expr(e, lambda, f),
         // a deferred body runs later, like a lambda
         StmtKind::Defer(body) => walk_stmts(body, true, f),
-        StmtKind::Return(None) | StmtKind::Break | StmtKind::Continue | StmtKind::WhenCheck { .. } => {}
+        StmtKind::Return(None) | StmtKind::Break | StmtKind::Continue | StmtKind::WhenCheck { .. } | StmtKind::JumpTo { .. } => {}
+        StmtKind::Labeled { stmt, .. } => walk_stmts(std::slice::from_ref(&**stmt), lambda, f),
     }
 }
 
@@ -170,7 +171,7 @@ pub(crate) fn lambda_assigned<'a>(visit: impl FnOnce(&mut dyn FnMut(Assign<'a>))
 /// Does a block of checked statements always leave (`return`, `break`, `continue`, `panic`)?
 fn diverges(ck: &crate::sema::Checker, stmts: &[hir::Stmt]) -> bool {
     match stmts.last() {
-        Some(hir::Stmt::Return(_) | hir::Stmt::Break | hir::Stmt::Continue) => true,
+        Some(hir::Stmt::Return(_) | hir::Stmt::Break | hir::Stmt::Continue | hir::Stmt::JumpOut { .. }) => true,
         Some(hir::Stmt::Expr(e)) => super::expr_returns(ck, e),
         _ => false,
     }

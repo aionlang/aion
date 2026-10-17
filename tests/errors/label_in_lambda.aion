@@ -1,0 +1,4 @@
+// error: `break@outer` is not inside a loop labelled `outer`
+outer@ for i in 0..3 {
+    [1].forEach { break@outer }
+}

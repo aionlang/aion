@@ -1,0 +1,4 @@
+// error: `break@nope` is not inside a loop labelled `nope`
+for i in 0..3 {
+    break@nope
+}
