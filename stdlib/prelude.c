@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "aion.h"
+#include "aion_sync.h"
 
 #include <ctype.h>
 #include <errno.h>
@@ -257,10 +258,12 @@ const char *aion_read_line(void) {
     char *buf = malloc(cap);
     if (!buf) aion_panic("out of memory");
     int c;
+    aion_blocking_enter(); /* waiting for the user must not hold up another thread's collection */
     while ((c = getchar()) != EOF && c != '\n') {
         if (len + 1 >= cap) buf = grow(buf, &cap);
         buf[len++] = (char)c;
     }
+    aion_blocking_leave();
     if (c == EOF && len == 0) {
         free(buf);
         return NULL;
@@ -278,10 +281,12 @@ const char *aion_read_text(void) {
     char *buf = malloc(cap);
     if (!buf) aion_panic("out of memory");
     int c;
+    aion_blocking_enter();
     while ((c = getchar()) != EOF) {
         if (len + 1 >= cap) buf = grow(buf, &cap);
         buf[len++] = (char)c;
     }
+    aion_blocking_leave();
     const char *text = aion_string_n(buf, len);
     free(buf);
     return text;

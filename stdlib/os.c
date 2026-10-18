@@ -3,6 +3,7 @@
  */
 
 #include "aion.h"
+#include "aion_sync.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -221,7 +222,7 @@ static bool drain(HANDLE h, char **buf, size_t *len, bool *got) {
     return true;
 }
 
-int64_t aion_os_exec(const char *program, const char *args, const char *input, bool capture) {
+static int64_t exec_impl(const char *program, const char *args, const char *input, bool capture) {
     free(captured_out), free(captured_err);
     captured_out = captured_err = NULL;
     captured_out_len = captured_err_len = 0;
@@ -337,7 +338,7 @@ static int64_t wait_status(int status) {
  * program's input and output instead.  Returns the exit status, 128+N if signal N ended it, -1 if it
  * could not be started.
  */
-int64_t aion_os_exec(const char *program, const char *args, const char *input, bool capture) {
+static int64_t exec_impl(const char *program, const char *args, const char *input, bool capture) {
     free(captured_out), free(captured_err);
     captured_out = captured_err = NULL;
     captured_out_len = captured_err_len = 0;
@@ -415,3 +416,11 @@ int64_t aion_os_exec(const char *program, const char *args, const char *input, b
 }
 
 #endif
+
+/* The program runs, and its output is gathered, without touching the heap: a collection need not wait for it. */
+int64_t aion_os_exec(const char *program, const char *args, const char *input, bool capture) {
+    aion_blocking_enter();
+    int64_t status = exec_impl(program, args, input, capture);
+    aion_blocking_leave();
+    return status;
+}

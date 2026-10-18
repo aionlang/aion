@@ -23,6 +23,10 @@
  * anything else is reported ready at once and its owner blocks in the call itself).
  */
 
+#ifdef _WIN32
+#include <winsock2.h> /* before windows.h, which aion_sync.h includes */
+#endif
+
 #include "aion.h"
 #include "aion_sync.h"
 
