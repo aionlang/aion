@@ -1283,6 +1283,9 @@ shows its first twelve and last three calls.  Keeping the trace costs a little s
 that make very many small calls; `aion --no-trace file.aion` (or `aion build --no-trace`) leaves
 it out.
 
+A file with no `fn main()` and no top-level statements has nothing to run: `aion` says
+`warning: no procedures to execute` and exits with status 0.  `--silent-empty-main` hides the warning.
+
 ## Not (yet) in the language
 
 Preemptive threads (tasks take turns), a `select` over several channels, inheritance

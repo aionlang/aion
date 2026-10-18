@@ -1,2 +1,0 @@
-// error: the program has no `fn main()`
-fn helper() {}

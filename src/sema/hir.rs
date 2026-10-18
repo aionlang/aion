@@ -60,6 +60,8 @@ pub struct Program {
     pub inits: Vec<FnId>,
     /// The entry module's `fn main()`, run after all initialisers.
     pub main: Option<FnId>,
+    /// The entry module has neither a `fn main()` nor top-level statements, so running does nothing.
+    pub nothing_to_run: bool,
 }
 
 /// How one method of an interface is found at run time: for each concrete type

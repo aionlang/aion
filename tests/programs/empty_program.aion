@@ -1,0 +1,2 @@
+// stderr: no procedures to execute
+fn helper() {}

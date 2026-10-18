@@ -1495,10 +1495,7 @@ impl<'a> Checker<'a> {
             }
         }
         let entry_has_script = self.inits.iter().any(|&i| self.func(i).module == entry_module);
-        if main.is_none() && !entry_has_script {
-            return Err(Diagnostic::general("the program has no `fn main()` and no top-level statements to run")
-                .hint("write statements directly in the file, or define `fn main() { … }`"));
-        }
+        let nothing_to_run = main.is_none() && !entry_has_script;
 
         let dispatch = self.dispatch_tables();
         let count = self.types_len();
@@ -1534,7 +1531,7 @@ impl<'a> Checker<'a> {
             .into_iter()
             .map(|slot| slot.func.unwrap_or_else(unused_func))
             .collect();
-        Ok(hir::Program { types, dispatch, instance_checks, globals, funcs, inits: self.inits, main })
+        Ok(hir::Program { types, dispatch, instance_checks, globals, funcs, inits: self.inits, main, nothing_to_run })
     }
 }
 

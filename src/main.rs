@@ -48,6 +48,7 @@ options:
   -O0..-O3       optimisation level (default -O2)
   --project <p>  use this aion.project (or the folder holding it) instead of searching upward
   --no-trace     leave out the stack trace a panic prints (a little faster)
+  --silent-empty-main  do not warn when the program has no `fn main()` and no top-level statements
   --keep-temps   keep intermediate files
   -h, --help     show this help
   -V, --version  show the version
@@ -72,6 +73,8 @@ struct Cli {
     output: Option<PathBuf>,
     /// `--project`: use this project instead of searching.
     project: Option<PathBuf>,
+    /// `--silent-empty-main`: say nothing when there is nothing to run.
+    silent_empty_main: bool,
     opts: toolchain::Options,
     /// What follows the file: handed to the program.
     program_args: Vec<String>,
@@ -85,6 +88,7 @@ fn parse_args(args: &[String]) -> Result<Cli, String> {
     let mut opts = toolchain::Options { opt_level: default_opt.unwrap_or_else(|| "2".into()), keep_temps: false, trace: true };
     let mut program_args = Vec::new();
     let mut project = None;
+    let mut silent_empty_main = false;
 
     let mut it = args.iter();
     while let Some(arg) = it.next() {
@@ -109,6 +113,7 @@ fn parse_args(args: &[String]) -> Result<Cli, String> {
             "-o" => output = Some(PathBuf::from(it.next().ok_or("`-o` needs a file name")?)),
             "--keep-temps" => opts.keep_temps = true,
             "--no-trace" => opts.trace = false,
+            "--silent-empty-main" => silent_empty_main = true,
             "--project" => project = Some(PathBuf::from(it.next().ok_or("`--project` needs a path")?)),
             "-h" | "--help" => return Err(USAGE.into()),
             "-V" | "--version" => return Err(format!("aion {}", env!("CARGO_PKG_VERSION"))),
@@ -131,7 +136,7 @@ fn parse_args(args: &[String]) -> Result<Cli, String> {
     if !program_args.is_empty() && !matches!(command, Subcommand::Run) {
         return Err("arguments for the program only make sense when running it".into());
     }
-    Ok(Cli { command, input, output, project, opts, program_args })
+    Ok(Cli { command, input, output, project, silent_empty_main, opts, program_args })
 }
 
 type Failure = (Diagnostic, Option<SourceMap>);
@@ -189,7 +194,13 @@ struct Compiled {
 }
 
 /// Everything up to (but not including) invoking the C toolchain.
-fn compile(map: &mut SourceMap, entry: &Path, project: Option<&project::Project>, trace: bool) -> Result<Compiled, Failure> {
+fn compile(
+    map: &mut SourceMap,
+    entry: &Path,
+    project: Option<&project::Project>,
+    trace: bool,
+    silent_empty_main: bool,
+) -> Result<Compiled, Failure> {
     let dir = entry.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
     let (inline, lock) = inline_dependencies(entry, project).map_err(|d| (d, None))?;
     let packages = project::resolve(project, dir, &inline, lock.as_deref()).map_err(|d| (d, None))?;
@@ -199,6 +210,11 @@ fn compile(map: &mut SourceMap, entry: &Path, project: Option<&project::Project>
             eprint!("{}", w.render(map));
         }
         let program = sema::analyze(&loaded, map, trace)?;
+        if program.nothing_to_run && !silent_empty_main {
+            let nothing = Diagnostic { warning: true, ..Diagnostic::general("no procedures to execute") }
+                .hint("write statements in the file or define `fn main() { … }`; `--silent-empty-main` hides this warning");
+            eprint!("{}", nothing.render(map));
+        }
         Ok::<_, Diagnostic>(Compiled { ir: codegen::emit(&program), c_sources: loaded.c_sources, libs: loaded.libs })
     })();
     result.map_err(|d| (d, None))
@@ -352,7 +368,7 @@ fn run() -> Result<ExitCode, Failure> {
 
     let (entry, proj) = locate(cli.input.as_deref(), cli.project.as_deref()).map_err(general)?;
     let mut map = SourceMap::default();
-    let program = compile(&mut map, &entry, proj.as_ref(), cli.opts.trace).map_err(|(d, _)| (d, Some(map)))?;
+    let program = compile(&mut map, &entry, proj.as_ref(), cli.opts.trace, cli.silent_empty_main).map_err(|(d, _)| (d, Some(map)))?;
 
     match cli.command {
         Subcommand::Check => {
@@ -408,5 +424,11 @@ mod tests {
         // before the file an unknown option is still an error, and builds take no arguments
         assert!(parse(&["-x", "script.aion"]).is_err());
         assert!(parse(&["build", "script.aion", "extra"]).is_err());
+    }
+
+    #[test]
+    fn silent_empty_main_is_an_option() {
+        assert!(!parse(&["script.aion"]).unwrap().silent_empty_main);
+        assert!(parse(&["--silent-empty-main", "script.aion"]).unwrap().silent_empty_main);
     }
 }
