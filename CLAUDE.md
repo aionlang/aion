@@ -6,6 +6,8 @@
 
 - If asked to make a commit, follow the convention: feat/fix/docs(module_name): description
 
+- The description starts with a verb in the imperative (add, edit, fix, remove, rename, replace, ...) and says what the commit does, not just what it is about: `feat(os): add processes and the terminal on Windows`, not `feat(os): processes and the terminal on Windows`.
+
 ## Testing with Docker
 
 There is no Rust or clang on this machine, so build and test in Docker. Use PowerShell: in Git Bash the `$PWD` path is rewritten and the mount comes up empty.
