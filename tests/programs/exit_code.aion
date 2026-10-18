@@ -1,3 +1,4 @@
+// stress: 4
 // exit: 7
 fn main() -> Int {
     println("returning 7")

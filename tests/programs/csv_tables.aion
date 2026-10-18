@@ -1,3 +1,4 @@
+// stress: 16
 // csv: RFC 4180 parsing and writing, with quotes, embedded line breaks, other delimiters and errors
 import csv
 import fs

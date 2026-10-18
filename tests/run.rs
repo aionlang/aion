@@ -3,10 +3,13 @@
 //! * `tests/programs/*.aion` are run; stdout must equal the sibling `.out`
 //!   file.  Optional header comments: `// exit: N` (expected exit code,
 //!   default 0), `// stderr: text` (stderr must contain `text`) and
-//!   `// stress: skip` (don't repeat under `AION_GC_STRESS=1`).
+//!   `// stress: skip` (don't repeat under `AION_GC_STRESS=1`) or `// stress: N` (collect on every Nth
+//!   allocation instead of every one, for programs that allocate a lot).
 //!   Every program is also run with a collection on every allocation and must
 //!   produce identical output — that catches values the compiler failed to
 //!   keep alive.
+//! * Programs are built at `-O0` (builds are several times faster; the tests check behaviour, not speed) and
+//!   run side by side on all cores.  `AION_TEST_OPT=2 cargo test` builds them optimised instead.
 //! * `tests/errors/*.aion` must fail to compile with the diagnostic named by
 //!   their `// error: text` header.
 
@@ -24,11 +27,11 @@ fn test_opt() -> String {
     std::env::var("AION_TEST_OPT").unwrap_or_else(|_| "0".into())
 }
 
-fn aion(args: &[&str], file: &Path, stress: bool) -> Output {
+fn aion(args: &[&str], file: &Path, stress: Option<&str>) -> Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_aion"));
     cmd.args(args).arg(file).env("AION_CACHE", test_cache()).env("AION_OPT", test_opt());
-    if stress {
-        cmd.env("AION_GC_STRESS", "1");
+    if let Some(every) = stress {
+        cmd.env("AION_GC_STRESS", every);
     }
     cmd.output().expect("failed to launch the aion binary")
 }
@@ -83,13 +86,16 @@ fn programs_produce_expected_output() {
         let expected_out = std::fs::read_to_string(file.with_extension("out"))
             .unwrap_or_else(|_| panic!("missing tests/programs/{name}.out"));
 
-        let mut modes = vec![false];
-        if header(&source, "stress").as_deref() != Some("skip") {
-            modes.push(true);
+        // `// stress: skip` runs it once; `// stress: N` collects on every Nth allocation instead of every one
+        let mut modes: Vec<Option<String>> = vec![None];
+        match header(&source, "stress").as_deref() {
+            Some("skip") => {}
+            Some(every) if every.parse::<u32>().is_ok() => modes.push(Some(every.to_string())),
+            _ => modes.push(Some("1".to_string())),
         }
         for stress in modes {
-            let mode = if stress { "gc-stress" } else { "normal" };
-            let out = aion(&["run"], &file, stress);
+            let mode = if stress.is_some() { "gc-stress" } else { "normal" };
+            let out = aion(&["run"], &file, stress.as_deref());
             let stdout = String::from_utf8_lossy(&out.stdout);
             let stderr = String::from_utf8_lossy(&out.stderr);
             if out.status.code() != Some(expected_code) {
@@ -116,7 +122,7 @@ fn invalid_programs_are_rejected_with_the_right_message() {
         let want = header(&source, "error").unwrap_or_else(|| panic!("tests/errors/{name}.aion has no `// error:` header"));
 
         // `emit-ir` stops after analysis, so these tests don't need clang.
-        let out = aion(&["emit-ir"], &file, false);
+        let out = aion(&["emit-ir"], &file, None);
         let stderr = String::from_utf8_lossy(&out.stderr);
         if out.status.success() {
             failures.push(format!("{name}: compiled, expected error `{want}`"));
@@ -130,7 +136,7 @@ fn invalid_programs_are_rejected_with_the_right_message() {
 #[test]
 fn diagnostics_point_at_the_source() {
     let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/errors/type_mismatch.aion");
-    let out = aion(&["emit-ir"], &file, false);
+    let out = aion(&["emit-ir"], &file, None);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("type_mismatch.aion:3:15"), "{stderr}");
     assert!(stderr.contains("x: Int := \"hello\""), "{stderr}");
@@ -144,7 +150,7 @@ fn circular_imports_are_reported() {
     std::fs::write(dir.join("a.aion"), "import b;\nfn fa() {}\n").unwrap();
     std::fs::write(dir.join("b.aion"), "import a;\nfn fb() {}\n").unwrap();
     std::fs::write(dir.join("main.aion"), "import a;\nfn main() {}\n").unwrap();
-    let out = aion(&["emit-ir"], &dir.join("main.aion"), false);
+    let out = aion(&["emit-ir"], &dir.join("main.aion"), None);
     let _ = std::fs::remove_dir_all(&dir);
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("circular import"));
@@ -443,6 +449,7 @@ fn aion_in(dir: &Path, args: &[&str]) -> Output {
         .args(args)
         .current_dir(dir)
         .env("AION_CACHE", test_cache())
+        .env("AION_OPT", test_opt())
         .output()
         .unwrap()
 }
@@ -450,7 +457,7 @@ fn aion_in(dir: &Path, args: &[&str]) -> Output {
 /// Like [`aion_in`], with extra environment variables.
 fn aion_in_env(dir: &Path, args: &[&str], env: &[(&str, &Path)]) -> Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_aion"));
-    cmd.args(args).current_dir(dir).env("AION_CACHE", test_cache());
+    cmd.args(args).current_dir(dir).env("AION_CACHE", test_cache()).env("AION_OPT", test_opt());
     for (k, v) in env {
         cmd.env(k, v);
     }
@@ -720,7 +727,8 @@ fn code_in_the_documentation_works() {
     files.extend(docs);
 
     let dir = scratch("docs");
-    let (mut failures, mut checked) = (Vec::new(), 0);
+    // (where it is, the code, how to check it, a number for its file)
+    let mut blocks = Vec::new();
     for file in files {
         let text = std::fs::read_to_string(&file).unwrap();
         for (line, info, body) in code_blocks(&text) {
@@ -730,19 +738,17 @@ fn code_in_the_documentation_works() {
                 "aion no_run" => "emit-ir",
                 _ => continue,
             };
-            checked += 1;
-            let src = dir.join(format!("block_{checked}.aion"));
-            write(&src, &body);
-            let out = aion_in(&dir, &[mode, src.to_str().unwrap()]);
-            if !out.status.success() {
-                failures.push(format!(
-                    "{}:{line}\n{body}\n{}",
-                    file.strip_prefix(root).unwrap().display(),
-                    stderr(&out)
-                ));
-            }
+            let at = format!("{}:{line}", file.strip_prefix(root).unwrap().display());
+            blocks.push((at, body, mode, blocks.len() + 1));
         }
     }
+    let checked = blocks.len();
+    let failures = in_parallel(&blocks, |(at, body, mode, number)| {
+        let src = dir.join(format!("block_{number}.aion"));
+        write(&src, body);
+        let out = aion_in(&dir, &[mode, src.to_str().unwrap()]);
+        if out.status.success() { Vec::new() } else { vec![format!("{at}\n{body}\n{}", stderr(&out))] }
+    });
     assert!(checked > 10, "expected to find documentation examples, found {checked}");
     assert!(failures.is_empty(), "\n{}", failures.join("\n---\n"));
 }

@@ -1,3 +1,4 @@
+// stress: 4
 /**
  * `Result<T, E>` is either `Ok(value)` or `Err(error)`.  `r?` unwraps an `Ok`; for an `Err` it returns that
  * error from the enclosing function, so a chain of fallible steps reads straight down.

@@ -1,3 +1,4 @@
+// stress: 32
 // StringBuilder: building text without quadratic copying
 sb := StringBuilder()
 println(sb.length(), sb.isEmpty(), "[" + sb.toString() + "]")

@@ -195,12 +195,18 @@ void aion_panic_index(int64_t index, int64_t len) {
 
 /* AION_GC_STRESS=1 collects on every allocation and poisons freed memory: any
  * value the compiler forgot to keep reachable is destroyed at once, which
- * makes such bugs loud instead of intermittent. */
-static int stress_mode(void) {
-    static int cached = -1;
-    if (cached < 0) cached = getenv("AION_GC_STRESS") != NULL;
+ * makes such bugs loud instead of intermittent.  AION_GC_STRESS=N collects on
+ * every Nth allocation instead: much faster for programs that allocate a lot,
+ * and still collects at many different points. */
+static long stress_every(void) {
+    static long cached = -1;
+    if (cached < 0) {
+        const char *v = getenv("AION_GC_STRESS");
+        cached = v == NULL ? 0 : atol(v) > 0 ? atol(v) : 1;
+    }
     return cached;
 }
+static int stress_mode(void) { return stress_every() != 0; }
 
 static AionHeader **mark_stack = NULL;
 static size_t mark_len = 0, mark_cap = 0;
@@ -261,7 +267,9 @@ void aion_gc_collect(void) {
 
 static void *gc_alloc(size_t size, uint32_t flags, uint64_t ptr_mask) {
     if (size > UINT32_MAX) aion_panic("allocation too large");
-    if (stress_mode() || heap_bytes + sizeof(AionHeader) + size > threshold) aion_gc_collect();
+    static long allocations = 0;
+    int stressed = stress_mode() && ++allocations % stress_every() == 0;
+    if (stressed || heap_bytes + sizeof(AionHeader) + size > threshold) aion_gc_collect();
 
     AionHeader *h = calloc(1, sizeof *h + size);
     if (!h) {
