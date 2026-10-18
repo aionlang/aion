@@ -30,6 +30,7 @@ typedef struct {
     void *ssl;
     bool used, listener;
     int64_t timeout_ms;
+    char alpn[32]; /* the protocol TLS agreed on (ALPN), or "" */
 } Conn;
 
 static Conn *conns;
@@ -313,6 +314,8 @@ static struct {
     unsigned long (*ERR_get_error)(void);
     void (*ERR_error_string_n)(unsigned long, char *, size_t);
     void (*ERR_clear_error)(void);
+    int (*SSL_CTX_set_alpn_protos)(void *, const unsigned char *, unsigned int);
+    void (*SSL_get0_alpn_selected)(const void *, const unsigned char **, unsigned int *);
 } tls;
 
 static void *open_library(const char *const *names) {
@@ -340,7 +343,7 @@ static bool load_tls(void) {
     LOAD(ssl, SSL_ctrl) LOAD(ssl, SSL_set1_host) LOAD(ssl, SSL_connect) LOAD(ssl, SSL_read) LOAD(ssl, SSL_write)
     LOAD(ssl, SSL_get_error) LOAD(ssl, SSL_shutdown) LOAD(ssl, SSL_free) LOAD(ssl, SSL_get_verify_result)
     LOAD(crypto, X509_verify_cert_error_string) LOAD(crypto, ERR_get_error) LOAD(crypto, ERR_error_string_n)
-    LOAD(crypto, ERR_clear_error)
+    LOAD(crypto, ERR_clear_error) LOAD(ssl, SSL_CTX_set_alpn_protos) LOAD(ssl, SSL_get0_alpn_selected)
 #undef LOAD
     tls.ok = true;
     return true;
@@ -357,12 +360,32 @@ static void tls_error(const char *what) {
 
 /* Run the TLS handshake on a connected socket.  `verify` checks the server's certificate and host name
  * against the system's trusted roots (or `cafile`, or the SSL_CERT_FILE environment variable). */
-bool aion_net_start_tls(int64_t h, const char *host, bool verify, const char *cafile) {
+bool aion_net_start_tls(int64_t h, const char *host, bool verify, const char *cafile, const char *protocols) {
     Conn *c = get(h);
     if (!c) return set_error("the connection is closed"), false;
     if (!load_tls()) return false;
     void *ctx = tls.SSL_CTX_new(tls.TLS_client_method());
     if (!ctx) return tls_error("cannot create a TLS context"), false;
+    /* ALPN: the protocols we can speak, comma separated ("h2,http/1.1"), in order of preference */
+    if (*protocols) {
+        unsigned char wire[256];
+        size_t used = 0;
+        for (const char *p = protocols; *p;) {
+            const char *end = strchr(p, ',');
+            size_t n = end ? (size_t)(end - p) : strlen(p);
+            if (n > 0 && n < 256 && used + n + 1 <= sizeof wire) {
+                wire[used++] = (unsigned char)n;
+                memcpy(wire + used, p, n);
+                used += n;
+            }
+            p += n + (end ? 1 : 0);
+        }
+        if (used > 0 && tls.SSL_CTX_set_alpn_protos(ctx, wire, (unsigned int)used) != 0) {
+            tls_error("cannot offer the protocols");
+            tls.SSL_CTX_free(ctx);
+            return false;
+        }
+    }
     if (verify) {
         if (*cafile ? !tls.SSL_CTX_load_verify_locations(ctx, cafile, NULL) : !tls.SSL_CTX_set_default_verify_paths(ctx)) {
             tls_error("cannot load trusted certificates");
@@ -396,7 +419,21 @@ bool aion_net_start_tls(int64_t h, const char *host, bool verify, const char *ca
         return false;
     }
     c->ssl = ssl;
+    c->alpn[0] = 0;
+    const unsigned char *chosen = NULL;
+    unsigned int chosen_len = 0;
+    tls.SSL_get0_alpn_selected(ssl, &chosen, &chosen_len);
+    if (chosen && chosen_len > 0 && chosen_len < sizeof c->alpn) {
+        memcpy(c->alpn, chosen, chosen_len);
+        c->alpn[chosen_len] = 0;
+    }
     return true;
+}
+
+/* The protocol TLS agreed on with the server (ALPN), such as "h2"; "" if none. */
+const char *aion_net_protocol(int64_t h) {
+    Conn *c = get(h);
+    return aion_string(c ? c->alpn : "");
 }
 
 /* ── Sending and receiving ────────────────────────────────────── */

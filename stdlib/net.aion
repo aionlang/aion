@@ -25,7 +25,8 @@ extern fn __receive(handle: Int, max: Int) -> Bytes? = "aion_net_receive"
 extern fn __close(handle: Int) = "aion_net_close"
 extern fn __peer(handle: Int) -> String = "aion_net_peer"
 extern fn __timeout(handle: Int, ms: Int) = "aion_net_set_timeout"
-extern fn __startTls(handle: Int, host: String, verify: Bool, cafile: String) -> Bool = "aion_net_start_tls"
+extern fn __startTls(handle: Int, host: String, verify: Bool, cafile: String, protocols: String) -> Bool = "aion_net_start_tls"
+extern fn __protocol(handle: Int) -> String = "aion_net_protocol"
 
 // The IP addresses of a host name, IPv4 ones first; empty if it cannot be resolved (`lastError()` says why).
 // A slow lookup holds up the other tasks.
@@ -62,7 +63,11 @@ type Conn(handle: Int) {
 
     // Secure the connection: do the TLS handshake with the server called `host`.  By default the server's
     // certificate must be valid for that name (set SSL_CERT_FILE or pass `cafile` for private authorities).
-    fn startTls(host: String, verify: Bool = true, cafile: String = "") -> Bool = __startTls(handle, host, verify, cafile)
+    fn startTls(host: String, verify: Bool = true, cafile: String = "", protocols: List<String> = List<String>()) -> Bool =
+        __startTls(handle, host, verify, cafile, protocols.join(","))
+
+    // The protocol the server chose from the `protocols` offered to `startTls` ("h2", "http/1.1", ...); "" if none.
+    fn protocol() = __protocol(handle)
 
     fn close() {
         if open {
