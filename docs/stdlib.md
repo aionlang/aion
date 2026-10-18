@@ -379,6 +379,44 @@ println(half + bigint.rational(1, 3))        // 5/6
 * **Fractions:** `rational(numerator, denominator)` (BigInts or Ints) is always in lowest terms with a positive denominator, and
   has `+ - * /`, comparisons, `inverse()`, `pow(n)`, `floor()`, `ceil()`, `toFloat()`, `isInteger()`.
 
+### `std.reflect`
+
+Looking at a program's own types while it runs: the fields of an object and their types, reading and writing a field by
+name, the methods and calling one by name, and making an object from the name of its type.
+
+```aion
+import reflect
+
+type Point(x: Int, y: Int) {
+    fn plus(other: Point) = Point(x + other.x, y + other.y)
+}
+
+p := Point(3, 4)
+println(reflect.fields(p))                          // [x: Int, y: Int]
+println(reflect.get(p, "x"), reflect.set(p, "y", 10), p.y)   // 3 true 10
+println(reflect.methods(p))                         // [plus(Point) -> ?]
+println(reflect.call(p, "plus", [Point(1, 1)]))     // Point(x=4, y=11)
+q := reflect.create("Point", [7, 8])                // a Point made from its name
+println(typeOf(q!!), reflect.isInstance(q!!, "Point"), reflect.typeNames())
+```
+
+* **Types:** `typeNames()`, `isKnown(name)`, `parentOf(name)`, `isInstance(x, name)` (also true for a type that extends `name`).
+* **Fields:** `fields(x) -> List<FieldInfo>` (`name`, `typeName`; ancestors' first), `hasField(x, name)`, `get(x, name) -> Any?`,
+  `set(x, name, value) -> Bool` (false if there is no such field or the value is of the wrong kind; an Int is accepted for a Float
+  field).
+* **Methods:** `methods(x) -> List<MethodSig>` (`name`, `paramTypes`, `returnType`, `owner`; the result type is `"?"` for a method
+  whose type is inferred from its body), `hasMethod`, `call(x, name, args = []) -> Any?` (null for a method that gives nothing; the
+  arguments are matched by number and kind, defaults are honoured, a wrong kind of argument stops the program like a failed `as`).
+* **Making objects:** `create(typeName, args) -> Any?` (null for an unknown type or arguments no constructor takes) and
+  `constructors(typeName)`.
+
+How it works: when a program imports `reflect`, the compiler adds to each of the program's modules a short piece of ordinary Aion
+code (visible as `<reflect>/module` in an error message) that registers the module's types, so a program that does not import
+`reflect` pays nothing.  It covers the types the program declares itself, including `open` and extended ones and methods added
+with `fn Type.name()` in the same module; it leaves out generic types, enums and interfaces, fields and methods whose types
+include a function type, `static` methods, methods with their own type parameters or a `vararg`, and names that start with `_`.
+Two types of the same name in different modules count as one.
+
 ### `std.strings`
 
 Function forms of the `String` methods: `length(s) -> Int` (bytes),
