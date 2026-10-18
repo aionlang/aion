@@ -717,6 +717,10 @@ impl<'a> Parser<'a> {
         if DECLARATION_WORDS.contains(&word) {
             return None;
         }
+        // `n as Float` and `x is Dog` are expressions, not a name followed by a name
+        if matches!(self.text(*next), "as" | "is") {
+            return None;
+        }
         if matches!(word, "var" | "let" | "const") {
             return Some(
                 Diagnostic::new(format!("`{word}` is not an Aion keyword"), tok.span)
@@ -2495,6 +2499,15 @@ mod tests {
         assert_eq!(module("syn Cmp = (Int) -> Bool
 ").items.len(), 1);
         assert_eq!(module("typealias Cmp = (Int) -> Bool
+").items.len(), 1);
+    }
+
+    #[test]
+    fn a_cast_or_type_test_can_start_a_statement() {
+        // `n` is one letter away from `fn`, but `n as Float` is a cast
+        assert_eq!(module("x := if n > 1 { n as Float } else { 0.0 }
+").items.len(), 1);
+        assert_eq!(module("x := if n > 1 { n is Dog } else { false }
 ").items.len(), 1);
     }
 
