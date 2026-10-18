@@ -349,6 +349,36 @@ println(unicode.stripAccents("Cr\u{e8}me br\u{fb}l\u{e9}e")!!)    // Creme brule
 println(unicode.width("\u{65e5}\u{672c}\u{8a9e}"))              // 6
 ```
 
+### `std.bigint`
+
+Integers of any size and exact fractions.  The arithmetic is [GMP](https://gmplib.org/)'s, found when first used (install
+`libgmp`, for example the `libgmp10` package; a program that does not import `bigint` needs nothing).  Values never change.
+
+```aion
+import bigint
+
+a := bigint.parse("123456789012345678901234567893")!!
+b := bigint.of(2).pow(100)
+println(a * b + 1, a / 7, a % 7, -a)         // operators take a BigInt or an Int, on either side
+println(bigint.factorial(30), bigint.fibonacci(100), (a * a).sqrt())
+println(bigint.of(7).modPow(bigint.of(128), bigint.of(13)), bigint.of(97).isProbablePrime())
+
+half := bigint.rational(1, 2)
+println(half + bigint.rational(1, 3))        // 5/6
+```
+
+* **Making one:** `of(n)`, `parse(text, base = 10) -> BigInt?` (an optional sign and digits; null if it is not a number),
+  `ofFloat(x)`, `factorial(n)`, `fibonacci(n)`, `zero`, `one`.
+* **Arithmetic:** `+ - * / %` and unary `-` (each also with an `Int`), `<`, `==` and the rest of the comparisons.  `/` and
+  `%` round toward zero like `Int`'s; `floorDiv` and `mod` round down.  Dividing by zero stops the program.
+  `abs`, `pow(n)`, `sqrt()`, `root(n)`, `gcd`, `lcm`, `choose(k)`, `modPow(exponent, modulus)`, `modInverse(modulus) -> BigInt?`.
+* **Bits:** `and`, `or`, `xor`, `not`, `shl(n)`, `shr(n)` (as on two's complement integers of unlimited length), `bitLength()`.
+* **Primes:** `isProbablePrime(rounds = 25)`, `nextPrime()`.
+* **Reading one:** `toString()`, `toRadix(base)`, `toInt() -> Int?` (null if it does not fit), `toFloat()`, `signum()`, `isZero()`,
+  `isNegative()`, `isEven()`.
+* **Fractions:** `rational(numerator, denominator)` (BigInts or Ints) is always in lowest terms with a positive denominator, and
+  has `+ - * /`, comparisons, `inverse()`, `pow(n)`, `floor()`, `ceil()`, `toFloat()`, `isInteger()`.
+
 ### `std.strings`
 
 Function forms of the `String` methods: `length(s) -> Int` (bytes),
