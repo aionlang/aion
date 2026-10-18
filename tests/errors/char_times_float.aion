@@ -1,0 +1,2 @@
+// error: cannot apply `*` to Char and Float
+x := 'a' * 2.5
