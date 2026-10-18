@@ -840,6 +840,90 @@ println(wrong, http.lastError().contains("certificate"))
     );
 }
 
+/// `http2` against nghttpd, a reference implementation: HTTP/2 without TLS and with TLS (ALPN), a large body,
+/// and several requests at once on one connection.
+#[test]
+fn http2_interoperates_with_nghttpd() {
+    let have = |program: &str| Command::new(program).arg("--version").output().is_ok_and(|o| o.status.success());
+    if !have("nghttpd") || !have("openssl") {
+        eprintln!("skipped: the nghttpd or openssl command is not installed");
+        return;
+    }
+    let dir = scratch("h2");
+    let www = dir.join("www");
+    write(&www.join("hello.txt"), "hello from nghttpd");
+    write(&www.join("big.txt"), &"0123456789abcdef".repeat(25000));
+    let (cert, key) = (dir.join("cert.pem"), dir.join("key.pem"));
+    let made = Command::new("openssl")
+        .args(["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=localhost"])
+        .args(["-addext", "subjectAltName=DNS:localhost"])
+        .arg("-keyout")
+        .arg(&key)
+        .arg("-out")
+        .arg(&cert)
+        .output()
+        .unwrap();
+    assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
+    let free_port = || std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let (plain_port, tls_port) = (free_port(), free_port());
+    let start = |args: Vec<String>| {
+        Command::new("nghttpd")
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap()
+    };
+    let docs = www.display().to_string();
+    let mut plain = start(vec!["--no-tls".into(), "-d".into(), docs.clone(), plain_port.to_string()]);
+    let mut secure = start(vec![
+        "-d".into(),
+        docs,
+        tls_port.to_string(),
+        key.display().to_string(),
+        cert.display().to_string(),
+    ]);
+    std::thread::sleep(std::time::Duration::from_millis(700));
+
+    let program = format!(
+        r#"import http2
+r := http2.get("http://127.0.0.1:{plain_port}/hello.txt")
+println(r?.status, r?.text(), r?.header("content-length"))
+t := http2.get("https://localhost:{tls_port}/hello.txt", verify: false)
+println(t?.status, t?.text())
+println(http2.get("http://127.0.0.1:{plain_port}/missing")?.status)
+big := http2.get("http://127.0.0.1:{plain_port}/big.txt")
+println(big?.status, big?.body?.size())
+conn := http2.connect("http://127.0.0.1:{plain_port}")!!
+jobs := List<Job>()
+sizes := Map<Int, Int>()
+for i in 0..6 {{
+    jobs.add(launch {{
+        a := conn.request("GET", i % 2 == 0 ? "/hello.txt" : "/big.txt")
+        sizes[i] = a == null ? -1 : a.body.size()
+    }})
+}}
+for j in jobs {{ j.join() }}
+println(sizes)
+conn.close()
+println(http2.get("https://localhost:{plain_port}/hello.txt", verify: false), http2.lastError().length() > 0)
+"#
+    );
+    write(&dir.join("main.aion"), &program);
+    let out = aion_in(&dir, &["main.aion"]);
+    let _ = plain.kill();
+    let _ = secure.kill();
+    let _ = plain.wait();
+    let _ = secure.wait();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        "200 hello from nghttpd 18\n200 hello from nghttpd\n404\n200 400000\n{0: 18, 1: 400000, 2: 18, 3: 400000, 4: 18, 5: 400000}\nnull true\n",
+        "stderr: {}",
+        stderr(&out)
+    );
+}
+
 /// `term.readKey` names the keys arriving on standard input, including escape sequences.
 #[test]
 fn keys_are_read_from_standard_input() {

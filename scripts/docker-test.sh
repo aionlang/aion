@@ -8,7 +8,7 @@
 # (they compare output byte for byte) would report as differences.  The `aion-target` volume keeps the build.
 set -e
 apt-get update -qq
-apt-get install -y -qq --no-install-recommends clang libc6-dev libsqlite3-dev zlib1g-dev libssl-dev ca-certificates git openssl rsync > /dev/null 2>&1
+apt-get install -y -qq --no-install-recommends clang libc6-dev libsqlite3-dev zlib1g-dev libssl-dev ca-certificates git openssl rsync nghttp2 > /dev/null 2>&1
 mkdir -p /work
 rsync -a --delete --exclude target --exclude .git /src/ /work/
 cd /work
