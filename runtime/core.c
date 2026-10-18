@@ -9,6 +9,7 @@
  */
 
 #include "aion.h"
+#include "aion_sync.h"
 
 #ifdef _WIN32
 #include <fcntl.h>
@@ -35,6 +36,7 @@ extern const int64_t aion_roots_len;
 static AionHeader *heap = NULL;      /* every collectable object        */
 static size_t heap_bytes = 0;        /* bytes currently allocated       */
 static size_t threshold = MIN_THRESHOLD;
+static AionMutex heap_mu = AION_MUTEX_INIT; /* the list and the byte count, once there are threads */
 
 #define HEADER_OF(p) ((AionHeader *)(p) - 1)
 
@@ -77,6 +79,7 @@ typedef struct TryContext {
     AionFrame *frame; /* shadow stack to restore */
     AionTrace *trace; /* stack trace to restore */
     size_t defers;    /* deferred closures to run before jumping */
+    int64_t sync;     /* how deep the monitor lock was held */
 } TryContext;
 
 static _Thread_local TryContext *try_top = NULL;
@@ -121,6 +124,7 @@ void aion_panic(const char *msg) {
         TryContext *ctx = try_top;
         snprintf(panic_message, sizeof panic_message, "%s", msg);
         try_top = ctx->prev; /* a panic inside a deferred closure goes to the next handler */
+        aion_sync_unwind(ctx->sync);
         aion_defer_run((int64_t)ctx->defers);
         longjmp(ctx->jump, 1);
     }
@@ -143,6 +147,7 @@ void aion_panic(const char *msg) {
         ctx.frame = aion_frame_top;                                                               \
         ctx.trace = aion_trace_top;                                                               \
         ctx.defers = defer_len;                                                                   \
+        ctx.sync = aion_sync_depth();                                                             \
         CODE_RET raw;                                                                             \
         try_top = &ctx;                                                                           \
         if (setjmp(ctx.jump) == 0) {                                                              \
@@ -169,6 +174,7 @@ void aion_try(void *body, void *handler) {
     ctx.frame = aion_frame_top;
     ctx.trace = aion_trace_top;
     ctx.defers = defer_len;
+    ctx.sync = aion_sync_depth();
     try_top = &ctx;
     if (setjmp(ctx.jump) == 0) {
         call0(body);
@@ -245,11 +251,14 @@ static void drain(void) {
 }
 
 void aion_gc_collect(void) {
+    bool multi = aion_multi;
+    if (multi && !aion_world_stop()) return; /* another thread collected while we waited */
     for (int64_t i = 0; i < aion_roots_len; i++) mark(*aion_roots[i]);
     for (AionFrame *f = aion_frame_top; f; f = f->prev)
         for (uint64_t i = 0; i < f->n; i++) mark(f->slots[i]);
     for (size_t i = 0; i < defer_len; i++) mark(defer_stack[i]);
     aion_tasks_mark(mark);
+    if (multi) aion_threads_mark(mark);
     drain();
 
     size_t live = 0;
@@ -268,12 +277,14 @@ void aion_gc_collect(void) {
     }
     heap_bytes = live;
     threshold = live * 2 > MIN_THRESHOLD ? live * 2 : MIN_THRESHOLD;
+    if (multi) aion_world_resume();
 }
 
 static void *gc_alloc(size_t size, uint32_t flags, uint64_t ptr_mask) {
     if (size > UINT32_MAX) aion_panic("allocation too large");
     static long allocations = 0;
-    int stressed = stress_mode() && ++allocations % stress_every() == 0;
+    if (aion_multi) aion_safepoint();
+    int stressed = stress_mode() && __atomic_add_fetch(&allocations, 1, __ATOMIC_RELAXED) % stress_every() == 0;
     if (stressed || heap_bytes + sizeof(AionHeader) + size > threshold) aion_gc_collect();
 
     AionHeader *h = calloc(1, sizeof *h + size);
@@ -285,9 +296,11 @@ static void *gc_alloc(size_t size, uint32_t flags, uint64_t ptr_mask) {
     h->size = (uint32_t)size;
     h->flags = flags;
     h->ptr_mask = ptr_mask;
+    if (aion_multi) aion_mutex_lock(&heap_mu);
     h->next = heap;
     heap = h;
     heap_bytes += sizeof *h + size;
+    if (aion_multi) aion_mutex_unlock(&heap_mu);
     return h + 1;
 }
 
@@ -462,21 +475,50 @@ const char *aion_argv(int64_t i) {
 
 /* ── Printing ─────────────────────────────────────────────────── */
 
+/* One print call is not interleaved with another thread's. */
+#ifdef _WIN32
+#define OUT_LOCK() _lock_file(stdout)
+#define OUT_UNLOCK() _unlock_file(stdout)
+#else
+#define OUT_LOCK() flockfile(stdout)
+#define OUT_UNLOCK() funlockfile(stdout)
+#endif
+
 static void end_line(int64_t newline) {
     if (newline) putchar('\n');
 }
 
-void aion_print_str(const char *s, int64_t nl) { fputs(s, stdout); end_line(nl); }
+void aion_print_str(const char *s, int64_t nl) {
+    OUT_LOCK();
+    fputs(s, stdout);
+    end_line(nl);
+    OUT_UNLOCK();
+}
 void aion_print_char(int64_t c, int64_t nl) {
     char buf[4];
-    fwrite(buf, 1, utf8_encode(c, buf), stdout);
+    size_t n = utf8_encode(c, buf);
+    OUT_LOCK();
+    fwrite(buf, 1, n, stdout);
     end_line(nl);
+    OUT_UNLOCK();
 }
-void aion_print_int(int64_t n, int64_t nl) { printf("%" PRId64, n); end_line(nl); }
+void aion_print_int(int64_t n, int64_t nl) {
+    OUT_LOCK();
+    printf("%" PRId64, n);
+    end_line(nl);
+    OUT_UNLOCK();
+}
 void aion_print_float(double f, int64_t nl) {
     char buf[400];
     float_text(f, buf, sizeof buf);
+    OUT_LOCK();
     fputs(buf, stdout);
     end_line(nl);
+    OUT_UNLOCK();
 }
-void aion_print_bool(int64_t b, int64_t nl) { fputs(b ? "true" : "false", stdout); end_line(nl); }
+void aion_print_bool(int64_t b, int64_t nl) {
+    OUT_LOCK();
+    fputs(b ? "true" : "false", stdout);
+    end_line(nl);
+    OUT_UNLOCK();
+}

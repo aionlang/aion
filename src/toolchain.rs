@@ -105,6 +105,8 @@ fn compile(
         }
         if windows() {
             cmd.args(["-lws2_32", "-lbcrypt"]);
+        } else {
+            cmd.arg("-pthread");
         }
         match cmd.output() {
             Ok(out) if out.status.success() => return Ok(()),
