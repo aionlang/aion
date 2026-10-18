@@ -6,7 +6,7 @@
 
 <a href="https://github.com/aionlang/aion"><img src="https://img.shields.io/badge/github-aionlang%2Faion-blue?logo=github" alt="GitHub repository"></a>
 <img src="https://img.shields.io/badge/version-0.3.0-informational" alt="version 0.3.0">
-<img src="https://img.shields.io/badge/status-pre--alpha-yellow" alt="status: pre-alpha">
+<img src="https://img.shields.io/badge/status-beta-yellow" alt="status: beta">
 <a href="LICENSE.md"><img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="Apache 2.0 license"></a>
 <img src="https://img.shields.io/badge/built%20with-Rust%202024-orange?logo=rust" alt="built with Rust (2024 edition)">
 <img src="https://img.shields.io/badge/needs-clang%2015%2B-lightgrey" alt="needs clang 15 or newer">
@@ -106,7 +106,7 @@ Anything missing can be bound from C with one `extern fn` line, or shipped as a
 
 ## Status
 
-Aion is at version **0.3.0** and in an early, pre-alpha state: the language and the standard library
+Aion is at version **0.3.0** and in a beta state: the language and the standard library
 can still change between versions (see the [changelog](CHANGELOG.MD)).
 
 | Area | State |
@@ -186,7 +186,7 @@ aion/
 
 ## Contributing
 
-Contributions are not open yet while the project is pre-alpha; see [CONTRIBUTING.MD](CONTRIBUTING.MD).
+Contributions are not open yet while the project is in beta; see [CONTRIBUTING.MD](CONTRIBUTING.MD).
 Commit messages follow `feat|fix|docs(module): description`.
 
 ## License
