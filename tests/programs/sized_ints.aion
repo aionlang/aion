@@ -1,0 +1,31 @@
+// Byte and Int32: wrapping arithmetic, conversions, bit operations, optionals, collections and Any.
+b: Byte = 200
+println(b, b + 100, b + 100 as Int, b * 2, 3 - b)
+c: Int32 = 2147483647
+println(c, c + 1, -c - 2, c * 2)
+n := 300
+println(n as Byte, n as? Byte, 200 as? Byte, n as Int32, -1 as Byte, 70000 as Int32)
+println(b.toInt() + 1, b.toInt32() + c.toInt(), c.toFloat() / 2, b.toString() + "!", "$b and $c")
+println(b > 100, b == 200, c == 2147483647, b < c)
+println(b.and(15), b.shl(1), b.shr(4), b.inv(), c.shl(1), c.ushr(28), (-8 as Int32).shr(1), (-8 as Int32).ushr(28))
+println("42".toByteOrNull(), "300".toByteOrNull(), "x".toInt32OrNull(), "-5".toInt32OrNull())
+xs := List<Byte>()
+for i in 0..300 { xs.add((i % 256).toByte()) }
+println(xs.size(), xs[255], xs[256])
+m := Map<Byte, String>()
+m[7] = "seven"
+println(m[7], m.getOrNull(8))
+opt: Byte? = null
+println(opt ?: 9, opt == null)
+opt = 5
+println(opt!! + 250)
+a: Any = b
+println(a is Byte, a is Int, a as Byte)
+checksum: Byte = 0
+for ch in "hello world" { checksum += ch.code().toByte() }
+println(checksum, checksum.toHex())
+x := 1.5
+println(b + x, c + 0.5)
+fn half(v: Int32) -> Int32 = v / 2
+println(half(-7), half(10))
+println(2147483647.toInt32() == c, 5 as Float, b as Float)

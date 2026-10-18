@@ -34,6 +34,8 @@ impl<'a> Checker<'a> {
                     "Float" => Some(Ty::Float),
                     "Bool" => Some(Ty::Bool),
                     "Char" => Some(Ty::Char),
+                    "Int32" => Some(Ty::Int32),
+                    "Byte" => Some(Ty::Byte),
                     "String" => Some(Ty::Str),
                     "Bytes" => Some(Ty::Bytes),
                     "Unit" => Some(Ty::Void),

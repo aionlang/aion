@@ -1654,6 +1654,8 @@ type __IntBox(value: Int) { fn toString() = "$value" }
 type __FloatBox(value: Float) { fn toString() = "$value" }
 type __BoolBox(value: Bool) { fn toString() = "$value" }
 type __CharBox(value: Char) { fn toString() = value.toString() }
+type __Int32Box(value: Int32) { fn toString() = "$value" }
+type __ByteBox(value: Byte) { fn toString() = "$value" }
 type __StringBox(value: String) { fn toString() = value }
 type __BytesBox(value: Bytes) { fn toString() = "Bytes(${value.size()})" }
 
@@ -1661,6 +1663,8 @@ fn __box_Int(v: Int) -> Any = __IntBox(v)
 fn __box_Float(v: Float) -> Any = __FloatBox(v)
 fn __box_Bool(v: Bool) -> Any = __BoolBox(v)
 fn __box_Char(v: Char) -> Any = __CharBox(v)
+fn __box_Int32(v: Int32) -> Any = __Int32Box(v)
+fn __box_Byte(v: Byte) -> Any = __ByteBox(v)
 fn __box_String(v: String) -> Any = __StringBox(v)
 fn __box_Bytes(v: Bytes) -> Any = __BytesBox(v)
 
@@ -1668,6 +1672,8 @@ fn __is_Int(a: Any?) -> Bool = a is __IntBox
 fn __is_Float(a: Any?) -> Bool = a is __FloatBox
 fn __is_Bool(a: Any?) -> Bool = a is __BoolBox
 fn __is_Char(a: Any?) -> Bool = a is __CharBox
+fn __is_Int32(a: Any?) -> Bool = a is __Int32Box
+fn __is_Byte(a: Any?) -> Bool = a is __ByteBox
 fn __is_String(a: Any?) -> Bool = a is __StringBox
 fn __is_Bytes(a: Any?) -> Bool = a is __BytesBox
 
@@ -1687,6 +1693,14 @@ fn __cast_Any_Char(a: Any?) -> Char {
     if a is __CharBox { return a.value }
     panic("cannot cast $a to Char")
 }
+fn __cast_Any_Int32(a: Any?) -> Int32 {
+    if a is __Int32Box { return a.value }
+    panic("cannot cast $a to Int32")
+}
+fn __cast_Any_Byte(a: Any?) -> Byte {
+    if a is __ByteBox { return a.value }
+    panic("cannot cast $a to Byte")
+}
 fn __cast_Any_String(a: Any?) -> String {
     if a is __StringBox { return a.value }
     panic("cannot cast $a to String")
@@ -1700,6 +1714,8 @@ fn __cast_Any_Int_safe(a: Any?) -> Int? = if a is __IntBox { a.value } else { nu
 fn __cast_Any_Float_safe(a: Any?) -> Float? = if a is __FloatBox { a.value } else { null }
 fn __cast_Any_Bool_safe(a: Any?) -> Bool? = if a is __BoolBox { a.value } else { null }
 fn __cast_Any_Char_safe(a: Any?) -> Char? = if a is __CharBox { a.value } else { null }
+fn __cast_Any_Int32_safe(a: Any?) -> Int32? = if a is __Int32Box { a.value } else { null }
+fn __cast_Any_Byte_safe(a: Any?) -> Byte? = if a is __ByteBox { a.value } else { null }
 fn __cast_Any_String_safe(a: Any?) -> String? = if a is __StringBox { a.value } else { null }
 fn __cast_Any_Bytes_safe(a: Any?) -> Bytes? = if a is __BytesBox { a.value } else { null }
 
@@ -1725,6 +1741,60 @@ fn __cast_String_Bool(s: String) -> Bool {
 fn __cast_String_Int_safe(s: String) -> Int? = s.toIntOrNull()
 fn __cast_String_Float_safe(s: String) -> Float? = s.toFloatOrNull()
 fn __cast_String_Bool_safe(s: String) -> Bool? = if s == "true" { true } else if s == "false" { false } else { null }
+
+// ── Int32 and Byte ──────────────────────────────────────────────────────────────────────────────
+/**
+ * `Int32` is a signed 32-bit integer (-2147483648 to 2147483647) and `Byte` an unsigned 8-bit one (0 to 255).  Both
+ * wrap around when an operation leaves their range: `250.toByte() + 10` is 4.  They exist for binary formats and for
+ * calling C functions that take `int32_t` or `uint8_t`; ordinary arithmetic is `Int`.
+ *
+ * A whole-number literal that fits becomes an `Int32` or a `Byte` where one is expected (`b: Byte = 200`).  A narrower
+ * type widens by itself (`Byte` to `Int32` to `Int`, and all of them to `Float`).  The other way needs a word:
+ * `n as Byte` (or `n.toByte()`) wraps around, `n as? Byte` is null when `n` does not fit.  Mixed operations compute in
+ * the wider type.  `and`, `or`, `xor`, `inv`, `shl`, `shr` and `ushr` work on them like on `Int`.
+ */
+fn Int.toInt32() -> Int32 = this as Int32
+fn Int.toByte() -> Byte = this as Byte
+fn Int32.toInt() -> Int = this
+fn Int32.toByte() -> Byte = this as Byte
+fn Int32.toFloat() -> Float = this + 0.0
+fn Int32.toString() -> String = "$this"
+fn Byte.toInt() -> Int = this
+fn Byte.toInt32() -> Int32 = this
+fn Byte.toFloat() -> Float = this + 0.0
+fn Byte.toString() -> String = "$this"
+fn Byte.toChar() -> Char = this as Char
+fn Char.toByte() -> Byte = this as Byte
+fn Int32.compareTo(other: Int32) = if this < other { -1 } else if this > other { 1 } else { 0 }
+fn Byte.compareTo(other: Byte) = if this < other { -1 } else if this > other { 1 } else { 0 }
+// Two lower-case hexadecimal digits.
+fn Byte.toHex() -> String {
+    h := toInt().toHex()
+    return if h.length() < 2 { "0" + h } else { h }
+}
+fn String.toInt32OrNull() -> Int32? {
+    n := toIntOrNull() ?: return null
+    return n as? Int32
+}
+fn String.toByteOrNull() -> Byte? {
+    n := toIntOrNull() ?: return null
+    return n as? Byte
+}
+
+fn __cast_Int_Int32_safe(n: Int) -> Int32? = if n >= -2147483648 && n <= 2147483647 { n as Int32 } else { null }
+fn __cast_Int_Byte_safe(n: Int) -> Byte? = if n >= 0 && n <= 255 { n as Byte } else { null }
+fn __cast_Int32_Byte_safe(n: Int32) -> Byte? = if n >= 0 && n <= 255 { n as Byte } else { null }
+fn __cast_Char_Byte_safe(c: Char) -> Byte? = if c.code() >= 0 && c.code() <= 255 { c as Byte } else { null }
+fn __cast_Int32_Float(n: Int32) -> Float = n + 0.0
+fn __cast_Byte_Float(n: Byte) -> Float = n + 0.0
+fn __cast_Float_Int32(x: Float) -> Int32 = x.toInt() as Int32
+fn __cast_Float_Byte(x: Float) -> Byte = x.toInt() as Byte
+fn __cast_Int32_String(n: Int32) -> String = "$n"
+fn __cast_Byte_String(n: Byte) -> String = "$n"
+fn __cast_String_Int32(s: String) -> Int32 = s.toInt32OrNull() ?: panic("cannot cast '$s' to Int32")
+fn __cast_String_Byte(s: String) -> Byte = s.toByteOrNull() ?: panic("cannot cast '$s' to Byte")
+fn __cast_String_Int32_safe(s: String) -> Int32? = s.toInt32OrNull()
+fn __cast_String_Byte_safe(s: String) -> Byte? = s.toByteOrNull()
 
 // ── Function types ──────────────────────────────────────────────────────────────────────────────
 /** A test on a value: `Predicate<Int>` is `(Int) -> Bool`.  `filter`, `any`, `takeWhile` and friends take one. */
@@ -2640,7 +2710,7 @@ fn __format_field(kind: Char, arg: Any, precision: Int, plus: Bool) -> String {
     text := ""
     negative := false
     if kind == 'd' || kind == 'x' || kind == 'b' || kind == 'o' {
-        n := if arg is Int { arg } else if arg is Char { arg.code() } else { error("%$kind needs an integer, not $arg") }
+        n := if arg is Int { arg } else if arg is Int32 { arg.toInt() } else if arg is Byte { arg.toInt() } else if arg is Char { arg.code() } else { error("%$kind needs an integer, not $arg") }
         negative = n < 0
         magnitude := abs(n)
         text = when kind {

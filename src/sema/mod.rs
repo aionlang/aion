@@ -385,6 +385,8 @@ impl Tables {
             Ty::Float => "Float".into(),
             Ty::Bool => "Bool".into(),
             Ty::Char => "Char".into(),
+            Ty::Int32 => "Int32".into(),
+            Ty::Byte => "Byte".into(),
             Ty::Str => "String".into(),
             Ty::Bytes => "Bytes".into(),
             Ty::Obj(id) => self.ty(id).name.clone(),
@@ -1810,6 +1812,8 @@ fn builtin_type(name: &str) -> Option<Ty> {
         "Float" => Ty::Float,
         "Bool" => Ty::Bool,
         "Char" => Ty::Char,
+        "Int32" => Ty::Int32,
+        "Byte" => Ty::Byte,
         "String" => Ty::Str,
         "Bytes" => Ty::Bytes,
         _ => return None,
@@ -1824,6 +1828,8 @@ fn builtin_key(ty: Ty) -> u8 {
         Ty::Str => 3,
         Ty::Char => 4,
         Ty::Bytes => 5,
+        Ty::Int32 => 6,
+        Ty::Byte => 7,
         _ => u8::MAX,
     }
 }
@@ -1867,6 +1873,7 @@ fn const_default(e: &ast::Expr, ty: Ty, t: &Tables) -> Result<Option<Const>> {
         None => Ok(None),
         Some((c, found)) if found == ty => Ok(Some(c)),
         Some((Const::Int(v), Ty::Int)) if ty == Ty::Float => Ok(Some(Const::Float(v as f64))),
+        Some((Const::Int(v), Ty::Int)) if matches!(ty, Ty::Byte | Ty::Int32) && int_fits(ty, v) => Ok(Some(Const::Int(v))),
         Some((_, found)) => Err(Diagnostic::new(
             format!("expected a {} default, found {}", t.ty_name(ty), t.ty_name(found)),
             e.span,
@@ -1882,8 +1889,29 @@ pub fn basic_name(ty: Ty) -> Option<&'static str> {
         Ty::Float => "Float",
         Ty::Bool => "Bool",
         Ty::Char => "Char",
+        Ty::Int32 => "Int32",
+        Ty::Byte => "Byte",
         Ty::Str => "String",
         Ty::Bytes => "Bytes",
         _ => return None,
     })
+}
+
+/// How wide an integer type is, for deciding which side of `a + b` widens: `Byte`, `Int32`, `Int`.
+pub fn int_rank(ty: Ty) -> Option<u8> {
+    match ty {
+        Ty::Byte => Some(0),
+        Ty::Int32 => Some(1),
+        Ty::Int => Some(2),
+        _ => None,
+    }
+}
+
+/// Does `v` fit in `ty`?  Only `Byte` and `Int32` have limits.
+pub fn int_fits(ty: Ty, v: i64) -> bool {
+    match ty {
+        Ty::Byte => (0..=255).contains(&v),
+        Ty::Int32 => (i64::from(i32::MIN)..=i64::from(i32::MAX)).contains(&v),
+        _ => true,
+    }
 }

@@ -1942,7 +1942,26 @@ impl<'c, 'a> Cx<'c, 'a> {
     fn coerce(&self, e: hir::Expr, to: Ty, span: Span) -> Result<hir::Expr> {
         match (e.ty, to) {
             (a, b) if a == b => Ok(e),
-            (Ty::Int, Ty::Float) => Ok(mk(K::IntToFloat(Box::new(e)), Ty::Float)),
+            (Ty::Int | Ty::Int32 | Ty::Byte, Ty::Float) => Ok(mk(K::IntToFloat(Box::new(e)), Ty::Float)),
+            // a narrower integer widens without loss
+            (Ty::Byte, Ty::Int32 | Ty::Int) | (Ty::Int32, Ty::Int) => Ok(mk(K::IntConv(Box::new(e)), to)),
+            // a literal that fits is a `Byte` or an `Int32`
+            (Ty::Int, Ty::Byte | Ty::Int32) if matches!(e.kind, K::Int(_)) => {
+                let K::Int(v) = e.kind else { unreachable!() };
+                if super::int_fits(to, v) {
+                    Ok(mk(K::Int(v), to))
+                } else {
+                    let (article, name, range) =
+                        if to == Ty::Byte { ("a", "Byte", "0 to 255") } else { ("an", "Int32", "-2147483648 to 2147483647") };
+                    Err(Diagnostic::new(format!("{v} does not fit in {article} {name} ({range})"), span)
+                        .hint(format!("convert a larger value with `as {name}`, which wraps around")))
+                }
+            }
+            (Ty::Int, Ty::Byte | Ty::Int32) | (Ty::Int32, Ty::Byte) => Err(self.mismatch(to, e.ty, span).hint(format!(
+                "a value that may not fit has to be converted: `x as {}` (wraps around) or `x as? {}` (null if it does not fit)",
+                self.name(to),
+                self.name(to)
+            ))),
             (Ty::Null, Ty::Opt(_)) => Ok(mk(K::Null, to)),
             // a subtype used as its parent type (same pointer)
             (Ty::Obj(a), Ty::Obj(b)) if self.ck.is_subtype(a, b) => Ok(mk(K::Upcast(Box::new(e)), to)),
@@ -2121,8 +2140,18 @@ impl<'c, 'a> Cx<'c, 'a> {
             return Err(Diagnostic::new(format!("a {} cannot be converted to {to_name} with `as`", self.name(from)), span)
                 .hint("`as` converts between Int, Float, Bool, Char and String, takes values out of an `Any`, and casts objects"));
         };
+        let integer = |t: Ty| matches!(t, Ty::Int | Ty::Int32 | Ty::Byte | Ty::Char);
+        let small = |t: Ty| matches!(t, Ty::Int32 | Ty::Byte);
         let result = if from == to {
-            v
+            // `100 as Int` stays an `Int` next to a `Byte`, instead of being taken for a literal that fits
+            if matches!(v.kind, K::Int(_)) && to == Ty::Int { mk(K::IntConv(Box::new(v)), to) } else { v }
+        } else if integer(from) && integer(to) && (small(from) || small(to)) {
+            // between integer types: wrap into the range of the target (`as?` gives null if it does not fit)
+            let name = format!("__cast_{from_name}_{to_name}_safe");
+            if safe && self.ck.t.scopes[0].items.contains_key(&name) {
+                return self.prelude_call(&name, vec![v], span);
+            }
+            mk(K::IntConv(Box::new(v)), to)
         } else {
             let name = format!("__cast_{from_name}_{to_name}");
             if safe && self.ck.t.scopes[0].items.contains_key(&format!("{name}_safe")) {
@@ -2209,7 +2238,9 @@ impl<'c, 'a> Cx<'c, 'a> {
         let t = &self.ck.t;
         match (a, b) {
             (a, b) if a == b => Some(a),
-            (Ty::Int, Ty::Float) | (Ty::Float, Ty::Int) => Some(Ty::Float),
+            (Ty::Int | Ty::Int32 | Ty::Byte, Ty::Float) | (Ty::Float, Ty::Int | Ty::Int32 | Ty::Byte) => Some(Ty::Float),
+            (Ty::Int, Ty::Int32 | Ty::Byte) | (Ty::Int32 | Ty::Byte, Ty::Int) => Some(Ty::Int),
+            (Ty::Int32, Ty::Byte) | (Ty::Byte, Ty::Int32) => Some(Ty::Int32),
             // two kinds of the same family: their closest common parent
             (Ty::Obj(x), Ty::Obj(y)) => self.ck.common_parent(x, y).map(Ty::Obj),
             (Ty::Null, x) | (x, Ty::Null) if x != Ty::Void => Some(t.opt_of(x)),
@@ -2223,7 +2254,7 @@ impl<'c, 'a> Cx<'c, 'a> {
     fn stringify(&mut self, e: hir::Expr, span: Span) -> Result<hir::Expr> {
         match e.ty {
             Ty::Str => Ok(e),
-            Ty::Int | Ty::Float | Ty::Bool | Ty::Char => Ok(mk(K::ToStr(Box::new(e)), Ty::Str)),
+            Ty::Int | Ty::Int32 | Ty::Byte | Ty::Float | Ty::Bool | Ty::Char => Ok(mk(K::ToStr(Box::new(e)), Ty::Str)),
             Ty::Bytes => self.prelude_call("__bytes_str", vec![e], span),
             Ty::Obj(ty) if self.ck.t.ty(ty).array_elem.is_some() => {
                 Err(Diagnostic::new(format!("a {} has no text form", self.name(e.ty)), span)
@@ -2403,6 +2434,10 @@ impl<'c, 'a> Cx<'c, 'a> {
                     (ast::UnOp::Neg, Ty::Int | Ty::Float, _) => {
                         let ty = v.ty;
                         mk(K::Neg(Box::new(v)), ty)
+                    }
+                    (ast::UnOp::Neg, Ty::Int32 | Ty::Byte, _) => {
+                        let ty = v.ty;
+                        mk(K::IntConv(Box::new(mk(K::Neg(Box::new(v)), ty))), ty)
                     }
                     (ast::UnOp::Not, Ty::Bool, _) => mk(K::Not(Box::new(v)), Ty::Bool),
                     // `-v` on your own type is `v.unaryMinus()`
@@ -2693,10 +2728,12 @@ impl<'c, 'a> Cx<'c, 'a> {
 
         // Mixed Int/Float arithmetic and comparison happens in Float.
         let (l, r) = match (l.ty, r.ty) {
-            (Ty::Int, Ty::Float) => (mk(K::IntToFloat(Box::new(l)), Ty::Float), r),
-            (Ty::Float, Ty::Int) => (l, mk(K::IntToFloat(Box::new(r)), Ty::Float)),
+            (Ty::Int | Ty::Int32 | Ty::Byte, Ty::Float) => (mk(K::IntToFloat(Box::new(l)), Ty::Float), r),
+            (Ty::Float, Ty::Int | Ty::Int32 | Ty::Byte) => (l, mk(K::IntToFloat(Box::new(r)), Ty::Float)),
             _ => (l, r),
         };
+        // `Byte`, `Int32` and `Int` mixed: a literal that fits takes the other side's type, else the narrower side widens.
+        let (l, r) = Self::promote_ints(l, r);
 
         // Characters: `c + n`, `n + c` and `c - n` are characters; `c - d` is the distance between two.
         let char_op = match (op, l.ty, r.ty) {
@@ -2737,7 +2774,7 @@ impl<'c, 'a> Cx<'c, 'a> {
 
         let (hop, result) = match op {
             B::Add if l.ty == Ty::Str => (hir::BinOp::Add, Ty::Str),
-            B::Add | B::Sub | B::Mul | B::Div | B::Rem if matches!(l.ty, Ty::Int | Ty::Float) => (
+            B::Add | B::Sub | B::Mul | B::Div | B::Rem if matches!(l.ty, Ty::Int | Ty::Int32 | Ty::Byte | Ty::Float) => (
                 match op {
                     B::Add => hir::BinOp::Add,
                     B::Sub => hir::BinOp::Sub,
@@ -2747,7 +2784,7 @@ impl<'c, 'a> Cx<'c, 'a> {
                 },
                 l.ty,
             ),
-            B::Lt | B::Le | B::Gt | B::Ge if matches!(l.ty, Ty::Int | Ty::Float | Ty::Str | Ty::Char) => (
+            B::Lt | B::Le | B::Gt | B::Ge if matches!(l.ty, Ty::Int | Ty::Int32 | Ty::Byte | Ty::Float | Ty::Str | Ty::Char) => (
                 match op {
                     B::Lt => hir::BinOp::Lt,
                     B::Le => hir::BinOp::Le,
@@ -2770,7 +2807,42 @@ impl<'c, 'a> Cx<'c, 'a> {
                 });
             }
         };
-        Ok(mk(K::Binary(hop, Box::new(l), Box::new(r)), result))
+        let wraps = matches!(result, Ty::Int32 | Ty::Byte)
+            && matches!(hop, hir::BinOp::Add | hir::BinOp::Sub | hir::BinOp::Mul | hir::BinOp::Div);
+        let node = mk(K::Binary(hop, Box::new(l), Box::new(r)), result);
+        // `Int32` and `Byte` arithmetic wraps around within their range.
+        Ok(if wraps { mk(K::IntConv(Box::new(node)), result) } else { node })
+    }
+
+    /// Mixed integer types in one operation: a literal that fits takes the type of the other side, otherwise the
+    /// narrower side is widened.
+    fn promote_ints(l: hir::Expr, r: hir::Expr) -> (hir::Expr, hir::Expr) {
+        let (Some(a), Some(b)) = (super::int_rank(l.ty), super::int_rank(r.ty)) else { return (l, r) };
+        let literal = |e: &hir::Expr| match e.kind {
+            K::Int(v) if e.ty == Ty::Int => Some(v),
+            _ => None,
+        };
+        match a.cmp(&b) {
+            std::cmp::Ordering::Equal => (l, r),
+            // `l` is the wider: a literal on its side takes the narrower type if it fits
+            std::cmp::Ordering::Greater => match literal(&l) {
+                Some(v) if super::int_fits(r.ty, v) => (mk(K::Int(v), r.ty), r),
+                _ => {
+                    let to = l.ty;
+                    (l, mk(K::IntConv(Box::new(r)), to))
+                }
+            },
+            std::cmp::Ordering::Less => match literal(&r) {
+                Some(v) if super::int_fits(l.ty, v) => {
+                    let to = l.ty;
+                    (l, mk(K::Int(v), to))
+                }
+                _ => {
+                    let to = r.ty;
+                    (mk(K::IntConv(Box::new(l)), to), r)
+                }
+            },
+        }
     }
 
     /// The method an operator stands for on an object, and whether it is an ordering (`compareTo`).
@@ -2799,7 +2871,7 @@ impl<'c, 'a> Cx<'c, 'a> {
                 }
                 info.methods.get(name).copied()
             }
-            Ty::Int | Ty::Float | Ty::Str | Ty::Char | Ty::Bool | Ty::Bytes if matches!(r, Ty::Obj(_)) => {
+            Ty::Int | Ty::Int32 | Ty::Byte | Ty::Float | Ty::Str | Ty::Char | Ty::Bool | Ty::Bytes if matches!(r, Ty::Obj(_)) => {
                 self.ck.ext_method_from(self.module, l, name)
             }
             // `"ab" * 3` and `'-' * 10` are text repeated.
@@ -3157,14 +3229,36 @@ impl<'c, 'a> Cx<'c, 'a> {
         if args.len() != want || args.iter().any(|a| a.name.is_some()) {
             return Err(Diagnostic::new(format!("`{}` takes {want} argument(s)", member.name), span));
         }
+        // On a `Byte` or an `Int32` the other operand has the same type (a shift count is an `Int`), and the result
+        // stays inside the type's range.
+        let ty = recv.ty;
+        let small = matches!(ty, Ty::Int32 | Ty::Byte);
+        let shift = matches!(op, H::Shl | H::Shr | H::UShr);
         let operand = match args.first() {
-            Some(a) => {
+            Some(a) if shift => {
                 let v = self.value_expected(&a.value, Some(Ty::Int))?;
-                self.coerce(v, Ty::Int, a.value.span)?
+                let count = self.coerce(v, Ty::Int, a.value.span)?;
+                let width = if ty == Ty::Byte { 7 } else { 31 };
+                if small {
+                    mk(K::Binary(H::BitAnd, Box::new(count), Box::new(mk(K::Int(width), Ty::Int))), Ty::Int)
+                } else {
+                    count
+                }
             }
-            None => mk(K::Int(-1), Ty::Int), // inv() flips every bit
+            Some(a) => {
+                let v = self.value_expected(&a.value, Some(ty))?;
+                self.coerce(v, ty, a.value.span)?
+            }
+            None => mk(K::Int(if ty == Ty::Byte { 255 } else { -1 }), ty), // inv() flips every bit
         };
-        Ok(mk(K::Binary(op, Box::new(recv), Box::new(operand)), Ty::Int))
+        let recv = if ty == Ty::Int32 && op == H::UShr {
+            // the shift must see 32 bits, not the sign extension
+            mk(K::Binary(H::BitAnd, Box::new(recv), Box::new(mk(K::Int(0xFFFF_FFFF), Ty::Int32))), Ty::Int32)
+        } else {
+            recv
+        };
+        let node = mk(K::Binary(op, Box::new(recv), Box::new(operand)), ty);
+        Ok(if small && matches!(op, H::Shl | H::UShr) { mk(K::IntConv(Box::new(node)), ty) } else { node })
     }
 
     /// `recv.member(args)` for an already evaluated receiver: a method of its type, a method
@@ -3181,9 +3275,9 @@ impl<'c, 'a> Cx<'c, 'a> {
         let not_generic = |what: &str| {
             Diagnostic::new(format!("`{what}` is not generic, so it takes no type arguments"), member.span)
         };
-        if recv.ty == Ty::Int
+        if matches!(recv.ty, Ty::Int | Ty::Int32 | Ty::Byte)
             && matches!(member.name.as_str(), "and" | "or" | "xor" | "shl" | "shr" | "ushr" | "inv")
-            && self.ck.ext_method_from(self.module, Ty::Int, &member.name).is_none()
+            && self.ck.ext_method_from(self.module, recv.ty, &member.name).is_none()
         {
             return self.bit_operation(recv, member, args, span);
         }
@@ -3771,7 +3865,7 @@ fn vararg_tail(k: Option<usize>, args: &[ast::Arg]) -> Option<usize> {
 
 fn default_expr(ty: Ty) -> hir::Expr {
     match ty {
-        Ty::Int | Ty::Char => mk(K::Int(0), ty),
+        Ty::Int | Ty::Int32 | Ty::Byte | Ty::Char => mk(K::Int(0), ty),
         Ty::Float => mk(K::Float(0.0), Ty::Float),
         Ty::Bool => mk(K::Bool(false), Ty::Bool),
         Ty::Str => mk(K::Str(String::new()), Ty::Str),

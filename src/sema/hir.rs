@@ -18,6 +18,10 @@ pub enum Ty {
     Bool,
     /// A Unicode code point, held like an `Int`.
     Char,
+    /// A signed 32-bit integer, held (sign-extended) like an `Int`; arithmetic wraps at 32 bits.
+    Int32,
+    /// An unsigned 8-bit integer (0 to 255), held like an `Int`; arithmetic wraps at 8 bits.
+    Byte,
     Str,
     /// A run of raw bytes, held like a `String` but never null and not NUL-terminated.
     Bytes,
@@ -260,6 +264,8 @@ pub enum ExprKind {
     /// Short-circuiting `&&` / `||`.
     Logical { and: bool, lhs: Box<Expr>, rhs: Box<Expr> },
     IntToFloat(Box<Expr>),
+    /// An `Int`, `Int32`, `Byte` or `Char` converted to the type of this expression, wrapping into its range.
+    IntConv(Box<Expr>),
     /// Run the statements, then yield the value of the last expression.
     Block(Vec<Stmt>, Box<Expr>),
     /// `if`/`else`; both branches have the expression's type (or it is `Void`).

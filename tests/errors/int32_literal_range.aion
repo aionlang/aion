@@ -1,0 +1,3 @@
+// error: 2147483648 does not fit in an Int32
+fn f(x: Int32) = x
+println(f(2147483648))

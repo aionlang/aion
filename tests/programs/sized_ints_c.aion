@@ -1,0 +1,9 @@
+// Int32 and Byte across the C boundary: the C side sees int32_t, and the result is sign-extended again
+extern fn abs(n: Int32) -> Int32
+extern fn toupper(c: Int32) -> Int32
+extern fn labs(n: Int) -> Int
+
+println(abs(-5), abs(-2147483647), abs(7))
+println(toupper(97), toupper(98).toInt() + 1)
+println(abs(-5) + 2147483647)
+println(labs(-9), abs(-1) as Int + 1)

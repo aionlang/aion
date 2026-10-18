@@ -85,8 +85,8 @@ pub fn emit(p: &Program) -> String {
         if RUNTIME_SYMBOLS.contains(&f.symbol.as_str()) || !declared.insert(f.symbol.clone()) {
             continue;
         }
-        let params: Vec<String> = f.params().iter().map(|l| format!("{}{}", ir(l.ty), zext(l.ty))).collect();
-        let _ = writeln!(out, "declare {}{} @\"{}\"({})", zext(f.ret), ir(f.ret), f.symbol, params.join(", "));
+        let params: Vec<String> = f.params().iter().map(|l| format!("{}{}", c_ir(l.ty), c_attr(l.ty))).collect();
+        let _ = writeln!(out, "declare {}{} @\"{}\"({})", c_attr(f.ret), c_ir(f.ret), f.symbol, params.join(", "));
     }
     out.push('\n');
 
@@ -121,7 +121,7 @@ pub fn emit(p: &Program) -> String {
     // Module-level variables, and the table the collector reads them from.
     for g in &p.globals {
         let init = match g.ty {
-            Ty::Int | Ty::Char => "0".to_string(),
+            Ty::Int | Ty::Char | Ty::Int32 | Ty::Byte => "0".to_string(),
             Ty::Float => "0.0".to_string(),
             Ty::Bool => "false".to_string(),
             Ty::Str => pool.operand(""),
@@ -179,7 +179,7 @@ fn display_type_name(name: &str) -> String {
 
 fn ir(ty: Ty) -> &'static str {
     match ty {
-        Ty::Int | Ty::Char => "i64",
+        Ty::Int | Ty::Char | Ty::Int32 | Ty::Byte => "i64",
         Ty::Float => "double",
         Ty::Bool => "i1",
         Ty::Str | Ty::Bytes | Ty::Obj(_) | Ty::Fn(_) | Ty::Opt(_) | Ty::Null => "ptr",
@@ -190,6 +190,26 @@ fn ir(ty: Ty) -> &'static str {
 /// C passes `bool` zero-extended; say so on extern declarations and calls.
 fn zext(ty: Ty) -> &'static str {
     if ty == Ty::Bool { " zeroext " } else if ty == Ty::Void { "" } else { " " }
+}
+
+/// The type of a value as a C function takes or returns it.  `Int32` and `Byte` are `int32_t` and `uint8_t` there,
+/// narrower than the 64-bit slot they live in at home.
+fn c_ir(ty: Ty) -> &'static str {
+    match ty {
+        Ty::Int32 => "i32",
+        Ty::Byte => "i8",
+        other => ir(other),
+    }
+}
+
+/// How the C side passes `ty`: `bool` and `uint8_t` zero-extended, `int32_t` sign-extended.
+fn c_attr(ty: Ty) -> &'static str {
+    match ty {
+        Ty::Bool | Ty::Byte => " zeroext ",
+        Ty::Int32 => " signext ",
+        Ty::Void => "",
+        _ => " ",
+    }
 }
 
 /// The one static zero-length `Bytes` (static: the collector never frees it).
@@ -576,7 +596,7 @@ impl<'a> FnGen<'a> {
 
     fn default_value(ty: Ty) -> &'static str {
         match ty {
-            Ty::Int | Ty::Char => "0",
+            Ty::Int | Ty::Char | Ty::Int32 | Ty::Byte => "0",
             Ty::Float => "0.0",
             Ty::Bool => "false",
             _ => "null",
@@ -774,14 +794,27 @@ impl<'a> FnGen<'a> {
                 if callee.kind == FuncKind::Method && matches!(ops[0].0, Ty::Obj(_)) {
                     self.null_check(&ops[0].1.clone());
                 }
-                let rendered: Vec<String> = ops
-                    .iter()
-                    .map(|(ty, v)| format!("{}{}{v}", ir(*ty), if is_extern { zext(*ty) } else { " " }))
-                    .collect();
+                let mut rendered = Vec::new();
+                for (ty, v) in &ops {
+                    if is_extern && matches!(ty, Ty::Int32 | Ty::Byte) {
+                        let n = self.tmp();
+                        self.line(format!("{n} = trunc i64 {v} to {}", c_ir(*ty)));
+                        rendered.push(format!("{}{}{n}", c_ir(*ty), c_attr(*ty)));
+                    } else {
+                        rendered.push(format!("{}{}{v}", ir(*ty), if is_extern { zext(*ty) } else { " " }));
+                    }
+                }
                 let call = format!("@\"{}\"({})", callee.symbol, rendered.join(", "));
                 if callee.ret == Ty::Void {
                     self.line(format!("call void {call}"));
                     return String::new();
+                }
+                if is_extern && matches!(callee.ret, Ty::Int32 | Ty::Byte) {
+                    let narrow = self.call_value(&format!("{}{}", c_attr(callee.ret).trim_start(), c_ir(callee.ret)), &call);
+                    let wide = self.tmp();
+                    let ext = if callee.ret == Ty::Int32 { "sext" } else { "zext" };
+                    self.line(format!("{wide} = {ext} {} {narrow} to i64", c_ir(callee.ret)));
+                    return wide;
                 }
                 let ret = if is_extern && callee.ret == Ty::Bool { "zeroext i1" } else { ir(callee.ret) };
                 let t = self.call_value(ret, &call);
@@ -845,7 +878,7 @@ impl<'a> FnGen<'a> {
                 let n = self.expr(len);
                 let f = self.expr(fill);
                 let bits = match elem {
-                    Ty::Int | Ty::Char => f,
+                    Ty::Int | Ty::Char | Ty::Int32 | Ty::Byte => f,
                     Ty::Float => {
                         let t = self.tmp();
                         self.line(format!("{t} = bitcast double {f} to i64"));
@@ -886,7 +919,9 @@ impl<'a> FnGen<'a> {
                     ty => {
                         let bits = self.tmp();
                         match ty {
-                            Ty::Int | Ty::Char => return self.call_value("i64", &format!("@aion_hash_int(i64 {v})")),
+                            Ty::Int | Ty::Char | Ty::Int32 | Ty::Byte => {
+                                return self.call_value("i64", &format!("@aion_hash_int(i64 {v})"));
+                            }
                             Ty::Float => self.line(format!("{bits} = bitcast double {v} to i64")),
                             Ty::Bool => self.line(format!("{bits} = zext i1 {v} to i64")),
                             _ => self.line(format!("{bits} = ptrtoint ptr {v} to i64")),
@@ -1092,10 +1127,29 @@ impl<'a> FnGen<'a> {
                 t
             }
 
+            // Into the range of the result type: an `Int32` keeps its low 32 bits (sign-extended), a `Byte` its low 8.
+            ExprKind::IntConv(inner) => {
+                let v = self.expr(inner);
+                match e.ty {
+                    Ty::Int32 => {
+                        let (n, t) = (self.tmp(), self.tmp());
+                        self.line(format!("{n} = trunc i64 {v} to i32"));
+                        self.line(format!("{t} = sext i32 {n} to i64"));
+                        t
+                    }
+                    Ty::Byte => {
+                        let t = self.tmp();
+                        self.line(format!("{t} = and i64 {v}, 255"));
+                        t
+                    }
+                    _ => v,
+                }
+            }
+
             ExprKind::ToStr(inner) => {
                 let v = self.expr(inner);
                 let t = match inner.ty {
-                    Ty::Int => self.call_value("ptr", &format!("@aion_int_to_str(i64 {v})")),
+                    Ty::Int | Ty::Int32 | Ty::Byte => self.call_value("ptr", &format!("@aion_int_to_str(i64 {v})")),
                     Ty::Char => self.call_value("ptr", &format!("@aion_char_to_str(i64 {v})")),
                     Ty::Float => self.call_value("ptr", &format!("@aion_float_to_str(double {v})")),
                     _ => {
@@ -1121,7 +1175,7 @@ impl<'a> FnGen<'a> {
                     }
                     let v = self.expr(a);
                     match a.ty {
-                        Ty::Int => self.line(format!("call void @aion_print_int(i64 {v}, i64 {nl})")),
+                        Ty::Int | Ty::Int32 | Ty::Byte => self.line(format!("call void @aion_print_int(i64 {v}, i64 {nl})")),
                         Ty::Char => self.line(format!("call void @aion_print_char(i64 {v}, i64 {nl})")),
                         Ty::Float => self.line(format!("call void @aion_print_float(double {v}, i64 {nl})")),
                         Ty::Bool => {
@@ -1187,7 +1241,7 @@ impl<'a> FnGen<'a> {
                 self.line(format!("{t} = icmp {} i64 {eq}, 0", if op == Eq { "ne" } else { "eq" }));
                 t
             }
-            Ty::Int | Ty::Char => {
+            Ty::Int | Ty::Char | Ty::Int32 | Ty::Byte => {
                 if matches!(op, Div | Rem) {
                     self.zero_check(b);
                 }

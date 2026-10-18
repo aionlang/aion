@@ -1,0 +1,4 @@
+// error: expected Byte, found Int
+n := 5
+b: Byte = n
+println(b)
