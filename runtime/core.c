@@ -22,8 +22,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-AionFrame *aion_frame_top = NULL;
-AionTrace *aion_trace_top = NULL;
+_Thread_local AionFrame *aion_frame_top = NULL;
+_Thread_local AionTrace *aion_trace_top = NULL;
 
 /* Module-level variables holding pointers: the compiler emits a table of their
  * addresses into every program (possibly empty). */
@@ -48,8 +48,8 @@ static void call0(void *closure) { (*(void (**)(void *))closure)(closure); }
 static void call1(void *closure, const char *arg) { (*(void (**)(void *, const char *))closure)(closure, arg); }
 
 /* `defer`red closures, innermost last.  They are GC roots. */
-static void **defer_stack = NULL;
-static size_t defer_len = 0, defer_cap = 0;
+static _Thread_local void **defer_stack = NULL;
+static _Thread_local size_t defer_len = 0, defer_cap = 0;
 
 void aion_defer_push(void *closure) {
     if (defer_len == defer_cap) {
@@ -79,7 +79,7 @@ typedef struct TryContext {
     size_t defers;    /* deferred closures to run before jumping */
 } TryContext;
 
-static TryContext *try_top = NULL;
+static _Thread_local TryContext *try_top = NULL;
 
 /* Switching tasks swaps these (see tasks.c). */
 void aion_task_save(AionTaskState *s) {
@@ -99,7 +99,7 @@ void aion_task_load(const AionTaskState *s) {
     defer_len = s->defer_len;
     defer_cap = s->defer_cap;
 }
-static char panic_message[512];
+static _Thread_local char panic_message[512];
 static int fatal_panic = 0;
 
 /* The functions that were running, innermost first.  A long chain (deep recursion) shows its ends. */

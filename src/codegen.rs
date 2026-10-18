@@ -28,8 +28,8 @@ use std::fmt::Write as _;
 use crate::sema::hir::*;
 
 const RUNTIME_DECLS: &str = "\
-@aion_frame_top = external global ptr
-@aion_trace_top = external global ptr
+@aion_frame_top = external thread_local global ptr
+@aion_trace_top = external thread_local global ptr
 declare ptr @aion_new_object(i64, i64, i64)
 declare ptr @aion_concat(ptr, ptr)
 declare ptr @aion_int_to_str(i64)
