@@ -116,7 +116,6 @@ can still change between versions (see the [changelog](CHANGELOG.MD)).
 | Tooling | native builds with a build cache, project files and git dependencies, formatter (`aion fmt`), test runner (`aion test`), Docker image |
 | Linux, macOS | build instructions in [docs/LOCAL-BUILDING.MD](docs/LOCAL-BUILDING.MD) |
 | Windows | the whole test suite passes cross-compiled and run under Wine; not yet run on real Windows ([details](docs/LOCAL-BUILDING.MD#windows)); needs a MinGW clang |
-| Not yet | inheritance from generic types |
 
 The end-to-end suite (`cargo test`) compiles and runs every program in `tests/programs`, every example,
 and every code block in the documentation.

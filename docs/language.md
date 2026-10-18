@@ -1070,8 +1070,28 @@ pets: List<Animal> = [Dog("a"), Cat("b")]
 println((pets[0] as Dog).fetch(), (pets[1] as? Dog)?.name)    // a fetches null
 ```
 
-Types with type parameters cannot take part in inheritance, and a type has one
-parent; use [interfaces](#interfaces) for what several unrelated types have in common.
+A generic type can be a parent, and a parent can be an instance of one: `open type Box<T>(value: T)` is
+extended by `type IntBox(n: Int) : Box<Int>(n)` (a `Box<Int>` whose methods you can replace) or by
+`type Labelled<T>(label: String, v: T) : Box<T>(v)` (one parent instance per argument).  An `IntBox` is accepted where a
+`Box<Int>` is expected, and `fn show<T>(b: Box<T>)` finds `T` from it:
+
+```aion
+open type Box<T>(value: T) {
+    open fn describe() = "Box of $value"
+}
+type IntBox(n: Int) : Box<Int>(n) {
+    override fn describe() = "IntBox ${value + 1}"
+}
+type Labelled<T>(label: String, v: T) : Box<T>(v) {
+    override fn describe() = "$label: ${super.describe()}"
+}
+
+fn show<T>(b: Box<T>) = b.describe()
+boxes: List<Box<Int>> = [Box<Int>(1), IntBox(5), Labelled("n", 7)]
+for b in boxes { println(show(b)) }                  // Box of 1 / IntBox 6 / n: Box of 7
+```
+
+A type has one parent; use [interfaces](#interfaces) for what several unrelated types have in common.
 
 ## Constraints on type parameters
 
@@ -1489,5 +1509,4 @@ A file with no `fn main()` and no top-level statements has nothing to run: `aion
 
 ## Not (yet) in the language
 
-Inheritance from generic types.  (Plain object types are not checked against being
-unset; use `T?` where a value may be missing.)
+Plain object types are not checked against being unset; use `T?` where a value may be missing.

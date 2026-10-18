@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Language
+- **Inheritance from generic types.** `open type Box<T>`, `type IntBox(n: Int) : Box<Int>(n)` and `type Named<T>(…) : Box<T>(…)`.
 - **`Int32` and `Byte`.** Sized integers that wrap around: `b: Byte = 200`, `b + 100` is 44, `n as Byte`, `n as? Int32`.
   Calls to C pass them as `int32_t` and `uint8_t`.
 - **`select`.** `select(ch.onReceive { … }, other.onSend(v) { … }, quit.onClose { … }, onTimeout(ms) { … }, onDefault { … })`
