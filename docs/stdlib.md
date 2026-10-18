@@ -487,6 +487,37 @@ println(net.lookup("localhost").contains("127.0.0.1"))    // true
 println(net.lookup("127.0.0.1"))                          // [127.0.0.1]
 ```
 
+### `std.http2`
+
+An HTTP/2 client (RFC 9113) over [`std.net`](#stdnet), next to the HTTP/1.1 client of [`std.http`](#stdhttp).
+`https://` addresses negotiate `h2` with TLS (ALPN; the server must speak HTTP/2), `http://` ones speak HTTP/2 without
+TLS ("prior knowledge"), which only some servers accept.  Answers are `http.Response` values with lower-case header names.
+
+```aion no_run
+import http2
+
+r := http2.get("https://example.com/")
+if r != null { println(r.status, r.header("content-type"), r.text().length()) }
+
+conn := http2.connect("https://example.com")!!      // one connection, many requests at the same time
+a := conn.request("GET", "/a")                      // call request from several tasks to overlap them
+b := conn.request("POST", "/b", "data".toBytes(), {"content-type": "text/plain"})
+conn.close()
+```
+
+`get`, `head`, `post(url, text, headers)`, `postBytes` and `request(method, url, body, headers)` each use a connection of their own;
+all take `verify` and `timeoutMs` and give null on failure with `lastError()` saying why.  `connect(url) -> Connection?` keeps
+the connection: `Connection.request(method, path, body = Bytes(0), headers = {})` and `close()`.  Flow control, settings,
+pings and header compression are handled; server push is refused; compressed bodies are not requested.  `readFrame`,
+`frameBytes` and the frame-type constants are the low level, for writing servers or tests.  The tests run it against a server
+written in Aion and, when `nghttpd` is installed, against that.
+
+### `std.hpack`
+
+HPACK (RFC 7541), the header compression of HTTP/2: `Decoder(maxTableSize = 4096).decode(block) -> List<Header>?` (it keeps the
+dynamic table between the blocks of one connection), `Encoder(huffman = true).encode(headers) -> Bytes`, `Header(name, value)`,
+`huffmanEncode(bytes)` and `huffmanDecode(bytes) -> Bytes?`.  Checked against the examples of RFC 7541, appendix C.
+
 ### `std.websocket`
 
 WebSockets (RFC 6455) over [`std.net`](#stdnet): a client for `ws://` and `wss://` (TLS needs OpenSSL's `libssl`)
