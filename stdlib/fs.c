@@ -15,6 +15,12 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#ifdef _WIN32
+#include <direct.h>
+#include <windows.h>
+#define mkdir(path, mode) _mkdir(path)
+#define lstat stat
+#endif
 
 static int last_errno;
 
@@ -95,7 +101,11 @@ int64_t aion_fs_size(const char *path) {
 int64_t aion_fs_modified(const char *path) {
     struct stat st;
     if (stat(path, &st) != 0) return note(), -1;
+#ifdef _WIN32
+    return (int64_t)st.st_mtime * 1000;
+#else
     return (int64_t)st.st_mtime * 1000 + (int64_t)(st.st_mtim.tv_nsec / 1000000);
+#endif
 }
 
 static int by_name(const void *a, const void *b) { return strcmp(*(char *const *)a, *(char *const *)b); }
@@ -145,15 +155,22 @@ bool aion_fs_mkdir(const char *path) {
 bool aion_fs_mkdirs(const char *path) {
     char *copy = strdup(path);
     if (!copy) aion_panic("out of memory");
+    /* a drive such as "C:" is not made, and both kinds of slash separate the folders on Windows */
     for (char *p = copy + 1; *p; p++) {
+#ifdef _WIN32
+        if (*p != '/' && *p != '\\') continue;
+        if (p == copy + 2 && copy[1] == ':') continue;
+#else
         if (*p != '/') continue;
+#endif
+        char slash = *p;
         *p = '\0';
         if (mkdir(copy, 0777) != 0 && errno != EEXIST) {
             note();
             free(copy);
             return false;
         }
-        *p = '/';
+        *p = slash;
     }
     bool ok = mkdir(copy, 0777) == 0 || (errno == EEXIST && aion_fs_is_dir(copy));
     if (!ok) note();
@@ -163,6 +180,9 @@ bool aion_fs_mkdirs(const char *path) {
 
 /* A file or an empty directory. */
 bool aion_fs_remove(const char *path) {
+#ifdef _WIN32
+    if (aion_fs_is_dir(path)) return rmdir(path) == 0 || (note(), false);
+#endif
     if (remove(path) != 0) return note(), false;
     return true;
 }
@@ -197,8 +217,14 @@ static bool remove_tree(const char *path) {
 bool aion_fs_remove_all(const char *path) { return remove_tree(path); }
 
 bool aion_fs_rename(const char *from, const char *to) {
+#ifdef _WIN32
+    /* rename() refuses to replace a file on Windows, which the POSIX one does */
+    if (!MoveFileExA(from, to, MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED)) return errno = EACCES, note(), false;
+    return true;
+#else
     if (rename(from, to) != 0) return note(), false;
     return true;
+#endif
 }
 
 bool aion_fs_copy(const char *from, const char *to) {
@@ -229,6 +255,10 @@ bool aion_fs_copy(const char *from, const char *to) {
 const char *aion_fs_cwd(void) {
     char buf[4096];
     if (!getcwd(buf, sizeof buf)) return note(), aion_string("");
+#ifdef _WIN32
+    for (char *p = buf; *p; p++)
+        if (*p == '\\') *p = '/';
+#endif
     return aion_string(buf);
 }
 
@@ -239,27 +269,61 @@ bool aion_fs_chdir(const char *path) {
 
 /* The absolute path with symbolic links and `..` resolved; NULL if it does not exist. */
 const char *aion_fs_absolute(const char *path) {
+#ifdef _WIN32
+    char buf[MAX_PATH * 4];
+    if (!_fullpath(buf, path, sizeof buf) || !aion_fs_exists(path)) return errno = ENOENT, note(), NULL;
+    for (char *p = buf; *p; p++)
+        if (*p == '\\') *p = '/';
+    return aion_string(buf);
+#else
     char *resolved = realpath(path, NULL);
     if (!resolved) return note(), NULL;
     const char *out = aion_string(resolved);
     free(resolved);
     return out;
+#endif
 }
 
-const char *aion_fs_temp_dir(void) {
+static const char *temp_base(void) {
+#ifdef _WIN32
+    static char buf[MAX_PATH * 2];
+    DWORD n = GetTempPathA((DWORD)sizeof buf, buf);
+    if (n == 0 || n >= sizeof buf) return "C:/Windows/Temp";
+    while (n > 1 && (buf[n - 1] == '\\' || buf[n - 1] == '/')) buf[--n] = '\0';
+    for (char *p = buf; *p; p++)
+        if (*p == '\\') *p = '/';
+    return buf;
+#else
     const char *t = getenv("TMPDIR");
-    return aion_string(t && *t ? t : "/tmp");
+    return t && *t ? t : "/tmp";
+#endif
 }
+
+const char *aion_fs_temp_dir(void) { return aion_string(temp_base()); }
 
 /* A new, empty directory named like `<prefix>XXXXXX` under the temporary directory. */
 const char *aion_fs_make_temp_dir(const char *prefix) {
-    const char *t = getenv("TMPDIR");
-    const char *base = t && *t ? t : "/tmp";
+    const char *base = temp_base();
     size_t n = strlen(base) + strlen(prefix) + 9;
     char *tmpl = malloc(n);
     if (!tmpl) aion_panic("out of memory");
+#ifdef _WIN32
+    static const char letters[] = "abcdefghijklmnopqrstuvwxyz0123456789";
+    const char *out = NULL;
+    for (int attempt = 0; attempt < 100 && !out; attempt++) {
+        unsigned x = (unsigned)GetTickCount() * 2654435761u + (unsigned)attempt * 40503u + (unsigned)GetCurrentProcessId();
+        char suffix[7];
+        for (int i = 0; i < 6; i++, x = x * 1103515245u + 12345u) suffix[i] = letters[(x >> 16) % (sizeof letters - 1)];
+        suffix[6] = '\0';
+        snprintf(tmpl, n, "%s/%s%s", base, prefix, suffix);
+        if (mkdir(tmpl, 0700) == 0) out = aion_string(tmpl);
+        else if (errno != EEXIST) break;
+    }
+    if (!out) note();
+#else
     snprintf(tmpl, n, "%s/%sXXXXXX", base, prefix);
     const char *out = mkdtemp(tmpl) ? aion_string(tmpl) : (note(), NULL);
+#endif
     free(tmpl);
     return out;
 }

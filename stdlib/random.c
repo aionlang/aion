@@ -9,7 +9,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#ifdef _WIN32
+#include <windows.h>
+#include <bcrypt.h>
+#else
 #include <unistd.h>
+#endif
 
 static uint64_t state[4];
 static bool seeded;
@@ -28,9 +33,13 @@ void aion_random_seed(int64_t seed) {
 }
 
 static void os_random(void *buf, size_t n) {
+#ifdef _WIN32
+    if (BCryptGenRandom(NULL, buf, (ULONG)n, BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) aion_panic("cannot read the system random numbers");
+#else
     FILE *f = fopen("/dev/urandom", "rb");
     if (!f || fread(buf, 1, n, f) != n) aion_panic("cannot read /dev/urandom");
     fclose(f);
+#endif
 }
 
 static uint64_t rotl(uint64_t x, int k) { return (x << k) | (x >> (64 - k)); }

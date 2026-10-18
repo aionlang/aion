@@ -8,6 +8,17 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
+/* Windows has no memmem. */
+static void *memmem(const void *haystack, size_t n, const void *needle, size_t m) {
+    if (m == 0) return (void *)haystack;
+    const unsigned char *h = haystack, *p = needle;
+    for (size_t i = 0; i + m <= n; i++)
+        if (h[i] == p[0] && memcmp(h + i, p, m) == 0) return (void *)(h + i);
+    return NULL;
+}
+#endif
+
 /* Standard error; pending standard output goes first so the two stay in order. */
 void aion_eprint(const char *text) {
     fflush(stdout);
