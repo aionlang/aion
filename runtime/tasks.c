@@ -7,9 +7,9 @@
  * locks.  The collector sees suspended tasks through aion_tasks_mark().
  *
  * Waiting is deliberately simple: aion_park() sleeps until *anything* calls
- * aion_notify(), which wakes every parked task so it can re-check its condition.  A task can
- * also wait for a file descriptor (aion_wait_fd), so a server can serve many connections while
- * each one blocks on its socket.  When no task can run and none is sleeping or waiting for
+ * aion_notify(), which wakes every parked task so it can re-check its condition (aion_park_for() also
+ * wakes after a time limit).  A task can also wait for a file descriptor (aion_wait_fd), so a server can
+ * serve many connections while each one blocks on its socket.  When no task can run and none is sleeping or waiting for
  * input or output, the program is deadlocked and says so.
  *
  * On POSIX systems a task's stack is an mmap'ed block switched to with ucontext; on Windows it is a fiber.
@@ -38,7 +38,7 @@
 #define STACK_SIZE ((size_t)256 * 1024)
 #define GUARD_SIZE ((size_t)4096)
 
-typedef enum { READY, RUNNING, PARKED, SLEEPING, WAITING, DONE } State;
+typedef enum { READY, RUNNING, PARKED, TIMED, SLEEPING, WAITING, DONE } State;
 
 typedef struct Task {
     struct Task *next;
@@ -50,7 +50,7 @@ typedef struct Task {
 #endif
     State state;
     void *closure;
-    int64_t wake_at; /* SLEEPING, WAITING: monotonic milliseconds (INT64_MAX = no deadline) */
+    int64_t wake_at; /* SLEEPING, TIMED, WAITING: monotonic milliseconds (INT64_MAX = no deadline) */
     int wait_fd, wait_events, wait_result; /* WAITING: what for, and how it ended (1 ready, 0 timed out) */
     AionTaskState saved;
 } Task;
@@ -107,7 +107,8 @@ static Task *due_sleeper(void) {
     int64_t now = now_ms();
     Task *best = NULL;
     for (Task *t = all_tasks; t; t = t->next)
-        if (t->state == SLEEPING && t->wake_at <= now && (!best || t->wake_at < best->wake_at)) best = t;
+        if ((t->state == SLEEPING || t->state == TIMED) && t->wake_at <= now && (!best || t->wake_at < best->wake_at))
+            best = t;
     return best;
 }
 
@@ -191,7 +192,8 @@ static void schedule(void) {
         bool waiting = false;
         for (Task *t = all_tasks; t; t = t->next) {
             if (t->state == WAITING) waiting = true;
-            if ((t->state == SLEEPING || t->state == WAITING) && t->wake_at < earliest) earliest = t->wake_at;
+            if ((t->state == SLEEPING || t->state == TIMED || t->state == WAITING) && t->wake_at < earliest)
+                earliest = t->wake_at;
         }
         if (earliest == INT64_MAX && !waiting) aion_panic("deadlock: every task is waiting and none can continue");
         int64_t wait = earliest == INT64_MAX ? -1 : earliest - now_ms();
@@ -206,7 +208,7 @@ static void schedule(void) {
 
 void aion_notify(void) {
     for (Task *t = all_tasks; t; t = t->next)
-        if (t->state == PARKED) t->state = READY;
+        if (t->state == PARKED || t->state == TIMED) t->state = READY;
 }
 
 static void task_main(void) {
@@ -260,6 +262,16 @@ void aion_park(void) {
     current->state = PARKED;
     schedule();
 }
+
+/* Like aion_park(), but also wakes once `ms` milliseconds have passed, for a `select` with a timeout. */
+void aion_park_for(int64_t ms) {
+    current->wake_at = now_ms() + (ms < 0 ? 0 : ms);
+    current->state = TIMED;
+    schedule();
+}
+
+/* The clock tasks sleep by, in milliseconds. */
+int64_t aion_clock_ms(void) { return now_ms(); }
 
 void aion_sleep(int64_t ms) {
     if (ms <= 0) {
