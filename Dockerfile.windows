@@ -3,8 +3,8 @@
 #   docker build -f Dockerfile.windows --output dist .
 #
 # leaves dist/aion.exe.  It runs the compiler's own commands (check, emit-ir, fmt, new, ...); compiling and running
-# programs on Windows also needs clang on the PATH, and the C parts of the standard library are still POSIX only
-# (see docs/LOCAL-BUILDING.MD), so use the Linux image (Dockerfile) or WSL for that for now.
+# programs on Windows also needs a MinGW clang on the PATH (see docs/LOCAL-BUILDING.MD), or use the Linux image
+# (Dockerfile) or WSL.
 
 # ---- build the compiler for Windows ------------------------------------------
 FROM rust:1-slim-trixie AS build

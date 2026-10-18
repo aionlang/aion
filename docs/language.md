@@ -1230,7 +1230,8 @@ Also `send(v)`, `tryReceive()` (never waits), `close()`, `forEach(action)` and `
 Sending on a closed channel stops the program.  If every task is waiting for something
 that can no longer happen, the program stops with `deadlock: every task is waiting and
 none can continue` instead of hanging.  Each task has its own 256 KiB stack, so very
-deep recursion belongs in the main code.  Tasks are not available on Windows yet.
+deep recursion belongs in the main code.  On Windows tasks run on fibers and behave the same, except that only sockets
+(not files or the terminal) can make a task wait.
 
 ## Line breaks
 

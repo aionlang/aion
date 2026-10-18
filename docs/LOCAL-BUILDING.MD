@@ -35,17 +35,24 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ## Windows
 
 1. Install Rust from <https://rustup.rs> (with the Visual Studio Build Tools).
-2. Install LLVM/clang, e.g. `winget install LLVM.LLVM`, and make sure
-   `clang.exe` is on `PATH`.
-
-> The Windows path (`-lws2_32` for sockets, `.exe` naming) is written but has not
-> been exercised since the 0.2 rewrite; please report problems.
+2. Install a clang that targets MinGW (the GNU runtime), such as [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) or
+   the `clang64` environment of MSYS2, and make sure `clang.exe` is on `PATH`.
 
 `aion.exe` itself can be built with nothing but Docker, by cross-compiling in a Linux container:
-`docker build -f Dockerfile.windows --output dist .` leaves `dist/aion.exe` (see [docker.md](docker.md#a-windows-executable)).  It runs the compiler's own commands
-(`check`, `emit-ir`, `fmt`, `new`, `help`, ...).  Compiling and running programs on Windows also needs clang, and the
-C parts of the standard library are still POSIX only (the prelude's `memmem`, and `fs`, `os`, `time`, `net`, `term`
-and the modules that load a library with `dlopen`), so use the Docker image or WSL for that for now.
+`docker build -f Dockerfile.windows --output dist .` leaves `dist/aion.exe` (see [docker.md](docker.md#a-windows-executable)).
+
+Programs built on Windows use the same runtime and standard library as on Linux: the C parts have Windows branches
+(`CreateProcess` for `os`, Winsock for `net`, fibers for tasks, the console API for `term`, `BCryptGenRandom` for `random`,
+and so on), and `os.platform()` returns `"windows"`.  The modules that load an optional library at run time look for its DLL
+next to the program or on the `PATH`: `libcrypto-3-x64.dll` and `libssl-3-x64.dll` (OpenSSL: `net` TLS, `crypto`, `smtp`),
+`libgmp-10.dll` (`bigint`), `libutf8proc-3.dll` (`unicode`), `libexpat-1.dll` (`xml`) and `libarchive-13.dll` (`archive`).
+`sqlite` and `zlib` are linked, so their import libraries must be installed for the compiler to find.
+
+Windows is tested by compiling every program of `tests/programs` for MinGW and running it under Wine
+(`scripts/docker-test-windows.sh`, see [docker.md](docker.md#testing-the-windows-port)); all of them pass there except two that are
+left out: `os_info` (it runs POSIX tools such as `tr` and `wc`) and `archive_formats` (the test image has no libarchive).
+It has not been run on a real Windows machine yet, so reports of problems are welcome.  Shell commands go through `cmd /c`
+(`os.shell`), and file paths use `/` or `\`.
 
 ## Build, test, install
 

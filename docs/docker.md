@@ -68,9 +68,23 @@ docker build -f Dockerfile.windows --output dist .
 .\dist\aion.exe --version
 ```
 
-The executable runs the compiler's own commands (`check`, `emit-ir`, `fmt`, `new`, `help`).  Compiling and running programs on
-Windows also needs clang on the `PATH`, and the C parts of the standard library are still POSIX only, so run programs with the
-image above (or WSL) for now.
+The executable runs the compiler's own commands (`check`, `emit-ir`, `fmt`, `new`, `help`).  Compiling and running programs
+also needs a MinGW clang on the `PATH` (see [LOCAL-BUILDING.MD](LOCAL-BUILDING.MD#windows)); without it, run programs with
+the image above (or WSL).
+
+### Testing the Windows port
+
+`Dockerfile.wintest` builds an image with clang cross-compiling for MinGW, Wine, and the libraries the optional modules load
+(OpenSSL, GMP, expat and utf8proc as DLLs; zlib and SQLite as static libraries).  The script compiles every test program for
+Windows and runs it under Wine:
+
+```powershell
+docker build -f Dockerfile.wintest -t aion-windows-test .
+docker run --rm -v "${PWD}:/src:ro" -v aion-target-win:/work/target aion-windows-test
+```
+
+Name programs after the script to run only those: `... aion-windows-test bash /src/scripts/docker-test-windows.sh time fs`.
+The programs in `tests/windows` are the ones whose expected output differs from Linux.
 
 ## A macOS executable
 

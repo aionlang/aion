@@ -115,7 +115,7 @@ can still change between versions (see the [changelog](CHANGELOG.MD)).
 | Standard library | text, collections, lazy streams, files, time, random, regex, JSON, CSV, sockets, HTTP and TLS, SQLite, zlib, hashing |
 | Tooling | native builds with a build cache, project files and git dependencies, formatter (`aion fmt`), test runner (`aion test`), Docker image |
 | Linux, macOS | build instructions in [docs/LOCAL-BUILDING.MD](docs/LOCAL-BUILDING.MD) |
-| Windows | written but not exercised since the 0.2 rewrite ([details](docs/LOCAL-BUILDING.MD)); the Docker image is the easiest route |
+| Windows | the whole test suite passes cross-compiled and run under Wine; not yet run on real Windows ([details](docs/LOCAL-BUILDING.MD#windows)); needs a MinGW clang |
 | Not yet | preemptive threads, `select` over several channels, inheritance from generic types, `Byte` / `Int32` types |
 
 The end-to-end suite (`cargo test`) compiles and runs every program in `tests/programs`, every example,
