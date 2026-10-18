@@ -486,6 +486,35 @@ println(net.lookup("localhost").contains("127.0.0.1"))    // true
 println(net.lookup("127.0.0.1"))                          // [127.0.0.1]
 ```
 
+### `std.websocket`
+
+WebSockets (RFC 6455) over [`std.net`](#stdnet): a client for `ws://` and `wss://` (TLS needs OpenSSL's `libssl`)
+and a server.
+
+```aion
+import websocket
+
+server := websocket.listen(0, "127.0.0.1") { ws ->          // a task per client
+    while true {
+        msg := ws.receive()
+        if msg == null { break }                              // null: the connection closed
+        ws.send("you said: " + msg.text())
+    }
+}!!
+
+ws := websocket.connect("ws://127.0.0.1:${server.port()}/chat")!!
+ws.send("hello")
+println(ws.receive()!!.text())                                // you said: hello
+ws.close()
+```
+
+`connect(url, headers = {}, verify = true, timeoutMs = 30000) -> Socket?` and `lastError()`; `listen(port, host = "", handler)
+-> Server?` (`Server.port()`, `close()`, and `accept() -> Socket?` to take clients one at a time).  A `Socket` has
+`send(text)`, `sendBinary(bytes)`, `ping()`, `receive() -> Message?` (`binary`, `data`, `text()`), `close(code = 1000, reason = "")`,
+`path` and `headers` of the handshake, `closed`, `closeCode`, `closeReason`, and `maxSize` (default 16 MiB; a larger message
+closes the connection with 1009).  Fragments are joined and pings answered for you; `sendFrame(opcode, payload, fin)` sends a
+single frame.  Compression and subprotocols are not supported; the TLS path is not covered by the tests.
+
 ### `std.smtp`
 
 Send e-mail through an SMTP server.  `Server(host, port = 587, security = "starttls", username = "", password = "",
