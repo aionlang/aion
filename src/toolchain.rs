@@ -18,6 +18,18 @@ pub struct Options {
     pub trace: bool,
 }
 
+/// Are the programs built for Windows?  True when the compiler itself runs on Windows; `AION_TARGET` naming a Windows
+/// triple (`x86_64-w64-mingw32`) makes a build on another system aim at Windows too (the programs are then run with
+/// `AION_RUNNER`, such as `wine`), which is how the Windows port is tested.
+pub fn windows() -> bool {
+    cfg!(windows) || std::env::var("AION_TARGET").is_ok_and(|t| t.contains("mingw") || t.contains("windows"))
+}
+
+/// The suffix of an executable file name.
+pub fn exe_suffix() -> &'static str {
+    if windows() { ".exe" } else { "" }
+}
+
 /// Compiler executables to try, newest first.  `AION_CLANG` overrides.
 fn candidates() -> Vec<String> {
     if let Ok(c) = std::env::var("AION_CLANG") {
@@ -85,10 +97,14 @@ fn compile(
             .arg(output)
             .arg("-lm");
         for lib in libs {
+            // Windows has no libdl (the C code loads libraries with LoadLibrary there) and no separate libpthread
+            if windows() && (lib == "dl" || lib == "pthread") {
+                continue;
+            }
             cmd.arg(format!("-l{lib}"));
         }
-        if cfg!(windows) {
-            cmd.arg("-lws2_32");
+        if windows() {
+            cmd.args(["-lws2_32", "-lbcrypt"]);
         }
         match cmd.output() {
             Ok(out) if out.status.success() => return Ok(()),

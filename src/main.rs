@@ -235,7 +235,19 @@ fn compile(
 }
 
 fn exe_name(stem: &str) -> String {
-    format!("{stem}{}", std::env::consts::EXE_SUFFIX)
+    format!("{stem}{}", toolchain::exe_suffix())
+}
+
+/// Start a built program, through `AION_RUNNER` (`wine`, say) when that is set.
+fn program_command(exe: &Path) -> Command {
+    match std::env::var("AION_RUNNER") {
+        Ok(runner) if !runner.is_empty() => {
+            let mut cmd = Command::new(runner);
+            cmd.arg(exe);
+            cmd
+        }
+        _ => Command::new(exe),
+    }
 }
 
 /// Build (or reuse) the program for `ir`: the executable, and whether it is a temporary one to delete after use.
@@ -284,7 +296,7 @@ fn run_program(
     program_args: &[String],
 ) -> Result<ExitCode, Diagnostic> {
     let (exe, temporary) = build_program(program, opts)?;
-    let status = Command::new(&exe).args(program_args).status();
+    let status = program_command(&exe).args(program_args).status();
     if temporary {
         let _ = std::fs::remove_file(&exe);
     }

@@ -8,7 +8,7 @@
 
 use std::io::{BufRead, IsTerminal, Write};
 use std::path::Path;
-use std::process::{Command, ExitCode, Stdio};
+use std::process::{ExitCode, Stdio};
 
 use crate::diag::SourceMap;
 use crate::syntax::{self, Token, ast};
@@ -175,7 +175,7 @@ fn execute(session: &Session, entry: String, compiled: crate::Compiled, opts: &t
             return session.clone();
         }
     };
-    let output = Command::new(&exe).stdin(Stdio::null()).output();
+    let output = crate::program_command(&exe).stdin(Stdio::null()).output();
     if temporary {
         let _ = std::fs::remove_file(&exe);
     }

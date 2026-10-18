@@ -93,6 +93,9 @@ typedef struct AionTaskState {
  * 1 ready, 0 timed out, -1 failed. */
 int aion_wait_fd(int fd, int events, int64_t timeout_ms);
 
+/* Sleep for `ms` milliseconds (other tasks run meanwhile). */
+void aion_sleep(int64_t ms);
+
 void aion_task_save(AionTaskState *into);
 void aion_task_load(const AionTaskState *from);
 /* Mark everything the suspended tasks keep alive. */

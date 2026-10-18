@@ -10,6 +10,11 @@
 
 #include "aion.h"
 
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#include <windows.h>
+#endif
 #include <inttypes.h>
 #include <math.h>
 #include <setjmp.h>
@@ -433,6 +438,19 @@ static char **program_argv = NULL;
 void aion_set_args(int argc, char **argv) {
     program_argc = argc;
     program_argv = argv;
+#ifdef _WIN32
+    /* A program prints "\n" and means exactly that: no CRLF translation, and UTF-8 on the console. */
+    _setmode(_fileno(stdin), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
+    _setmode(_fileno(stderr), _O_BINARY);
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD mode;
+    if (out != INVALID_HANDLE_VALUE && GetConsoleMode(out, &mode)) {
+        SetConsoleMode(out, mode | 0x0004); /* ENABLE_VIRTUAL_TERMINAL_PROCESSING: colours and cursor moves */
+    }
+#endif
 }
 
 /* The arguments after the program name. */
