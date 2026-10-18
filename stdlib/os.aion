@@ -67,8 +67,9 @@ fn exec(program: String, args: List<String>? = null, input: String = "") -> Comm
     return CommandResult(status, __stdout(), __stderr())
 }
 
-// Run a command line through the shell (`sh -c`), collecting its output.
-fn shell(command: String, input: String = "") -> CommandResult = exec("sh", ["-c", command], input)
+// Run a command line through the shell (`sh -c`, or `cmd /c` on Windows), collecting its output.
+fn shell(command: String, input: String = "") -> CommandResult =
+    platform() == "windows" ? exec("cmd", ["/c", command], input) : exec("sh", ["-c", command], input)
 
 // Run a program that shares this program's terminal; returns its exit status (see CommandResult).
 fn run(program: String, args: List<String>? = null) -> Int = __exec(program, __joinArgs(args), "", false)
