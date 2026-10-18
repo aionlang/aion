@@ -30,6 +30,8 @@ xcode-select --install        # provides clang
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
+`Dockerfile.macos` cross-compiles a universal `aion-macos` binary in Docker (see [docker.md](docker.md#a-macos-executable)).
+
 ## Windows
 
 1. Install Rust from <https://rustup.rs> (with the Visual Studio Build Tools).

@@ -72,6 +72,19 @@ The executable runs the compiler's own commands (`check`, `emit-ir`, `fmt`, `new
 Windows also needs clang on the `PATH`, and the C parts of the standard library are still POSIX only, so run programs with the
 image above (or WSL) for now.
 
+## A macOS executable
+
+`Dockerfile.macos` cross-compiles the compiler with Zig as the linker, so no Apple SDK or Mac is needed:
+
+```bash
+docker build -f Dockerfile.macos --output dist .
+```
+
+It leaves `dist/aion-macos`, one universal binary for Apple silicon and Intel (checked here to hold an `arm64` and an
+`x86_64` slice; it has not been run on a Mac).  Copy it to a Mac, `chmod +x aion-macos` and run it.  Compiling programs there
+needs clang (`xcode-select --install`).  A file copied from another machine may need `xattr -d com.apple.quarantine aion-macos`
+once.  Building natively on a Mac with `cargo build --release` works as well, as in [LOCAL-BUILDING.MD](LOCAL-BUILDING.MD).
+
 ## Keeping the build cache
 
 Compiled programs and cloned git dependencies go to `/cache`. Mount a named volume to make re-runs

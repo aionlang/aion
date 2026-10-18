@@ -1,0 +1,26 @@
+# aion for macOS (Apple silicon and Intel in one universal binary), cross-compiled with Zig as the linker: nothing to
+# install on the host but Docker, and no Apple SDK is needed.
+#
+#   docker build -f Dockerfile.macos --output dist .
+#
+# leaves dist/aion-macos.  Copy it to a Mac, `chmod +x aion-macos`, and run it; compiling programs there needs clang
+# (`xcode-select --install`).  It has not been run on a Mac from here.
+
+# ---- build the compiler for macOS --------------------------------------------
+FROM rust:1-slim-trixie AS build
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 python3-pip \
+ && rm -rf /var/lib/apt/lists/* \
+ && pip install --break-system-packages --no-cache-dir ziglang==0.13.0 \
+ && cargo install --locked cargo-zigbuild \
+ && rustup target add x86_64-apple-darwin aarch64-apple-darwin
+WORKDIR /src
+COPY Cargo.toml Cargo.lock build.rs ./
+COPY src ./src
+COPY runtime ./runtime
+COPY stdlib ./stdlib
+RUN cargo zigbuild --release --locked --target universal2-apple-darwin
+
+# ---- only the executable leaves ---------------------------------------------
+FROM scratch AS export
+COPY --from=build /src/target/universal2-apple-darwin/release/aion /aion-macos
