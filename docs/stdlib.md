@@ -475,6 +475,17 @@ timeout), `setTimeout(ms)`, `peer()`, `port()`, `startTls(host, verify = true, c
 use it need it; with `verify` the certificate must be valid for `host` and signed by a trusted authority
 (the system's, or the file named by `cafile` or the `SSL_CERT_FILE` variable).
 
+Name lookup: `lookup(host) -> List<String>` gives the IP addresses of a name (IPv4 first; empty if it cannot be
+resolved, and `lastError()` says why), and `reverse(ip) -> String?` the name of an address.  A slow lookup
+holds up the other tasks.
+
+```aion
+import net
+
+println(net.lookup("localhost").contains("127.0.0.1"))    // true
+println(net.lookup("127.0.0.1"))                          // [127.0.0.1]
+```
+
 ### `std.http`
 
 ```aion no_run
