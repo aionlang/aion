@@ -1,0 +1,39 @@
+# The environment for testing the Windows port without Windows: clang cross-compiles for MinGW and Wine runs the
+# programs.  The libraries the optional modules load (OpenSSL, GMP, expat, utf8proc) are built as DLLs, zlib and
+# SQLite as static libraries.  libarchive is not included, so `archive_formats` is skipped.
+#
+#   docker build -f Dockerfile.wintest -t aion-windows-test .
+#   docker run --rm -v "$PWD":/src:ro -v aion-target-win:/work/target aion-windows-test
+#
+# (see scripts/docker-test-windows.sh)
+FROM rust:1-slim-trixie
+ARG MINGW=x86_64-w64-mingw32
+RUN dpkg --add-architecture i386 && apt-get update && apt-get install -y --no-install-recommends \
+      clang lld libc6-dev ca-certificates git rsync make perl m4 xz-utils bzip2 wget unzip \
+      wine wine64 libwine gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64 mingw-w64-x86-64-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && update-alternatives --set $MINGW-gcc /usr/bin/$MINGW-gcc-posix
+ENV WINEDEBUG=-all WINEPREFIX=/root/.wine WINEARCH=win64 XDG_RUNTIME_DIR=/tmp/xdg
+RUN mkdir -p /tmp/xdg && chmod 700 /tmp/xdg && (wine wineboot --init >/dev/null 2>&1; true)
+COPY scripts/clang-win /usr/local/bin/clang-win
+RUN sed -i 's/\r$//' /usr/local/bin/clang-win && chmod +x /usr/local/bin/clang-win
+
+WORKDIR /build
+RUN wget -q https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz && tar xf zlib-1.3.1.tar.gz && cd zlib-1.3.1 \
+ && CHOST=$MINGW ./configure --static --prefix=/usr/$MINGW >/dev/null && make -j4 >/dev/null && make install >/dev/null
+RUN wget -q https://www.sqlite.org/2024/sqlite-amalgamation-3460100.zip && unzip -q sqlite-amalgamation-3460100.zip && cd sqlite-amalgamation-3460100 \
+ && $MINGW-gcc -O2 -c sqlite3.c -o sqlite3.o -DSQLITE_THREADSAFE=0 && $MINGW-ar rcs /usr/$MINGW/lib/libsqlite3.a sqlite3.o && cp sqlite3.h sqlite3ext.h /usr/$MINGW/include/
+RUN wget -q https://github.com/libexpat/libexpat/releases/download/R_2_6_4/expat-2.6.4.tar.xz && tar xf expat-2.6.4.tar.xz && cd expat-2.6.4 \
+ && ./configure --host=$MINGW --disable-static --enable-shared --without-docbook >/dev/null && make -j4 >/dev/null \
+ && mkdir -p /opt/windlls && cp $(find . -name 'libexpat-1.dll' | head -1) /opt/windlls/
+RUN wget -q https://github.com/JuliaStrings/utf8proc/archive/refs/tags/v2.9.0.tar.gz -O utf8proc.tar.gz && tar xf utf8proc.tar.gz && cd utf8proc-2.9.0 \
+ && $MINGW-gcc -O2 -shared -DUTF8PROC_EXPORTS -o /opt/windlls/libutf8proc-3.dll utf8proc.c
+RUN wget -q https://gmplib.org/download/gmp/gmp-6.3.0.tar.xz && tar xf gmp-6.3.0.tar.xz && cd gmp-6.3.0 \
+ && ./configure --host=$MINGW --enable-shared --disable-static >/dev/null && make -j4 >/dev/null \
+ && cp $(find . -name 'libgmp-10.dll' | head -1) /opt/windlls/
+RUN wget -q https://www.openssl.org/source/openssl-3.3.2.tar.gz && tar xf openssl-3.3.2.tar.gz && cd openssl-3.3.2 \
+ && ./Configure mingw64 --cross-compile-prefix=$MINGW- shared no-tests no-docs >/dev/null && make -j4 build_libs >/dev/null 2>&1 \
+ && cp libcrypto-3-x64.dll libssl-3-x64.dll /opt/windlls/
+RUN cp /opt/windlls/*.dll /root/.wine/drive_c/windows/system32/
+WORKDIR /
+CMD ["bash", "/src/scripts/docker-test-windows.sh"]

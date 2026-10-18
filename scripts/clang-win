@@ -1,0 +1,4 @@
+#!/bin/bash
+# clang aimed at 64-bit Windows with the MinGW runtime; used by docker-test-windows.sh (AION_CLANG)
+GCCDIR=$(dirname "$(x86_64-w64-mingw32-gcc-posix -print-libgcc-file-name 2>/dev/null || x86_64-w64-mingw32-gcc -print-libgcc-file-name)")
+exec clang --target=x86_64-w64-windows-gnu --sysroot=/usr/x86_64-w64-mingw32 -L"$GCCDIR" -L/usr/x86_64-w64-mingw32/lib -fuse-ld=lld -D_WIN32_WINNT=0x0A00 "$@"
