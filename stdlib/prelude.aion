@@ -1258,6 +1258,58 @@ fn assertEq<T>(actual: T, expected: T, message: String = "") {
     }
 }
 
+/** Stop the program unless `actual != unexpected`. */
+fn assertNe<T>(actual: T, unexpected: T, message: String = "") {
+    if actual == unexpected {
+        prefix := message.isEmpty() ? "" : "$message: "
+        panic("${prefix}expected something other than $unexpected")
+    }
+}
+
+/** Stop the program unless `condition` is false. */
+fn assertFalse(condition: Bool, message: String = "expected false") {
+    if condition { panic(message) }
+}
+
+/** Stop the program unless `value` is null. */
+fn assertNull<T>(value: T?, message: String = "") {
+    if value != null {
+        prefix := message.isEmpty() ? "" : "$message: "
+        panic("${prefix}expected null but got $value")
+    }
+}
+
+/** Stop the program if `value` is null. */
+fn assertNotNull<T>(value: T?, message: String = "expected a value, got null") {
+    if value == null { panic(message) }
+}
+
+/** Stop the program unless `actual` is within `tolerance` of `expected`. */
+fn assertClose(actual: Float, expected: Float, tolerance: Float = 0.000000001) {
+    gap := actual - expected
+    if gap < 0.0 { gap = -gap }
+    if gap > tolerance { panic("expected $expected (give or take $tolerance) but got $actual") }
+}
+
+/** Stop the program unless the list holds `item`. */
+fn assertContains<T>(items: List<T>, item: T) {
+    if !items.contains(item) { panic("expected $items to contain $item") }
+}
+
+/** Stop the program unless `text` has `part` in it (`assertContains` is for lists). */
+fn assertContainsText(text: String, part: String) {
+    if !text.contains(part) { panic("expected \"$text\" to contain \"$part\"") }
+}
+
+/**
+ * Run `body`, which must panic, and give the panic's message; stops the program if it finishes normally.
+ * `msg := assertFails { 1 / 0 }` leaves `msg` as `division by zero`.
+ */
+fn assertFails(body: () -> Unit) -> String {
+    failure: String? = try { body(); null } catch e { e }
+    return failure ?: panic("expected a panic, but nothing went wrong")
+}
+
 // ── Support for `defer` and `try` (the compiler calls these; not for direct use) ──
 extern fn __defer_push(action: () -> Unit) = "aion_defer_push"
 extern fn __defer_mark() -> Int = "aion_defer_mark"
