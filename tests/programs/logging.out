@@ -1,0 +1,9 @@
+warn
+DEBUG details
+INFO  started port=8080
+WARN  careful
+ERROR broken
+INFO  [db] connected
+ERROR [db] lost it retry=no code=7
+ERROR shown
+log.setLevel: unknown level "loud" (use debug, info, warn, error or off)

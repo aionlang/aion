@@ -1,0 +1,6 @@
+// stderr: INFO  hello from the default logger
+/** By default a message goes to standard error with the time and the level; debug messages are not shown. */
+import log
+log.debug("hidden")
+log.info("hello from the default logger")
+println("done")

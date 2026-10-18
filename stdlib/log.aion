@@ -1,0 +1,130 @@
+// import log
+//
+//   log.info("server started on port $port")
+//   log.warn("disk is almost full", {"free": "3%"})      // 2026-10-18 12:00:00 WARN  disk is almost full free=3%
+//   log.debug("not shown unless the level is debug")
+//
+//   db := log.Logger("db")                                // a logger with a name: ... INFO  [db] connected
+//   db.error("lost the connection")
+//
+// Messages go to standard error, one line each, with the time, the level and the message.  The default
+// logger is what the functions above use.  Its level starts at `info`, or at the value of the environment
+// variable AION_LOG (`debug`, `info`, `warn`, `error` or `off`); `log.setLevel("debug")` changes it.
+// `log.setOutput("app.log")` appends to a file instead, and `log.setFormat("{level} {name} {message}")`
+// picks the layout (`{time}`, `{level}`, `{name}`, `{message}`).
+
+import fs
+import os
+import time
+
+val debugLevel = 10
+val infoLevel = 20
+val warnLevel = 30
+val errorLevel = 40
+val offLevel = 100
+
+val levelNames = ["debug", "info", "warn", "error", "off"]
+
+fn __levelNumber(name: String) -> Int {
+    return when name.lower() {
+        "debug" -> debugLevel
+        "info" -> infoLevel
+        "warn", "warning" -> warnLevel
+        "error" -> errorLevel
+        "off", "none" -> offLevel
+        else -> -1
+    }
+}
+
+level := infoLevel
+format := "{time} {level} {name}{message}"
+outputPath := ""
+configured := false
+
+// Read AION_LOG once, the first time anything is logged.
+fn __configure() {
+    if configured { return }
+    configured = true
+    fromEnv := os.env("AION_LOG")
+    if fromEnv != null {
+        n := __levelNumber(fromEnv)
+        if n >= 0 { level = n }
+    }
+}
+
+// Show messages of this level and above: "debug", "info", "warn", "error", or "off" for none.
+// Stops the program for any other name.
+fn setLevel(name: String) {
+    configured = true
+    n := __levelNumber(name)
+    if n < 0 { panic("log.setLevel: unknown level \"$name\" (use debug, info, warn, error or off)") }
+    level = n
+}
+
+// The level now in effect, as its name.
+fn getLevel() -> String {
+    __configure()
+    return when level {
+        debugLevel -> "debug"
+        infoLevel -> "info"
+        warnLevel -> "warn"
+        errorLevel -> "error"
+        else -> "off"
+    }
+}
+
+// Append the lines to this file instead of writing to standard error ("" goes back to standard error).
+fn setOutput(path: String) {
+    outputPath = path
+}
+
+// The layout of a line; `{time}`, `{level}`, `{name}` and `{message}` are filled in.
+fn setFormat(layout: String) {
+    format = layout
+}
+
+fn __label(n: Int) -> String {
+    return when n {
+        debugLevel -> "DEBUG"
+        infoLevel -> "INFO "
+        warnLevel -> "WARN "
+        else -> "ERROR"
+    }
+}
+
+fn __line(n: Int, name: String, message: String, fields: Map<String, String>?) -> String {
+    text := message
+    if fields != null {
+        for e in fields { text = "$text ${e.key}=${e.value}" }
+    }
+    tag := name.isEmpty() ? "" : "[$name] "
+    return format
+        .replace("{time}", time.nowLocal().format("%Y-%m-%d %H:%M:%S"))
+        .replace("{level}", __label(n))
+        .replace("{name}", tag)
+        .replace("{message}", text)
+}
+
+fn __write(n: Int, name: String, message: String, fields: Map<String, String>?) {
+    __configure()
+    if n < level { return }
+    line := __line(n, name, message, fields)
+    if outputPath.isEmpty() {
+        eprintln(line)
+    } else if !fs.appendText(outputPath, line + "\n") {
+        eprintln(line)
+    }
+}
+
+// A logger that puts its name in front of each message.  The functions of this module are the logger with no name.
+type Logger(name: String = "") {
+    fn debug(message: String, fields: Map<String, String>? = null) = __write(debugLevel, name, message, fields)
+    fn info(message: String, fields: Map<String, String>? = null) = __write(infoLevel, name, message, fields)
+    fn warn(message: String, fields: Map<String, String>? = null) = __write(warnLevel, name, message, fields)
+    fn error(message: String, fields: Map<String, String>? = null) = __write(errorLevel, name, message, fields)
+}
+
+fn debug(message: String, fields: Map<String, String>? = null) = __write(debugLevel, "", message, fields)
+fn info(message: String, fields: Map<String, String>? = null) = __write(infoLevel, "", message, fields)
+fn warn(message: String, fields: Map<String, String>? = null) = __write(warnLevel, "", message, fields)
+fn error(message: String, fields: Map<String, String>? = null) = __write(errorLevel, "", message, fields)

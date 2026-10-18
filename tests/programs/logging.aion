@@ -1,0 +1,29 @@
+/** The default logger: levels, a format, a file, fields and named loggers. */
+import fs
+import log
+
+dir := fs.makeTempDir("aionlog")!!
+file := dir + "/app.log"
+log.setFormat("{level} {name}{message}")
+log.setOutput(file)
+
+log.setLevel("debug")
+log.debug("details")
+log.info("started", {"port": "8080"})
+log.warn("careful")
+log.error("broken")
+db := log.Logger("db")
+db.info("connected")
+db.error("lost it", {"retry": "no", "code": "7"})
+
+log.setLevel("warn")
+log.info("hidden")
+db.info("hidden too")
+log.error("shown")
+println(log.getLevel())
+log.setLevel("off")
+log.error("silent")
+
+print(fs.readText(file)!!)
+println(assertFails { log.setLevel("loud") })
+fs.removeAll(dir)
