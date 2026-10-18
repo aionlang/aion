@@ -236,6 +236,25 @@ test.run("division by zero") { assertFails { 1 / 0 } }
 test.skip("later")
 ```
 
+### `std.log`
+
+The default logger: `debug(message)`, `info`, `warn` and `error`, each taking an optional map of fields
+(`log.warn("low", {"free": "3%"})` ends the line with `free=3%`).  A line goes to standard error as
+`2026-10-18 12:00:00 INFO  message`.  The level starts at `info`, or at the environment variable `AION_LOG`
+(`debug`, `info`, `warn`, `error`, `off`); `setLevel(name)` and `getLevel()` change and read it.
+`setOutput(path)` appends to a file instead (`""` goes back to standard error), and `setFormat("{level} {name}{message}")`
+chooses the layout from `{time}`, `{level}`, `{name}` and `{message}`.  `Logger("db")` is a logger with a name that
+shows as `[db]`, with the same four methods.
+
+```aion
+import log
+
+log.info("starting")
+log.debug("not shown at the default level")
+db := log.Logger("db")
+db.warn("slow query", {"ms": "950"})
+```
+
 ### `std.math`
 
 Constants `pi tau e inf nan`; `sqrt cbrt pow exp log log2 log10 hypot` ·
