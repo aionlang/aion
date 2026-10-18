@@ -23,6 +23,8 @@ a statement (see [Line breaks](#line-breaks)).
 | Type          | Meaning                                       | Default |
 |---------------|-----------------------------------------------|---------|
 | `Int`         | 64-bit signed integer (wraps on overflow)     | `0`     |
+| `Int32`       | 32-bit signed integer (wraps), see [Sized integers](#sized-integers) | `0` |
+| `Byte`        | 8-bit unsigned integer, 0–255 (wraps)         | `0`     |
 | `Float`       | 64-bit floating point                         | `0.0`   |
 | `Bool`        | `true` / `false`                              | `false` |
 | `Char`        | one Unicode code point, `'a'`                 | `'\0'`  |
@@ -31,8 +33,9 @@ a statement (see [Line breaks](#line-breaks)).
 | `Point`       | an instance of a user-defined `type Point`    | null    |
 | `(Int) -> Int`| a function value; `Unit` means "no value"    | null    |
 
-An `Int` is accepted wherever a `Float` is expected and widens automatically.
-There are no other implicit conversions.
+An `Int` (and an `Int32` or a `Byte`) is accepted wherever a `Float` is expected and widens automatically; a
+`Byte` widens to an `Int32` and an `Int32` to an `Int`.  There are no other implicit conversions (see
+[Sized integers](#sized-integers) for the casts).
 
 ## Variables
 
@@ -542,6 +545,36 @@ println(text[0], text.charAt(1))                   // h é   (offsets are bytes)
 Greek and Cyrillic and a rule of thumb for other scripts.  `s[i]` and `charAt(i)`
 take a **byte** offset (the character that starts there), so use `chars()` or a
 `for` loop to walk text with non-ASCII letters.
+
+## Sized integers
+
+`Int` is 64 bits.  `Int32` (signed, -2147483648 to 2147483647) and `Byte` (unsigned, 0 to 255) are there for binary
+formats and for C functions that take `int32_t` or `uint8_t`.  They behave like `Int` but **wrap around** when a result
+leaves their range, and a whole-number literal that fits becomes one where one is expected:
+
+```aion
+b: Byte = 200
+println(b + 100, b * 2, 3 - b)               // 44 144 59  (wrapped into 0..255)
+c: Int32 = 2147483647
+println(c + 1, c * 2)                        // -2147483648 -2
+
+n := 300
+println(n as Byte, n as? Byte, 200 as? Byte) // 44 null 200  (`as` wraps, `as?` gives null when it does not fit)
+println(b.toInt() + 100, b + n)              // 300 500      (mixed with an Int, the computation is an Int)
+println(b.shl(1), b.inv(), c.ushr(28))       // 144 55 7     (and, or, xor, inv, shl, shr and ushr work as on Int)
+```
+
+A narrower type widens by itself (`Byte` to `Int32` to `Int`, and any of them to `Float`); going the other way needs
+a word: `x as Byte` / `x.toByte()` / `x as Int32` / `x.toInt32()` wrap around, `x as? Byte` is `null` if `x` does not fit.
+`b.toInt()`, `b.toHex()`, `"42".toByteOrNull()` and `"7".toInt32OrNull()` do what they say.  They print, compare, hash
+and work as `Map` keys, `List` elements and in an `Any` like the other basic types.  Arrays of them still use one 64-bit
+slot per element (use [`Bytes`](#bytes) for a compact run of bytes).  When you [call C](#calling-c), an `Int32`
+is passed and returned as `int32_t` and a `Byte` as `uint8_t`:
+
+```aion
+extern fn abs(n: Int32) -> Int32            // libc's int abs(int)
+println(abs(-7), abs(-2147483647))          // 7 2147483647
+```
 
 ## Bytes
 
@@ -1456,5 +1489,5 @@ A file with no `fn main()` and no top-level statements has nothing to run: `aion
 
 ## Not (yet) in the language
 
-Inheritance from generic types, and `Byte`/`Int32` types.  (Plain object types are not checked against being
+Inheritance from generic types.  (Plain object types are not checked against being
 unset; use `T?` where a value may be missing.)

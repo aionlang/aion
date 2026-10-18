@@ -3,6 +3,8 @@
 ## Unreleased
 
 ### Language
+- **`Int32` and `Byte`.** Sized integers that wrap around: `b: Byte = 200`, `b + 100` is 44, `n as Byte`, `n as? Int32`.
+  Calls to C pass them as `int32_t` and `uint8_t`.
 - **`select`.** `select(ch.onReceive { … }, other.onSend(v) { … }, quit.onClose { … }, onTimeout(ms) { … }, onDefault { … })`
   waits for the first channel operation that can happen, runs its block and gives its position.
 - **Threads.** `thread { … }` and `compute { value }` run code on operating-system threads, with `Mutex` and `AtomicInt`
