@@ -325,6 +325,30 @@ and the unit constants `second minute hour day` (ms).
 **not** for secrets: `secureBytes(n) -> Bytes` and `token(bytes = 16) -> String` use the
 operating system's source.
 
+### `std.unicode`
+
+Unicode text handling with the [utf8proc](https://juliastrings.github.io/utf8proc/) library, found when first used
+(install `libutf8proc`, for example the `libutf8proc3` package; a program that does not import `unicode` needs
+nothing).  The built-in `lower()` and `upper()` know ASCII, Latin-1, Greek and Cyrillic; these know every script.
+
+* `normalize(text, form = "NFC") -> String?` (`"NFC"`, `"NFD"`, `"NFKC"`, `"NFKD"`; null for an unknown form or text that
+  is not valid UTF-8), so that "é" typed as one character and as `e` plus a combining accent compare equal.
+* `lower(text)`, `upper(text)`, `title(text)` (one character at a time), `casefold(text)`, `sameText(a, b)` (equal apart from
+  case and spelling of accents), `stripAccents(text)`.
+* `category(c)` (`"Lu"`, `"Ll"`, `"Nd"`, `"Zs"`, `"Po"`, ...), `isLetter`, `isDigit`, `isUpper`, `isLower`, `isSpace`,
+  `isPunctuation`.
+* `width(text)`: the terminal columns it takes (wide East Asian characters 2, combining marks 0), `graphemes(text) ->
+  List<String>?`: the characters as a reader sees them (a letter and its accent, a flag made of two code points).
+* `version()`, `available()` and `lastError()`.
+
+```aion
+import unicode
+
+println(unicode.sameText("Caf\u{e9}", "CAFE\u{301}"))      // true
+println(unicode.stripAccents("Cr\u{e8}me br\u{fb}l\u{e9}e")!!)    // Creme brulee
+println(unicode.width("\u{65e5}\u{672c}\u{8a9e}"))              // 6
+```
+
 ### `std.strings`
 
 Function forms of the `String` methods: `length(s) -> Int` (bytes),
