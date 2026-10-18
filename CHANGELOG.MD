@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Language
+- **`select`.** `select(ch.onReceive { … }, other.onSend(v) { … }, quit.onClose { … }, onTimeout(ms) { … }, onDefault { … })`
+  waits for the first channel operation that can happen, runs its block and gives its position.
+- **Threads.** `thread { … }` and `compute { value }` run code on operating-system threads, with `Mutex` and `AtomicInt`
+  to share data; channels, jobs and `select` work between threads.  `cpuCount()` and `threadId()`.  The collector stops
+  all threads while it runs, and a program whose threads all wait for each other is reported as a deadlock.
+
 ## 0.3.0 — scripting syntax, closures, generics, collections, nullability, interfaces, projects
 
 A new surface syntax (Kotlin / Go / Python flavoured), first-class functions, and

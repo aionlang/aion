@@ -111,12 +111,12 @@ can still change between versions (see the [changelog](CHANGELOG.MD)).
 
 | Area | State |
 |------|-------|
-| Language | functions, types, data types, generics, interfaces, inheritance, closures, nullable types, tuples, operators on your own types, `defer` / `try`, tasks and channels, type synonyms |
+| Language | functions, types, data types, generics, interfaces, inheritance, closures, nullable types, tuples, operators on your own types, `defer` / `try`, tasks, threads and channels, type synonyms |
 | Standard library | text, collections, lazy streams, files, time, random, regex, JSON, CSV, sockets, HTTP and TLS, SQLite, zlib, hashing |
 | Tooling | native builds with a build cache, project files and git dependencies, formatter (`aion fmt`), test runner (`aion test`), Docker image |
 | Linux, macOS | build instructions in [docs/LOCAL-BUILDING.MD](docs/LOCAL-BUILDING.MD) |
 | Windows | the whole test suite passes cross-compiled and run under Wine; not yet run on real Windows ([details](docs/LOCAL-BUILDING.MD#windows)); needs a MinGW clang |
-| Not yet | preemptive threads, inheritance from generic types, `Byte` / `Int32` types |
+| Not yet | inheritance from generic types, `Byte` / `Int32` types |
 
 The end-to-end suite (`cargo test`) compiles and runs every program in `tests/programs`, every example,
 and every code block in the documentation.

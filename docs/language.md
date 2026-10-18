@@ -1267,6 +1267,55 @@ A case whose channel is closed and empty is dropped for good (`onReceive` never 
 with nothing left that can happen stops the program.  A `select` that sends on a channel without a buffer waits
 for a receiver, and a `select` that receives counts as one.
 
+## Threads
+
+Tasks take turns on one processor.  **Threads** run side by side on several, for work that is mostly computing.
+`thread { … }` starts one and gives a `Thread` (`join()`, `isDone()`); `compute { value }` runs a block on a thread and
+gives a `Task<T>` whose `await()` is the result; `cpuCount()` says how many processors there are and `threadId()`
+which thread you are on (0 is the main one).
+
+```aion
+parts := List<Task<Int>>()
+for k in 0..4 {
+    parts.add(compute {
+        sum := 0
+        for i in k * 250000..(k + 1) * 250000 { sum += i % 7 }
+        sum
+    })
+}
+total := 0
+for p in parts { total += p.await() }
+println(total)                                                   // 2999997
+```
+
+Threads share the heap: objects, lists and variables are visible to all of them, so data that is changed by more than
+one thread needs protecting.  Use a `Mutex` (`lock()`, `unlock()`, `tryLock()` and `withLock { … }`), an `AtomicInt`
+(`get`, `set`, `add`, `compareAndSet`), or pass the data through a `Channel`, which (like `Job`, `Task` and `select`)
+is safe between threads.  Two threads changing a `List` or a `Map` at the same time can corrupt it.
+
+```aion
+hits := AtomicInt()
+log := List<String>()
+lock := Mutex()
+workers := List<Thread>()
+for w in 1..=4 {
+    workers.add(thread {
+        for i in 0..1000 { hits.add(1) }
+        lock.withLock { log.add("worker $w done") }
+    })
+}
+for w in workers { w.join() }
+println(hits.get(), log.size())                                  // 4000 4
+```
+
+Each thread has its own tasks (`launch` and `async` inside a thread run on that thread), its own stack and its own
+`try` and `defer`.  A panic in a thread that does not `try` it ends the program, and so does the end of the main
+code, even if threads are still running.  If every thread is waiting for something that can no longer happen, the program stops
+with the deadlock message.  The garbage collector stops all threads while it runs; a thread that computes for a long
+time without creating any objects holds a collection up until it does.  Printing a single value is not interleaved
+with another thread's, but `println` with several arguments is several prints.  The standard library modules (`http`, `sqlite`, `regex`, ...) are
+not made for several threads at once: use one from one thread, or guard it with a `Mutex`.
+
 ## Line breaks
 
 A line break ends a statement, with these exceptions:
@@ -1407,6 +1456,5 @@ A file with no `fn main()` and no top-level statements has nothing to run: `aion
 
 ## Not (yet) in the language
 
-Preemptive threads (tasks take turns), inheritance
-from generic types, and `Byte`/`Int32` types.  (Plain object types are not checked against being
+Inheritance from generic types, and `Byte`/`Int32` types.  (Plain object types are not checked against being
 unset; use `T?` where a value may be missing.)
