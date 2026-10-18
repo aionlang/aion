@@ -361,6 +361,34 @@ println(encoding.uuid().length())                                               
 `urlEncode`, `urlEncodePath` (keeps `/`), `urlDecode(text, plusIsSpace = false) -> String?`;
 `uuid()` (random, version 4).  Hex is `bytes.toHex()` and `text.fromHex()`.
 
+### `std.crypto`
+
+Authenticated encryption, password hashing and signatures, using OpenSSL's `libcrypto` (found when first used;
+a program that does not import `crypto` needs nothing installed).  Functions that can fail return null and
+`lastError()` says why.
+
+* `newKey(size = 32)` gives random key bytes.  `encrypt(key, data, context = Bytes(0))` is AES-GCM (a 16, 24 or
+  32-byte key picks AES-128, 192 or 256) and gives a fresh nonce, the ciphertext and a tag in one `Bytes`;
+  `decrypt(key, sealed, context)` is null when the key, the `context` or the data is wrong.  `encryptChaCha` and
+  `decryptChaCha` are the same with ChaCha20-Poly1305 (32-byte key).  `encryptText(key, text) -> String?` (base64)
+  and `decryptText(key, text)`.
+* `pbkdf2(password, salt, iterations = 210000, length = 32, digest = "sha256")`; `hashPassword(password) -> String?`
+  makes a line to store (`pbkdf2-sha256$210000$salt$hash`) and `verifyPassword(password, stored) -> Bool` checks it.
+* `equal(a, b)` compares `Bytes` in time that does not depend on where they differ (use it for tokens and MACs).
+* Ed25519: `newKeyPair() -> KeyPair?` (`privateKey`, `publicKey`), `publicKey(privateKey)`, `sign(privateKey, message)`
+  (64 bytes) and `verify(publicKey, message, signature) -> Bool`.
+
+```aion
+import crypto
+
+key := crypto.newKey()
+sealed := crypto.encrypt(key, "secret".toBytes())!!
+println(crypto.decrypt(key, sealed)!!.toText())      // secret
+
+stored := crypto.hashPassword("hunter2")!!
+println(crypto.verifyPassword("hunter2", stored))    // true
+```
+
 ### `std.json`
 
 ```aion
