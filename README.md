@@ -186,8 +186,9 @@ aion/
 
 ## Contributing
 
-Contributions are not open yet while the project is in beta; see [CONTRIBUTING.MD](CONTRIBUTING.MD).
-Commit messages follow `feat|fix|docs(module): description`.
+Contributions are welcome, and while the project is in beta it is best to open an issue before a large change; see
+[CONTRIBUTING.MD](CONTRIBUTING.MD), the [code of conduct](CODE_OF_CONDUCT.md) and the [security policy](SECURITY.md).
+Commit messages follow `feat|fix|docs(module): description`, starting with a verb.
 
 ## License
 
