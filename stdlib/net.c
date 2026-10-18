@@ -163,6 +163,75 @@ int64_t aion_net_listen(const char *host, int64_t port, int64_t backlog) {
 }
 
 /* The local port of a listener or connection. */
+/* ── Name lookup ─────────────────────────────────────────────────── */
+
+/* The addresses of a host name, one per line: IPv4 first, each once.  "" when it cannot be resolved.
+ * (getaddrinfo blocks, so other tasks wait for a slow answer.) */
+const char *aion_net_lookup(const char *host) {
+    struct addrinfo hints, *list = NULL;
+    memset(&hints, 0, sizeof hints);
+    hints.ai_socktype = SOCK_STREAM;
+    int rc = getaddrinfo(host, NULL, &hints, &list);
+    if (rc != 0) {
+        snprintf(error_text, sizeof error_text, "cannot resolve %s: %s", host, gai_strerror(rc));
+        return aion_string("");
+    }
+    char out[4096] = "";
+    size_t used = 0;
+    for (int family = AF_INET; family != 0; family = family == AF_INET ? AF_INET6 : 0) {
+        for (struct addrinfo *a = list; a; a = a->ai_next) {
+            char address[INET6_ADDRSTRLEN];
+            if (a->ai_family != family || getnameinfo(a->ai_addr, a->ai_addrlen, address, sizeof address, NULL, 0, NI_NUMERICHOST) != 0)
+                continue;
+            size_t n = strlen(address);
+            if (used + n + 2 > sizeof out) continue;
+            /* skip an address already listed (a name is often returned once per socket type) */
+            bool seen = false;
+            for (size_t at = 0; at < used && !seen;) {
+                const char *eol = strchr(out + at, '\n');
+                size_t len = eol ? (size_t)(eol - (out + at)) : strlen(out + at);
+                seen = len == n && memcmp(out + at, address, n) == 0;
+                at += len + 1;
+            }
+            if (seen) continue;
+            memcpy(out + used, address, n);
+            used += n;
+            out[used++] = '\n';
+            out[used] = 0;
+        }
+    }
+    freeaddrinfo(list);
+    if (used > 0) out[used - 1] = 0;
+    else snprintf(error_text, sizeof error_text, "%s has no IPv4 or IPv6 address", host);
+    return aion_string(out);
+}
+
+/* The name of an IPv4 or IPv6 address, or NULL if it has none (or is not an address). */
+const char *aion_net_reverse(const char *ip) {
+    struct sockaddr_storage storage;
+    memset(&storage, 0, sizeof storage);
+    socklen_t length;
+    struct sockaddr_in *v4 = (struct sockaddr_in *)&storage;
+    struct sockaddr_in6 *v6 = (struct sockaddr_in6 *)&storage;
+    if (inet_pton(AF_INET, ip, &v4->sin_addr) == 1) {
+        v4->sin_family = AF_INET;
+        length = sizeof *v4;
+    } else if (inet_pton(AF_INET6, ip, &v6->sin6_addr) == 1) {
+        v6->sin6_family = AF_INET6;
+        length = sizeof *v6;
+    } else {
+        snprintf(error_text, sizeof error_text, "%s is not an IP address", ip);
+        return NULL;
+    }
+    char name[1025];
+    int rc = getnameinfo((struct sockaddr *)&storage, length, name, sizeof name, NULL, 0, NI_NAMEREQD);
+    if (rc != 0) {
+        snprintf(error_text, sizeof error_text, "no name for %s: %s", ip, gai_strerror(rc));
+        return NULL;
+    }
+    return aion_string(name);
+}
+
 int64_t aion_net_port(int64_t h) {
     Conn *c = get(h);
     if (!c) return -1;

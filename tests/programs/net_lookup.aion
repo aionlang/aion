@@ -1,0 +1,10 @@
+/** Name lookup: `net.lookup(name)` lists the addresses, `net.reverse(ip)` finds a name. */
+import net
+
+local := net.lookup("localhost")
+println(local.isEmpty(), local.contains("127.0.0.1") || local.contains("::1"))
+println(net.lookup("127.0.0.1"))
+println(net.lookup("::1"))
+println(net.lookup("no-such-host.invalid"), net.lastError().startsWith("cannot resolve no-such-host.invalid"))
+println(net.reverse("not an address"), net.lastError())
+println(net.reverse("127.0.0.1") != null)

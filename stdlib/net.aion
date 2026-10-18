@@ -27,6 +27,17 @@ extern fn __peer(handle: Int) -> String = "aion_net_peer"
 extern fn __timeout(handle: Int, ms: Int) = "aion_net_set_timeout"
 extern fn __startTls(handle: Int, host: String, verify: Bool, cafile: String) -> Bool = "aion_net_start_tls"
 
+// The IP addresses of a host name, IPv4 ones first; empty if it cannot be resolved (`lastError()` says why).
+// A slow lookup holds up the other tasks.
+extern fn __lookup(host: String) -> String = "aion_net_lookup"
+fn lookup(host: String) -> List<String> {
+    text := __lookup(host)
+    return text.isEmpty() ? List<String>() : text.split("\n")
+}
+
+// The name of an IP address, or null if it has none.
+extern fn reverse(ip: String) -> String? = "aion_net_reverse"
+
 // Why the most recent call failed.
 extern fn lastError() -> String = "aion_net_error"
 // Can this machine do TLS (is libssl installed)?
