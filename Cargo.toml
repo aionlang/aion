@@ -12,6 +12,8 @@ path = "src/main.rs"
 
 [dependencies]
 logos = "0.16.1"
+# line editing (the arrow keys, history) for `aion repl` on a terminal
+rustyline = { version = "15", default-features = false }
 
 [profile.release]
 opt-level = 3

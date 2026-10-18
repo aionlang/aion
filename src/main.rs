@@ -12,6 +12,7 @@ mod format;
 mod loader;
 mod manage;
 mod project;
+mod repl;
 mod sema;
 mod syntax;
 mod testing;
@@ -30,6 +31,7 @@ usage:
   aion build [file.aion] [-o <out>]   compile to a native executable
   aion emit-ir [file.aion]            print the generated LLVM IR
   aion check [file.aion]              type-check without building anything
+  aion repl                           an interactive prompt (builds at -O0 unless you give -O1 or -O3)
   aion help                           show this text
   aion test [path…]                   run the programs in tests/ (each passes if it exits with status 0)
   aion fmt [--check] [path…]          tidy whitespace in .aion files
@@ -66,6 +68,7 @@ enum Subcommand {
     New,
     Fetch,
     Clean,
+    Repl,
 }
 
 struct Cli {
@@ -99,7 +102,9 @@ fn parse_args(args: &[String]) -> Result<Cli, String> {
                 program_args.extend(it.by_ref().cloned());
                 break;
             }
-            "run" | "build" | "emit-ir" | "check" | "new" | "fetch" | "clean" if command.is_none() && input.is_none() => {
+            "run" | "build" | "emit-ir" | "check" | "new" | "fetch" | "clean" | "repl"
+                if command.is_none() && input.is_none() =>
+            {
                 command = Some(match arg.as_str() {
                     "run" => Subcommand::Run,
                     "build" => Subcommand::Build,
@@ -107,6 +112,7 @@ fn parse_args(args: &[String]) -> Result<Cli, String> {
                     "check" => Subcommand::Check,
                     "new" => Subcommand::New,
                     "fetch" => Subcommand::Fetch,
+                    "repl" => Subcommand::Repl,
                     _ => Subcommand::Clean,
                 });
             }
@@ -230,12 +236,8 @@ fn exe_name(stem: &str) -> String {
     format!("{stem}{}", std::env::consts::EXE_SUFFIX)
 }
 
-/// Build (or reuse) the program for `ir` and run it.
-fn run_program(
-    program: &Compiled,
-    opts: &toolchain::Options,
-    program_args: &[String],
-) -> Result<ExitCode, Diagnostic> {
+/// Build (or reuse) the program for `ir`: the executable, and whether it is a temporary one to delete after use.
+fn build_program(program: &Compiled, opts: &toolchain::Options) -> Result<(PathBuf, bool), Diagnostic> {
     let Compiled { ir, c_sources, libs } = program;
     let cached = std::env::var_os("AION_NO_CACHE").is_none();
     let exe = if cached {
@@ -270,9 +272,18 @@ fn run_program(
         toolchain::build(ir, c_sources, libs, &exe, opts)?;
         exe
     };
+    Ok((exe, !cached))
+}
 
+/// Build (or reuse) the program for `ir` and run it.
+fn run_program(
+    program: &Compiled,
+    opts: &toolchain::Options,
+    program_args: &[String],
+) -> Result<ExitCode, Diagnostic> {
+    let (exe, temporary) = build_program(program, opts)?;
     let status = Command::new(&exe).args(program_args).status();
-    if !cached {
+    if temporary {
         let _ = std::fs::remove_file(&exe);
     }
     match status {
@@ -348,6 +359,7 @@ fn run() -> Result<ExitCode, Failure> {
             new_project(cli.input.as_deref().unwrap().to_str().unwrap()).map_err(general)?;
             return Ok(ExitCode::SUCCESS);
         }
+        Subcommand::Repl => return Ok(repl::run(&cli.opts)),
         Subcommand::Clean => {
             let dir = cache::dir();
             let _ = std::fs::remove_dir_all(&dir);
@@ -435,7 +447,8 @@ mod tests {
     #[test]
     fn only_a_name_ending_in_aion_is_a_file() {
         let err = |args: &[&str]| parse(args).err().unwrap();
-        assert_eq!(err(&["repl"]), "error: unknown command `repl`; type `aion help` for help");
+        assert_eq!(err(&["frobnicate"]), "error: unknown command `frobnicate`; type `aion help` for help");
+        assert!(matches!(parse(&["repl"]).unwrap().command, Subcommand::Repl));
         assert!(err(&["run", "script"]).contains("unknown command `script`"));
         assert!(err(&["help"]).starts_with("Aion compiler"));
         assert_eq!(parse(&["new", "myapp"]).unwrap().input.unwrap(), PathBuf::from("myapp"));

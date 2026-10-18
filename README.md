@@ -86,6 +86,7 @@ cargo install --path .       # puts `aion` on your PATH
 
 aion examples/tour.aion            # compile and run (re-runs are instant)
 aion new myapp && cd myapp && aion # a project with an aion.project file
+aion repl                          # an interactive prompt
 aion build examples/hello.aion     # produce ./hello
 aion emit-ir examples/hello.aion   # print the generated LLVM IR
 ```
@@ -153,6 +154,7 @@ See **[docs/architecture.md](docs/architecture.md)** for the details.
 | | |
 |---|---|
 | [docs/language.md](docs/language.md) | the language: syntax, types, lambdas, modules |
+| [docs/repl.md](docs/repl.md) | the interactive prompt, `aion repl`, and how it works |
 | [docs/projects.md](docs/projects.md) | scripts and projects, `aion add`, `// dep:` lines, dependencies, the build cache |
 | [docs/packages.md](docs/packages.md) | writing, testing and publishing packages; bundling C code |
 | [docs/stdlib.md](docs/stdlib.md) | the standard library, and how to add C-backed functions with `extern fn` |

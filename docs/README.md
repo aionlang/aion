@@ -1,6 +1,7 @@
 # Aion documentation
 
 - [language.md](language.md) — syntax, types, lambdas, modules
+- [repl.md](repl.md) — `aion repl`, the interactive prompt
 - [projects.md](projects.md) — `aion.project`, dependencies, the build cache
 - [packages.md](packages.md) — writing, testing and publishing packages (git-based), bundling C code
 - [stdlib.md](stdlib.md) — standard library and `extern fn` C bindings

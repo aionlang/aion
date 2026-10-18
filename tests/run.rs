@@ -656,6 +656,32 @@ fn programs_can_read_standard_input() {
     assert_eq!(stdout(&out), "5 3\n", "{}", stderr(&out));
 }
 
+/// What `aion repl` showed for each entry: the text after each `>>> ` prompt, without the banner.
+fn repl_answers(out: &Output) -> Vec<String> {
+    let text = stdout(out);
+    text.split(">>> ").skip(1).map(|a| a.trim().trim_start_matches("... ").to_string()).filter(|a| !a.is_empty()).collect()
+}
+
+#[test]
+fn the_repl_keeps_the_session_between_entries() {
+    let root = scratch("repl");
+    let session = "1 + 2\nx := 10\nx * 2\nfn add(n: Int) = n + x\nadd(1)\nx = 20\nadd(1)\n\
+                   fn add(n: Int) = n * x\nadd(2)\nnums := [3, 1, 2]\nnums.add(0)\nnums.sorted()\n\
+                   if x > 5 {\n    println(\"big\")\n}\n:quit\n";
+    let out = aion_with_input(&root, &["repl"], session);
+    assert_eq!(repl_answers(&out), ["3", "20", "11", "21", "40", "[0, 1, 2, 3]", "big"], "{}", stderr(&out));
+}
+
+#[test]
+fn a_failed_entry_leaves_the_repl_session_as_it_was() {
+    let root = scratch("repl_errors");
+    let out = aion_with_input(&root, &["repl"], "x := 1\ny := nothing + 1\n10 / (x - 1)\nx + 1\n");
+    assert_eq!(repl_answers(&out), ["2"]);
+    let errors = stderr(&out);
+    assert!(errors.contains("undefined variable `nothing`"), "{errors}");
+    assert!(errors.contains("division by zero"), "{errors}");
+}
+
 #[test]
 fn arguments_after_the_script_reach_the_program() {
     let root = scratch("args");
