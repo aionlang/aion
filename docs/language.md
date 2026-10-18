@@ -1233,6 +1233,40 @@ none can continue` instead of hanging.  Each task has its own 256 KiB stack, so 
 deep recursion belongs in the main code.  On Windows tasks run on fibers and behave the same, except that only sockets
 (not files or the terminal) can make a task wait.
 
+### Waiting for several channels: `select`
+
+`select(…)` waits until one of several channel operations can happen, runs that case's block and gives its
+position in the call (0 for the first).  A case is `ch.onReceive { v -> … }`, `ch.onSend(value) { … }`,
+`ch.onClose { … }` (the channel is closed and empty), `onTimeout(ms) { … }` or `onDefault { … }` (runs at once
+when nothing else can, so the select never waits).  When several can happen the first one listed wins, so put the
+urgent ones first.
+
+```aion
+jobs := Channel<Int>()
+quit := Channel<Int>()
+launch {
+    for n in 1..=3 { jobs.send(n) }
+    quit.close()
+}
+sum := 0
+running := true
+while running {
+    select(
+        jobs.onReceive { sum += it },
+        quit.onClose { running = false },
+        onTimeout(1000) { println("too slow"); running = false })
+}
+println(sum)                                                     // 6
+
+idle := Channel<Int>()
+which := select(idle.onReceive { println("never") }, onDefault { println("nothing yet") })
+println(which)                                                   // 1
+```
+
+A case whose channel is closed and empty is dropped for good (`onReceive` never fires again), and a `select`
+with nothing left that can happen stops the program.  A `select` that sends on a channel without a buffer waits
+for a receiver, and a `select` that receives counts as one.
+
 ## Line breaks
 
 A line break ends a statement, with these exceptions:
@@ -1373,6 +1407,6 @@ A file with no `fn main()` and no top-level statements has nothing to run: `aion
 
 ## Not (yet) in the language
 
-Preemptive threads (tasks take turns), a `select` over several channels, inheritance
+Preemptive threads (tasks take turns), inheritance
 from generic types, and `Byte`/`Int32` types.  (Plain object types are not checked against being
 unset; use `T?` where a value may be missing.)
