@@ -7,6 +7,8 @@
 //   now := time.now()                          // a DateTime (UTC)
 //   println(now.format("%Y-%m-%d"), now.year(), now.weekdayName())
 //   deadline := now.plusDays(30)
+//   later := now + 5 * time.minute             // plus(ms)
+//   println(later - now)                       // 300000 (ms between two moments; same as later.since(now))
 //   println(time.of(2024, 2, 29).plusDays(1))  // 2024-03-01 00:00:00
 //
 // Instants are whole milliseconds since 1970-01-01 00:00:00 UTC.  A DateTime is UTC unless
@@ -77,6 +79,8 @@ type DateTime(millis: Int, utc: Bool = true) {
     fn plusYears(n: Int) = plusMonths(n * 12)
     // Milliseconds from `other` to this moment.
     fn since(other: DateTime) = millis - other.millis
+    // `later - earlier` is the milliseconds between two moments; `moment + ms` is `plus(ms)`.
+    fn minus(other: DateTime) = since(other)
     // The same moment viewed in another zone.
     fn toUtc() = DateTime(millis, true)
     fn toLocal() = DateTime(millis, false)

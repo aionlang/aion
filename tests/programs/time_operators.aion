@@ -1,0 +1,10 @@
+/** `+` moves a DateTime by milliseconds and `-` gives the milliseconds between two. */
+import time
+
+a := time.of(2024, 1, 1)
+b := a + 90 * time.minute
+println(b, b - a, (b - a) / time.minute)
+println(a + time.day, a + 0 == a, a - b)
+c := a + 2 * time.hour
+c += time.hour
+println(c, c.since(a) == c - a)
