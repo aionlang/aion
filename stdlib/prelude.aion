@@ -1058,6 +1058,8 @@ extern fn __spawn(body: () -> Unit) = "aion_spawn"
 extern fn __park() = "aion_park"
 extern fn __notify() = "aion_notify"
 extern fn __taskCount() -> Int = "aion_task_count"
+extern fn __parkFor(ms: Int) = "aion_park_for"
+extern fn __clock() -> Int = "aion_clock_ms"
 
 // Let the other tasks run for a while.
 extern fn yield() = "aion_yield"
@@ -1124,6 +1126,8 @@ type Channel<T>(capacity: Int = 0) {
     closed: Bool = false
     sent: Int = 0
     taken: Int = 0
+    waiting: Int = 0   // receivers that are waiting right now (a select counts)
+    senders: Int = 0   // selects that are waiting to send
 
     fn size() = queue.size()
     fn isClosed() = closed
@@ -1142,7 +1146,12 @@ type Channel<T>(capacity: Int = 0) {
     }
 
     fn receive() -> T? {
-        while queue.isEmpty() && !closed { __park() }
+        if queue.isEmpty() && !closed {
+            waiting += 1
+            if senders > 0 { __notify() }
+            while queue.isEmpty() && !closed { __park() }
+            waiting -= 1
+        }
         if queue.isEmpty() { return null }
         value := queue.removeAt(0)
         taken += 1
@@ -1180,6 +1189,133 @@ type Channel<T>(capacity: Int = 0) {
         forEach { out.add(it) }
         return out
     }
+
+    // For select(…): run `handler` with the next value.  This case is dropped once the channel is closed and empty.
+    fn onReceive(handler: (T) -> Unit) -> SelectCase {
+        slot := Array<T>(1)
+        return SelectCase(
+            {
+                if queue.isEmpty() { false } else {
+                    slot[0] = queue.removeAt(0)
+                    taken += 1
+                    __notify()
+                    true
+                }
+            },
+            { handler(slot[0]) },
+            {
+                waiting += 1
+                if senders > 0 { __notify() }
+            },
+            { waiting -= 1 },
+            { !(closed && queue.isEmpty()) })
+    }
+
+    // For select(…): send `value`, then run `handler`.  On a channel without a buffer this waits for a receiver.
+    fn onSend(value: T, handler: () -> Unit) -> SelectCase {
+        ticket := 0
+        return SelectCase(
+            {
+                if closed { panic("send on a closed channel") }
+                room := if capacity > 0 { queue.size() < capacity } else { waiting > queue.size() }
+                if room {
+                    queue.add(value)
+                    sent += 1
+                    ticket = sent
+                    __notify()
+                }
+                room
+            },
+            {
+                if capacity == 0 {
+                    while !closed && taken < ticket { __park() }
+                }
+                handler()
+            },
+            { senders += 1 },
+            { senders -= 1 },
+            { true })
+    }
+
+    // For select(…): run `handler` once the channel is closed and empty.
+    fn onClose(handler: () -> Unit) -> SelectCase =
+        SelectCase({ closed && queue.isEmpty() }, handler, {}, {}, { true })
+}
+
+// One alternative of a select(…); make them with `channel.onReceive { … }`, `channel.onSend(v) { … }`,
+// `channel.onClose { … }`, onTimeout(ms) { … } and onDefault { … }.
+type SelectCase(
+    poll: () -> Bool,      // do the operation if it can be done right now
+    finish: () -> Unit,    // after poll() said yes: run the handler
+    enter: () -> Unit,     // the select starts to wait for this case
+    leave: () -> Unit,     // …and stops
+    alive: () -> Bool,     // false once the case can never happen
+    due: Int = -1,         // a timeout: the clock reading it fires at
+    fallback: Bool = false // onDefault
+)
+
+// For select(…): run `handler` once `ms` milliseconds have passed.
+fn onTimeout(ms: Int, handler: () -> Unit) -> SelectCase {
+    due := __clock() + ms
+    return SelectCase({ __clock() >= due }, handler, {}, {}, { true }, due)
+}
+
+// For select(…): run `handler` at once if no other case can happen right now.
+fn onDefault(handler: () -> Unit) -> SelectCase =
+    SelectCase({ false }, handler, {}, {}, { true }, -1, true)
+
+// Wait for the first case that can happen and say which it is.
+fn __selectWait(cases: List<SelectCase>) -> Int {
+    for c in cases { c.enter() }
+    defer { for c in cases { c.leave() } }
+    chosen := -1
+    while chosen < 0 {
+        fallback := -1
+        due := -1
+        living := false
+        for i in 0..cases.size() {
+            c := cases[i]
+            if c.fallback {
+                fallback = i
+                living = true
+            } else if c.alive() {
+                living = true
+                if chosen < 0 && c.poll() { chosen = i }
+                if c.due >= 0 && (due < 0 || c.due < due) { due = c.due }
+            }
+        }
+        if chosen < 0 {
+            if fallback >= 0 {
+                chosen = fallback
+            } else if !living {
+                panic("select: no case can ever happen")
+            } else if due >= 0 {
+                __parkFor(due - __clock())
+            } else {
+                __park()
+            }
+        }
+    }
+    return chosen
+}
+
+/**
+ * Wait until one of the cases can happen, run its handler and give the position of that case in the call
+ * (0 for the first).  When several can happen, the first one listed wins.
+ *
+ *     which := select(
+ *         jobs.onReceive { n -> println("job", n) },
+ *         quit.onClose { println("quit") },
+ *         onTimeout(500) { println("nothing happened") })
+ *
+ * `onDefault { … }` runs at once when nothing else can, so the select never waits.  A case is dropped for good
+ * when its channel is closed and empty, and a select with no case left stops the program.
+ */
+fn select(vararg cases: SelectCase) -> Int {
+    if cases.size() == 0 { panic("select needs at least one case") }
+    i := __selectWait(cases)
+    cases[i].finish()
+    return i
 }
 
 // ── Result ──────────────────────────────────────────────────────────────────────────────────────

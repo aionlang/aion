@@ -1,0 +1,8 @@
+// exit: 1
+// stderr: select: no case can ever happen
+// A select whose channels are all closed and empty can never go on
+ch := Channel<Int>()
+ch.close()
+println("selecting")
+select(ch.onReceive { println("never") })
+println("not reached")

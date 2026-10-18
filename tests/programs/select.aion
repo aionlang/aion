@@ -1,0 +1,58 @@
+// select: wait for the first of several channel operations.
+a := Channel<Int>(4)
+b := Channel<String>(4)
+
+// The first case listed wins when several can happen; select says which one ran.
+a.send(1)
+b.send("x")
+println(select(a.onReceive { println("a", it) }, b.onReceive { println("b", it) }))
+println(select(a.onReceive { println("a", it) }, b.onReceive { println("b", it) }))
+println(select(a.onReceive { println("a", it) }, onDefault { println("nothing") }))
+println(select(a.onReceive { println("a", it) }, onTimeout(20) { println("timed out") }))
+
+// A timeout does not fire while a value arrives in time.
+c := Channel<Int>()
+launch { sleep(10); c.send(7) }
+select(c.onReceive { println("got", it) }, onTimeout(2000) { println("late") })
+
+// A producer, and a channel that is closed to say it is done.
+data := Channel<Int>()
+quit := Channel<Int>()
+launch {
+    for i in 1..=3 { data.send(i) }
+    quit.close()
+}
+total := 0
+running := true
+while running {
+    select(data.onReceive { total += it }, quit.onClose { running = false })
+}
+println("total", total)
+
+// Sending in a select: a free buffer slot, then a full one.
+out := Channel<Int>(1)
+select(out.onSend(1) { println("sent") }, onDefault { println("full") })
+select(out.onSend(2) { println("sent") }, onDefault { println("full") })
+println(out.receive())
+
+// On a channel without a buffer a send needs a receiver; a select that receives is one.
+pipe := Channel<String>()
+got := Channel<String>(1)
+launch { select(pipe.onReceive { got.send("heard $it") }, onTimeout(2000) { got.send("deaf") }) }
+yield()
+select(pipe.onSend("hello") { println("told") }, onTimeout(2000) { println("alone") })
+println(got.receive())
+
+// Two selects meet: one sends, the other receives.
+line := Channel<Int>()
+done := Channel<String>(1)
+launch { select(line.onReceive { done.send("received $it") }) }
+select(line.onSend(42) { println("sent") })
+println(done.receive())
+
+// A closed channel: onClose fires, and onReceive is dropped once the channel is empty.
+d := Channel<Int>(1)
+d.send(5)
+d.close()
+select(d.onClose { println("closed") }, d.onReceive { println("value", it) })
+select(d.onClose { println("closed") }, d.onReceive { println("value", it) })
