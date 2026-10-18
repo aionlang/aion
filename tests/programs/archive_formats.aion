@@ -1,0 +1,86 @@
+/** std.archive: archives made by `zip` and `tar` are read, archives of every format round-trip, a folder is packed, and a hostile archive is refused. */
+import archive
+import fs
+
+// made with `zip -r tools.zip hello.txt docs` and `tar -czf tools.tar.gz hello.txt docs`
+zipHex := "504b03040a0000000000f77a525d35094d220f0000000f00000009001c0068656c6c6f2e747874555409000382e4d46a82e4d46a75780b00010400000000040000000068656c6c6f2066726f6d207a69700a504b03040a0000000000f77a525d00000000000000000000000005001c00646f63732f555409000382e4d46a82e4d46a75780b000104000000000400000000504b0304140000000800f77a525da04178aa2f000000300000000d001c00646f63732f6e6f7465732e6d64555409000382e4d46a82e4d46a75780b0001040000000004000000002b4e4dcecf4b5148cbcc49d5514854c8c92c29c94955c8c9cf4b4f2d5228c948cc0312a940e9a2e21285fcbc542e00504b01021e030a0000000000f77a525d35094d220f0000000f000000090018000000000001000000a4810000000068656c6c6f2e747874555405000382e4d46a75780b000104000000000400000000504b01021e030a0000000000f77a525d000000000000000000000000050018000000000000001000ed4152000000646f63732f555405000382e4d46a75780b000104000000000400000000504b01021e03140000000800f77a525da04178aa2f000000300000000d0018000000000001000000a48191000000646f63732f6e6f7465732e6d64555405000382e4d46a75780b000104000000000400000000504b05060000000003000300ed000000070100000000"
+tgzHex := "1f8b0800000000000003edd54b0ec220100660d69e620e6014b0d4f3342dda26c818c0c4787ab10b139b6857f888ffb700020b264c66e8ad73bc4ae724ca91595d55e39c4d6729d55628a36ba36aada51652a92a6f912c18d3dd29a6261089c0fcf20de6ce7f547fcb3fed021fe8321c179f0e07deace336ae0bdf712bf1ad31cfeb3faf1feb5f1a690499c2718dfebcfec7fc7b4e36ae0e5da13b66fb7f3dcdbf566683feff0ed1b6ec3bda0dce2ea92137a4e42c39f67b1b28f58dcf83cdc72126626ff1410000000000000000000000000000007ca12b8b089d7800280000"
+
+dir := fs.makeTempDir("aionarchive")!!
+zipFile := dir + "/tools.zip"
+tgzFile := dir + "/tools.tar.gz"
+fs.writeBytes(zipFile, zipHex.fromHex()!!)
+fs.writeBytes(tgzFile, tgzHex.fromHex()!!)
+
+for file in [zipFile, tgzFile] {
+    println("--", file.substring(dir.length() + 1, file.length()))
+    for e in archive.list(file)!! { println(e.kind, e.name, e.size) }
+    println(archive.readText(file, "hello.txt"), archive.readText(file, "docs/notes.md")?.length(), archive.read(file, "nope"), archive.lastError())
+    println(archive.read(file, "docs"), archive.lastError())
+    out := dir + "/out_" + file.substring(dir.length() + 1, file.indexOf("."))
+    println(archive.extract(file, out), fs.readText(out + "/docs/notes.md")?.startsWith("second file"), fs.readText(out + "/hello.txt"))
+}
+println(archive.list(dir + "/missing.zip"), archive.lastError().startsWith("cannot open"))
+fs.writeText(dir + "/junk.zip", "this is not an archive at all, just some text")
+println(archive.list(dir + "/junk.zip") == null)
+
+// every format we can write, read back
+files := Map<String, Bytes>()
+files["a.txt"] = "alpha".toBytes()
+files["dir/"] = Bytes(0)
+pattern := Bytes(3000)
+for i in 0..pattern.size() { pattern[i] = i % 251 }
+files["dir/b.bin"] = pattern
+files["caf\u{e9}.txt"] = "unicode name".toBytes()
+files["empty.txt"] = Bytes(0)
+for extension in ["zip", "7z", "tar", "tar.gz", "tgz", "tar.bz2", "tar.xz", "tar.zst"] {
+    file := dir + "/made." + extension
+    made := archive.create(file, files, 1700000000)
+    if !made {
+        println(extension, "not written:", archive.lastError())
+        continue
+    }
+    entries := archive.list(file)!!
+    names := entries.map { "${it.name}:${it.size}" }.sorted()
+    same := archive.read(file, "dir/b.bin") == pattern && archive.readText(file, "a.txt") == "alpha" && archive.readText(file, "caf\u{e9}.txt") == "unicode name"
+    println(extension, names, same, entries[0].isFile(), entries.filter { it.isFolder() }.size())
+    if extension == "tar" { println(entries[0].modified, entries[0].mode) }
+}
+unpacked := dir + "/unpacked"
+println(archive.extract(dir + "/made.tar.gz", unpacked), fs.readBytes(unpacked + "/dir/b.bin") == pattern, fs.isDir(unpacked + "/dir"), fs.size(unpacked + "/empty.txt"))
+
+// pack a folder
+site := dir + "/site"
+fs.mkdirs(site + "/css")
+fs.writeText(site + "/index.html", "<h1>hi</h1>")
+fs.writeText(site + "/css/style.css", "body { color: red }")
+for extension in ["zip", "tar.gz"] {
+    file := dir + "/site." + extension
+    println(archive.pack(file, site), archive.list(file)!!.map { it.name })
+    again := dir + "/again_" + extension.substring(0, 3).replace(".", "")
+    println(archive.extract(file, again), fs.readText(again + "/css/style.css"))
+}
+println(archive.pack(dir + "/x.rar", site), archive.lastError().startsWith("cannot tell the format"))
+println(archive.create(dir + "/x.unknown", files), archive.lastError().startsWith("cannot tell the format"))
+
+// names that would leave the folder, in an archive made by someone else
+hostile := Map<String, Bytes>()
+hostile["fine.txt"] = "ok".toBytes()
+hostile["../evil.txt"] = "gotcha".toBytes()
+println(archive.create(dir + "/hostile.zip", hostile), archive.lastError())
+println(archive.create(dir + "/hostile.zip", hostile, allowUnsafeNames: true))
+safe := dir + "/safe"
+println(archive.extract(dir + "/hostile.zip", safe), archive.lastError().startsWith("the archive has an unsafe name"))
+println(fs.exists(dir + "/evil.txt"), fs.exists(safe + "/evil.txt"))
+absolute := Map<String, Bytes>()
+absolute["/tmp/aion_should_not_exist.txt"] = "x".toBytes()
+archive.create(dir + "/absolute.tar", absolute, allowUnsafeNames: true)
+println(archive.extract(dir + "/absolute.tar", dir + "/abs"), fs.exists("/tmp/aion_should_not_exist.txt"))
+
+// a limit on what an archive may expand to
+bomb := Map<String, Bytes>()
+bomb["zeros"] = Bytes(1000000)
+archive.create(dir + "/bomb.zip", bomb)
+println(archive.extract(dir + "/bomb.zip", dir + "/bomb", 1000), archive.lastError())
+println(archive.extract(dir + "/bomb.zip", dir + "/bomb", 2000000), archive.read(dir + "/bomb.zip", "zeros", 1000), archive.lastError())
+fs.removeAll(dir)

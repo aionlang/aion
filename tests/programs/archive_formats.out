@@ -1,0 +1,43 @@
+-- tools.zip
+file hello.txt 15
+folder docs/ 0
+file docs/notes.md 48
+hello from zip
+ 48 null no entry called nope
+null no entry called docs
+2 true hello from zip
+
+-- tools.tar.gz
+file hello.txt 15
+folder docs/ 0
+file docs/notes.md 48
+hello from zip
+ 48 null no entry called nope
+null no entry called docs
+2 true hello from zip
+
+null true
+true
+zip [a.txt:5, café.txt:12, dir/:0, dir/b.bin:3000, empty.txt:0] true true 1
+7z [a.txt:5, café.txt:12, dir/:0, dir/b.bin:3000, empty.txt:0] true true 1
+tar [a.txt:5, café.txt:12, dir/:0, dir/b.bin:3000, empty.txt:0] true true 1
+1700000000 420
+tar.gz [a.txt:5, café.txt:12, dir/:0, dir/b.bin:3000, empty.txt:0] true true 1
+tgz [a.txt:5, café.txt:12, dir/:0, dir/b.bin:3000, empty.txt:0] true true 1
+tar.bz2 [a.txt:5, café.txt:12, dir/:0, dir/b.bin:3000, empty.txt:0] true true 1
+tar.xz [a.txt:5, café.txt:12, dir/:0, dir/b.bin:3000, empty.txt:0] true true 1
+tar.zst [a.txt:5, café.txt:12, dir/:0, dir/b.bin:3000, empty.txt:0] true true 1
+4 true true 0
+true [css/, css/style.css, index.html]
+2 body { color: red }
+true [css/, css/style.css, index.html]
+2 body { color: red }
+false true
+false true
+false the name ../evil.txt is not allowed (absolute, or with ..)
+true
+null true
+false false
+null false
+null the archive expands to more than the limit
+1 null the entry is larger than the limit

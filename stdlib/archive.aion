@@ -1,0 +1,196 @@
+// import archive
+//
+//   for e in archive.list("backup.tar.gz")!! { println(e.name, e.size) }
+//   text := archive.readText("backup.tar.gz", "notes/todo.txt")        // one file, without unpacking the rest
+//   archive.extract("backup.tar.gz", "restored")                       // the number of files written, or null
+//
+//   archive.create("out.zip", {"hello.txt": "hi".toBytes(), "data/": Bytes(0)})
+//   archive.pack("site.tar.xz", "public")                              // a folder's contents, read from disk
+//
+// Reading and writing archives with the libarchive library, found when first used (install libarchive, for example
+// the libarchive13t64 package; a program that does not import this needs nothing).  It reads zip, tar, 7z, rar,
+// cpio, iso and more, with or without gzip, bzip2, xz or zstd compression, and finds the format itself.  It writes
+// what the end of the file name says: .zip, .7z, .tar, .tar.gz or .tgz, .tar.bz2, .tar.xz, .tar.zst.
+// Extracting is careful: a name that is absolute or climbs out with `..` makes it stop with an error, links and
+// devices are skipped, and the output is limited, so a hostile archive cannot write elsewhere or fill the disk.
+// Functions that can fail return null or false; `archive.lastError()` says why.
+
+import fs
+import path
+import time
+
+extern fn __error() -> String = "aion_archive_error"
+extern fn available() -> Bool = "aion_archive_available"
+extern fn __list(path: String) -> String? = "aion_archive_list"
+extern fn __read(path: String, name: String, maxBytes: Int) -> Bytes? = "aion_archive_read"
+extern fn __extract(path: String, destination: String, maxBytes: Int) -> Int = "aion_archive_extract"
+extern fn __create(path: String, format: String, filter: String, records: Bytes, modified: Int) -> Bool = "aion_archive_create"
+extern fn __createFiles(path: String, format: String, filter: String, list: String) -> Bool = "aion_archive_create_files"
+
+// A problem found before the library was asked, if any.
+problemText := ""
+
+// Why the most recent call failed.
+fn lastError() -> String = problemText.isEmpty() ? __error() : problemText
+
+fn __need() {
+    problemText = ""
+    if !available() { panic(__error()) }
+}
+
+// One thing in an archive.  `kind` is "file", "folder", "link" or "other"; `modified` is in seconds since 1970;
+// `mode` holds the permission bits (as in 420 for 0644).
+type Entry(name: String, size: Int, modified: Int, mode: Int, kind: String) {
+    fn isFile() = kind == "file"
+    fn isFolder() = kind == "folder"
+    fn toString() = "$kind $name ($size bytes)"
+}
+
+fn __unescape(text: String) -> String {
+    if !text.contains("\\") { return text }
+    out := StringBuilder()
+    i := 0
+    while i < text.length() {
+        c := text.substring(i, i + 1)
+        if c == "\\" && i + 1 < text.length() {
+            next := text.substring(i + 1, i + 2)
+            out.append(next == "t" ? "\t" : (next == "n" ? "\n" : next))
+            i += 2
+        } else {
+            out.append(c)
+            i += 1
+        }
+    }
+    return out.toString()
+}
+
+// Everything in an archive, in order; null if it cannot be read.
+fn list(archivePath: String) -> List<Entry>? {
+    __need()
+    text := __list(archivePath)
+    if text == null { return null }
+    entries := List<Entry>()
+    for line in text.split("\n") {
+        if line.isEmpty() { continue }
+        parts := line.split("\t")
+        if parts.size() < 5 { continue }
+        kind := when parts[0] {
+            "f" -> "file"
+            "d" -> "folder"
+            "l" -> "link"
+            else -> "other"
+        }
+        name := __unescape(parts.drop(4).join("\t"))
+        entries.add(Entry(name, parts[1].toIntOr(0), parts[2].toIntOr(0), parts[3].parseInt(8) ?: 0, kind))
+    }
+    return entries
+}
+
+// The contents of one file in the archive, without unpacking the rest; null if there is no such file (the name
+// is as `list` shows it).  `maxBytes` limits the size.
+fn read(archivePath: String, name: String, maxBytes: Int = 1073741824) -> Bytes? {
+    __need()
+    return __read(archivePath, name, maxBytes)
+}
+
+fn readText(archivePath: String, name: String, maxBytes: Int = 1073741824) -> String? = read(archivePath, name, maxBytes)?.toText()
+
+// Unpack the archive into a folder (made if needed), over any files of the same names.  Gives the number of files
+// written, or null (with `lastError()`) if something is wrong, such as an unsafe name or more than `maxBytes` of data.
+fn extract(archivePath: String, destination: String, maxBytes: Int = 4294967296) -> Int? {
+    __need()
+    n := __extract(archivePath, destination, maxBytes)
+    return n < 0 ? null : n
+}
+
+// ── Creating ─────────────────────────────────────────────────────
+
+// The format and the compression for a file name, as "zip", "7zip,", "pax,gzip", ...; null if the name does not say.
+fn __kindOf(archivePath: String) -> String? {
+    name := archivePath.lower()
+    if name.endsWith(".zip") { return "zip," }
+    if name.endsWith(".7z") { return "7zip," }
+    if name.endsWith(".tar") { return "pax," }
+    if name.endsWith(".tar.gz") || name.endsWith(".tgz") { return "pax,gzip" }
+    if name.endsWith(".tar.bz2") || name.endsWith(".tbz2") { return "pax,bzip2" }
+    if name.endsWith(".tar.xz") || name.endsWith(".txz") { return "pax,xz" }
+    if name.endsWith(".tar.zst") { return "pax,zstd" }
+    return null
+}
+
+fn __badName(name: String) -> Bool {
+    if name.isEmpty() || name.startsWith("/") || name.startsWith("\\") || name.contains("\n") || name.contains("\t") { return true }
+    for part in name.replace("\\", "/").split("/") {
+        if part == ".." { return true }
+    }
+    return false
+}
+
+fn __put32(out: BytesBuilder, value: Int) {
+    for i in 0..4 { out.addByte(value.ushr(8 * (3 - i)).and(255)) }
+}
+
+// Make an archive from names and contents.  A name that ends in "/" is a folder (with no contents).  The names must be
+// relative and stay inside (no leading "/", no ".."), unless `allowUnsafeNames` says otherwise (for tests of tools
+// that read archives).  Files get the permissions 0644, folders 0755 and the time is now unless `modified` says.
+fn create(archivePath: String, files: Map<String, Bytes>, modified: Int = -1, allowUnsafeNames: Bool = false) -> Bool {
+    __need()
+    kind := __kindOf(archivePath)
+    if kind == null {
+        problemText = "cannot tell the format from the name: use .zip, .7z, .tar, .tar.gz, .tgz, .tar.bz2, .tar.xz or .tar.zst"
+        return false
+    }
+    records := BytesBuilder()
+    for e in files {
+        if !allowUnsafeNames && __badName(e.key) {
+            problemText = "the name ${e.key} is not allowed (absolute, or with ..)"
+            return false
+        }
+        isFolder := e.key.endsWith("/")
+        name := e.key.toBytes()
+        __put32(records, name.size())
+        records.add(name)
+        __put32(records, isFolder ? 493 : 420)
+        records.addByte(isFolder ? 1 : 0)
+        size := isFolder ? 0 : e.value.size()
+        __put32(records, size.ushr(32))
+        __put32(records, size.and(4294967295))
+        if !isFolder { records.add(e.value) }
+    }
+    parts := kind.split(",")
+    return __create(archivePath, parts[0], parts[1], records.toBytes(), modified < 0 ? time.millis() / 1000 : modified)
+}
+
+fn __walk(directory: String, prefix: String, lines: StringBuilder) -> Bool {
+    names := fs.listDir(directory)
+    if names == null { return false }
+    for name in names {
+        full := path.join(directory, name)
+        if fs.isDir(full) {
+            lines.append("$prefix$name/\t$full\td\n")
+            if !__walk(full, "$prefix$name/", lines) { return false }
+        } else if fs.isFile(full) {
+            lines.append("$prefix$name\t$full\tf\n")
+        }
+    }
+    return true
+}
+
+// Pack the contents of a folder (names relative to it, folders included) into an archive, reading the files from
+// disk as it goes.
+fn pack(archivePath: String, directory: String) -> Bool {
+    __need()
+    kind := __kindOf(archivePath)
+    if kind == null {
+        problemText = "cannot tell the format from the name: use .zip, .7z, .tar, .tar.gz, .tgz, .tar.bz2, .tar.xz or .tar.zst"
+        return false
+    }
+    lines := StringBuilder()
+    if !__walk(directory, "", lines) {
+        problemText = "cannot read the folder $directory"
+        return false
+    }
+    problemText = ""
+    parts := kind.split(",")
+    return __createFiles(archivePath, parts[0], parts[1], lines.toString())
+}
