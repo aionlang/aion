@@ -470,10 +470,11 @@ server.close()
 `connect(host, port, timeoutMs = 30000) -> Conn?`, `listen(port, host = "", backlog = 128) -> Listener?`;
 `Listener`: `accept(timeoutMs = -1) -> Conn?`, `port()`, `close()`; `Conn`: `send(bytes)`,
 `sendText(text)`, `receive(max = 65536) -> Bytes?` (empty at the end of the stream, null on an error or a
-timeout), `setTimeout(ms)`, `peer()`, `port()`, `startTls(host, verify = true, cafile = "")`, `close()`.
+timeout), `setTimeout(ms)`, `peer()`, `port()`, `startTls(host, verify = true, cafile = "", protocols = [])`, `protocol()`, `close()`.
 `lastError()` explains a failure.  TLS uses OpenSSL's `libssl`, found at run time, so only programs that
 use it need it; with `verify` the certificate must be valid for `host` and signed by a trusted authority
-(the system's, or the file named by `cafile` or the `SSL_CERT_FILE` variable).
+(the system's, or the file named by `cafile` or the `SSL_CERT_FILE` variable).  `protocols` (such as
+`["h2", "http/1.1"]`) are offered to the server with ALPN, and `protocol()` says which one it chose.
 
 Name lookup: `lookup(host) -> List<String>` gives the IP addresses of a name (IPv4 first; empty if it cannot be
 resolved, and `lastError()` says why), and `reverse(ip) -> String?` the name of an address.  A slow lookup
