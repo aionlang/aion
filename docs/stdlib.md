@@ -747,6 +747,40 @@ archive.pack("site.tar.gz", "unpacked")                                         
   `.tgz`, `.tar.bz2`, `.tar.xz`, `.tar.zst`.  `create` refuses names that are absolute or contain `..`.
 * Failures give null or false and `lastError()` says why.
 
+### `std.xml`
+
+XML and HTML as a tree of `Node`s, with CSS selectors to pick parts out.  `parse` reads XML with the
+[expat](https://libexpat.github.io/) library, found when first used (install `libexpat`, for example the `libexpat1`
+package; a program that does not import `xml` needs nothing).  It gives null for a document that is not well formed
+(`lastError()` says where), loads no external entities, and refuses a document whose entities expand far beyond its size
+or whose elements nest more than 500 deep.  `parseHtml` is written in Aion and never fails.
+
+```aion
+import xml
+
+doc := xml.parse("<books><book id='1'><title>Dune</title></book><book id='2'><title>Emma</title></book></books>")!!
+for b in doc.childrenNamed("book") { println(b.attr("id"), b.child("title")!!.text()) }      // 1 Dune / 2 Emma
+println(doc.select("book[id=2] > title")[0].text())                                          // Emma
+println(doc)                                                                                // back to text
+
+page := xml.parseHtml("<ul class=menu><li><a href=/a>One<li><a href=/b>Two</ul>")           // untidy HTML is fine
+for a in page.select("ul.menu li a") { println(a.attr("href"), a.text()) }                  // /a One / /b Two
+```
+
+* **Reading:** `parse(text, keepWhitespace = false) -> Node?` gives the root element (text made only of white space is
+  dropped unless asked for), `parseHtml(text) -> Node` a `"#document"` node.  HTML names are lower case; an attribute
+  without a value is `""`; `<li>`, `<p>`, `<td>`, `<tr>`, `<option>` and `<dt>`/`<dd>` close themselves, void tags (`<br>`,
+  `<img>`, ...) have no children, `<script>` and `<style>` hold raw text, and character references are decoded.
+* **A Node:** `name` (`"#text"` and `"#comment"` for those, the characters in `content`), `attributes`, `children`, `parent`;
+  `attr(name)`, `hasAttr`, `elements()`, `child(name)`, `childrenNamed(name)`, `find(name)`, `findAll(name)` (`"*"` for all),
+  `text()` (all the text below), `position()`, `siblings()`.
+* **Selectors:** `select(selector) -> List<Node>`, `selectFirst`, `matches`, with tag, `*`, `#id`, `.class`, `[attr]`,
+  `[attr=v]` and `^= $= *= ~= |=`, descendant, `>`, `+` and `~`, commas, and `:first-child`, `:last-child`, `:only-child`,
+  `:nth-child(odd | even | n | an+b)`, `:nth-last-child`, `:empty`, `:root`, `:not(...)` and `:contains(text)`.  A selector that
+  cannot be read stops the program; `validSelector(text)` checks one that comes from outside.
+* **Writing:** `toXml()`, `pretty(indent = 2)`, `toHtml()` (void tags, raw script and style) and `toString()`; build trees with
+  `element(name, attributes, children)`, `text(content)`, `comment(content)` and `Node.append`, `Node.detach`; `escape(text)`.
+
 ### `std.cli`
 
 ```aion
