@@ -486,6 +486,26 @@ println(net.lookup("localhost").contains("127.0.0.1"))    // true
 println(net.lookup("127.0.0.1"))                          // [127.0.0.1]
 ```
 
+### `std.smtp`
+
+Send e-mail through an SMTP server.  `Server(host, port = 587, security = "starttls", username = "", password = "",
+hello = "localhost", verify = true, timeoutMs = 30000)` says where and how: `security` is `"starttls"` (port 587),
+`"tls"` (TLS from the start, port 465) or `"none"` (port 25, or a local test server); the login uses AUTH PLAIN or
+LOGIN.  `Message(from, to, subject, body, cc = [], bcc = [], html = false, headers = {})` is sent as UTF-8 (base64),
+with a non-ASCII subject encoded for you.  `send(server, message) -> Bool` and `lastError()`; `render(message)` gives
+the text that would be sent, and `address("Ann <ann@example.org>")` the plain address (null if it is not one).
+Values with line breaks, and addresses with spaces or angle brackets, are refused, so a value cannot add headers.
+TLS needs OpenSSL's `libssl`, like [`std.net`](#stdnet); the TLS paths are not covered by the tests, which talk to a
+small server written in Aion.
+
+```aion no_run
+import smtp
+
+server := smtp.Server("smtp.example.com", 587, username: "me@example.com", password: "secret")
+mail := smtp.Message(from: "me@example.com", to: ["ann@example.org"], subject: "Hello", body: "Hi Ann!\n")
+if !smtp.send(server, mail) { println("not sent:", smtp.lastError()) }
+```
+
 ### `std.http`
 
 ```aion no_run
