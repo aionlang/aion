@@ -59,6 +59,32 @@ println(count)     // 2
 Top-level code runs in order, so a top-level statement can only use variables
 defined above it.  Functions may be defined anywhere.
 
+### Read-only variables: `val`
+
+`val` declares a variable that cannot be assigned again, which is how to write a constant.  It works
+for locals and top-level variables, the type may be written, and closures see the same variable.
+
+```aion
+val limit = 10
+val greeting: String = "hello"
+total := 0
+for i in 0..limit { total += i }
+println(total, greeting)
+
+// limit = 11       error: cannot assign to `limit`: it was declared with `val`
+// limit += 1       the same, and so is assigning to it from a closure
+```
+
+Only the variable is fixed, not what it holds: a `val` list can still grow.
+
+```aion
+val names = ["a"]
+names.add("b")
+println(names)      // [a, b]
+```
+
+A `val` needs a value, and `:=` stays the way to declare a variable that changes.
+
 Blocks open a new scope; an inner declaration shadows an outer one, and declaring
 the same name twice in one scope is an error.
 
