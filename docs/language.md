@@ -628,12 +628,12 @@ is `this`.
 
 ```aion
 fn String.shout() = "$this!"
-fn Int.isEven() = this % 2 == 0
+fn Int.isEvenNumber() = this % 2 == 0
 fn Int.times(action: (Int) -> Unit) {
     for i in 0..this { action(i) }
 }
 
-println("hi".shout(), 4.isEven(), "héllo".length(), "banana".contains("nan"))
+println("hi".shout(), 4.isEvenNumber(), "héllo".length(), "banana".contains("nan"))
 3.times { print(it, "") }
 println()
 ```
