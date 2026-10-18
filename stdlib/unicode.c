@@ -7,7 +7,7 @@
 #define _GNU_SOURCE
 #include "aion.h"
 
-#include <dlfcn.h>
+#include "aion_platform.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,16 +35,19 @@ static struct {
 static bool load(void) {
     if (u8.tried) return u8.ok;
     u8.tried = true;
+    #ifdef _WIN32
+    static const char *const names[] = {"libutf8proc-3.dll", "libutf8proc-2.dll", "libutf8proc.dll", NULL};
+    #else
     static const char *const names[] = {"libutf8proc.so.3", "libutf8proc.so.2", "libutf8proc.so", "libutf8proc.3.dylib",
                                         "libutf8proc.2.dylib", "libutf8proc.dylib", NULL};
-    void *lib = NULL;
-    for (const char *const *n = names; *n && !lib; n++) lib = dlopen(*n, RTLD_NOW | RTLD_GLOBAL);
+    #endif
+    void *lib = aion_dlopen(names);
     if (!lib) {
         snprintf(error_text, sizeof error_text, "std.unicode needs the utf8proc library: install libutf8proc (for example the libutf8proc3 package)");
         return false;
     }
 #define LOAD(name) \
-    if (!(*(void **)&u8.name = dlsym(lib, #name))) { snprintf(error_text, sizeof error_text, "the installed utf8proc is missing " #name); return false; }
+    if (!(*(void **)&u8.name = aion_dlsym(lib, #name))) { snprintf(error_text, sizeof error_text, "the installed utf8proc is missing " #name); return false; }
     LOAD(utf8proc_map) LOAD(utf8proc_iterate) LOAD(utf8proc_encode_char) LOAD(utf8proc_tolower) LOAD(utf8proc_toupper)
     LOAD(utf8proc_totitle) LOAD(utf8proc_category_string) LOAD(utf8proc_charwidth) LOAD(utf8proc_grapheme_break_stateful)
     LOAD(utf8proc_version)
@@ -58,21 +61,21 @@ bool aion_unicode_available(void) { return load(); }
 const char *aion_unicode_version(void) { return aion_string(load() ? u8.utf8proc_version() : ""); }
 
 /* utf8proc_option_t bits */
-enum { NULLTERM = 1 << 0, STABLE = 1 << 1, COMPAT = 1 << 2, COMPOSE = 1 << 3, DECOMPOSE = 1 << 4, IGNORE = 1 << 5,
-       STRIPCC = 1 << 9, CASEFOLD = 1 << 10, STRIPMARK = 1 << 13 };
+enum { OPT_NULLTERM = 1 << 0, OPT_STABLE = 1 << 1, OPT_COMPAT = 1 << 2, OPT_COMPOSE = 1 << 3, OPT_DECOMPOSE = 1 << 4, OPT_IGNORE = 1 << 5,
+       OPT_STRIPCC = 1 << 9, OPT_CASEFOLD = 1 << 10, OPT_STRIPMARK = 1 << 13 };
 
 /* Normalization and folding: `mode` 0 NFC, 1 NFD, 2 NFKC, 3 NFKD, 4 case folding (with NFKC), 5 accents removed.
  * Invalid UTF-8 gives NULL. */
 const char *aion_unicode_map(const char *text, int64_t mode) {
     if (!load()) return NULL;
-    int options = NULLTERM | STABLE;
+    int options = OPT_NULLTERM | OPT_STABLE;
     switch (mode) {
-    case 0: options |= COMPOSE; break;
-    case 1: options |= DECOMPOSE; break;
-    case 2: options |= COMPOSE | COMPAT; break;
-    case 3: options |= DECOMPOSE | COMPAT; break;
-    case 4: options |= COMPOSE | COMPAT | CASEFOLD; break;
-    default: options |= DECOMPOSE | STRIPMARK; break;
+    case 0: options |= OPT_COMPOSE; break;
+    case 1: options |= OPT_DECOMPOSE; break;
+    case 2: options |= OPT_COMPOSE | OPT_COMPAT; break;
+    case 3: options |= OPT_DECOMPOSE | OPT_COMPAT; break;
+    case 4: options |= OPT_COMPOSE | OPT_COMPAT | OPT_CASEFOLD; break;
+    default: options |= OPT_DECOMPOSE | OPT_STRIPMARK; break;
     }
     uint8_t *out = NULL;
     ssize_t n = u8.utf8proc_map((const uint8_t *)text, 0, &out, options);

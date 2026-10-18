@@ -14,7 +14,7 @@
 #define _GNU_SOURCE
 #include "aion.h"
 
-#include <dlfcn.h>
+#include "aion_platform.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -49,12 +49,15 @@ static struct {
 static bool load(void) {
     if (ex.tried) return ex.ok;
     ex.tried = true;
+    #ifdef _WIN32
+    static const char *const names[] = {"libexpat-1.dll", "libexpat.dll", NULL};
+    #else
     static const char *const names[] = {"libexpat.so.1", "libexpat.so", "libexpat.1.dylib", "libexpat.dylib", NULL};
-    void *lib = NULL;
-    for (const char *const *n = names; *n && !lib; n++) lib = dlopen(*n, RTLD_NOW | RTLD_GLOBAL);
+    #endif
+    void *lib = aion_dlopen(names);
     if (!lib) return fail("std.xml needs the expat library: install it (for example the libexpat1 package)");
 #define LOAD(field, symbol) \
-    if (!(*(void **)&ex.field = dlsym(lib, symbol))) return fail("the installed expat is missing " symbol);
+    if (!(*(void **)&ex.field = aion_dlsym(lib, symbol))) return fail("the installed expat is missing " symbol);
     LOAD(create, "XML_ParserCreate") LOAD(set_user_data, "XML_SetUserData") LOAD(set_element_handler, "XML_SetElementHandler")
     LOAD(set_character_handler, "XML_SetCharacterDataHandler") LOAD(set_comment_handler, "XML_SetCommentHandler")
     LOAD(parse, "XML_Parse") LOAD(stop, "XML_StopParser") LOAD(error_code, "XML_GetErrorCode") LOAD(error_string, "XML_ErrorString")

@@ -10,7 +10,7 @@
 #define _GNU_SOURCE
 #include "aion.h"
 
-#include <dlfcn.h>
+#include "aion_platform.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -66,12 +66,15 @@ static struct {
 static bool load(void) {
     if (ssl.tried) return ssl.ok;
     ssl.tried = true;
+    #ifdef _WIN32
+    static const char *const names[] = {"libcrypto-3-x64.dll", "libcrypto-1_1-x64.dll", "libcrypto-3.dll", NULL};
+    #else
     static const char *const names[] = {"libcrypto.so.3", "libcrypto.so.1.1", "libcrypto.so", "libcrypto.3.dylib", "libcrypto.dylib", NULL};
-    void *lib = NULL;
-    for (const char *const *n = names; *n && !lib; n++) lib = dlopen(*n, RTLD_NOW | RTLD_GLOBAL);
+    #endif
+    void *lib = aion_dlopen(names);
     if (!lib) return fail("std.crypto needs OpenSSL: install libssl (for example the libssl3 or openssl package)");
 #define LOAD(name) \
-    if (!(*(void **)&ssl.name = dlsym(lib, #name))) return fail("the installed OpenSSL is missing " #name);
+    if (!(*(void **)&ssl.name = aion_dlsym(lib, #name))) return fail("the installed OpenSSL is missing " #name);
     LOAD(EVP_CIPHER_CTX_new) LOAD(EVP_CIPHER_CTX_free) LOAD(EVP_CIPHER_CTX_ctrl) LOAD(EVP_aes_128_gcm) LOAD(EVP_aes_192_gcm)
     LOAD(EVP_aes_256_gcm) LOAD(EVP_chacha20_poly1305) LOAD(EVP_EncryptInit_ex) LOAD(EVP_EncryptUpdate) LOAD(EVP_EncryptFinal_ex)
     LOAD(EVP_DecryptInit_ex) LOAD(EVP_DecryptUpdate) LOAD(EVP_DecryptFinal_ex) LOAD(RAND_bytes) LOAD(EVP_sha1) LOAD(EVP_sha256)

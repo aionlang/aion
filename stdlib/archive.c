@@ -11,7 +11,7 @@
 #define _GNU_SOURCE
 #include "aion.h"
 
-#include <dlfcn.h>
+#include "aion_platform.h"
 #include <errno.h>
 #include <locale.h>
 #include <stdio.h>
@@ -19,6 +19,10 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#ifdef _WIN32
+#include <direct.h>
+#define mkdir(path, mode) _mkdir(path)
+#endif
 
 static char error_text[512];
 
@@ -73,12 +77,15 @@ static struct {
 static bool load(void) {
     if (la.tried) return la.ok;
     la.tried = true;
+    #ifdef _WIN32
+    static const char *const names[] = {"libarchive-13.dll", "libarchive.dll", NULL};
+    #else
     static const char *const names[] = {"libarchive.so.13", "libarchive.so", "libarchive.13.dylib", "libarchive.dylib", NULL};
-    void *lib = NULL;
-    for (const char *const *n = names; *n && !lib; n++) lib = dlopen(*n, RTLD_NOW | RTLD_GLOBAL);
+    #endif
+    void *lib = aion_dlopen(names);
     if (!lib) return fail("std.archive needs the libarchive library: install it (for example the libarchive13t64 package)");
 #define LOAD(field, symbol) \
-    if (!(*(void **)&la.field = dlsym(lib, symbol))) return fail("the installed libarchive is missing " symbol);
+    if (!(*(void **)&la.field = aion_dlsym(lib, symbol))) return fail("the installed libarchive is missing " symbol);
     LOAD(read_new, "archive_read_new") LOAD(read_support_filter_all, "archive_read_support_filter_all")
     LOAD(read_support_format_all, "archive_read_support_format_all") LOAD(read_open_filename, "archive_read_open_filename")
     LOAD(read_next_header, "archive_read_next_header") LOAD(read_data, "archive_read_data")

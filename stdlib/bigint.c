@@ -11,7 +11,7 @@
 #define _GNU_SOURCE
 #include "aion.h"
 
-#include <dlfcn.h>
+#include "aion_platform.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -82,12 +82,15 @@ static struct {
 static bool load(void) {
     if (g.tried) return g.ok;
     g.tried = true;
+    #ifdef _WIN32
+    static const char *const names[] = {"libgmp-10.dll", "libgmp.dll", NULL};
+    #else
     static const char *const names[] = {"libgmp.so.10", "libgmp.so", "libgmp.10.dylib", "libgmp.dylib", NULL};
-    void *lib = NULL;
-    for (const char *const *n = names; *n && !lib; n++) lib = dlopen(*n, RTLD_NOW | RTLD_GLOBAL);
+    #endif
+    void *lib = aion_dlopen(names);
     if (!lib) return fail("std.bigint needs the GMP library: install libgmp (for example the libgmp10 package)");
 #define LOAD(field, symbol) \
-    if (!(*(void **)&g.field = dlsym(lib, symbol))) return fail("the installed GMP is missing " symbol);
+    if (!(*(void **)&g.field = aion_dlsym(lib, symbol))) return fail("the installed GMP is missing " symbol);
     LOAD(init, "__gmpz_init") LOAD(clear, "__gmpz_clear") LOAD(import, "__gmpz_import") LOAD(export_, "__gmpz_export")
     LOAD(sizeinbase, "__gmpz_sizeinbase") LOAD(set_str, "__gmpz_set_str") LOAD(get_str, "__gmpz_get_str")
     LOAD(set_si, "__gmpz_set_si") LOAD(get_si, "__gmpz_get_si") LOAD(fits_slong, "__gmpz_fits_slong_p")
@@ -178,8 +181,9 @@ void *aion_bigint_unary(int64_t op, const void *a, int64_t n) {
     if ((op == 2 || op == 4 || op == 5 || op == 8 || op == 9) && n < 0) ok = fail("the number must not be negative");
     else if (op == 3 && x.size < 0) ok = fail("the square root of a negative number");
     else if (op == 8 && (n == 0 || (x.size < 0 && n % 2 == 0))) ok = fail("no such root");
-    else if (op == 2 && n > 0 && g.sizeinbase(&x, 2) > 1 && (uint64_t)n * g.sizeinbase(&x, 2) > ((uint64_t)1 << 34)) ok = fail("the result would be too large");
-    else if (op == 4 && n > ((int64_t)1 << 34)) ok = fail("the result would be too large");
+    else if (op == 2 && n > 0 && g.sizeinbase(&x, 2) > 1 && (uint64_t)n * g.sizeinbase(&x, 2) > ((uint64_t)1 << 31)) ok = fail("the result would be too large");
+    else if ((op == 4 || op == 5 || op == 8 || op == 9) && n > 0x7fffffff) ok = fail("the number is too large");
+    else if (op == 4 && n > ((int64_t)1 << 31)) ok = fail("the result would be too large");
     if (ok) {
         switch (op) {
         case 0: g.neg(&r, &x); break;
@@ -335,7 +339,9 @@ void *aion_bigint_from_int(int64_t n) {
     if (!load()) return NULL;
     Mpz x;
     g.init(&x);
-    g.set_si(&x, (long)n);
+    uint64_t magnitude = n < 0 ? (uint64_t)0 - (uint64_t)n : (uint64_t)n;
+    if (magnitude) g.import(&x, 1, 1, 8, 0, 0, &magnitude);
+    if (n < 0) g.neg(&x, &x);
     void *out = write_value(&x);
     g.clear(&x);
     return out;
@@ -352,23 +358,31 @@ void *aion_bigint_from_float(double d) {
     return out;
 }
 
+/* The magnitude as 64 bits, if it fits; `negative` says whether the number is below zero. */
+static bool magnitude_of(const void *a, uint64_t *out, bool *negative) {
+    int64_t n = aion_bytes_size(a);
+    const uint8_t *d = aion_bytes_data((void *)a);
+    *negative = n > 0 && d[0] == 1;
+    if (n > 9) return false;
+    uint64_t v = 0;
+    for (int64_t i = 1; i < n; i++) v = v << 8 | d[i];
+    *out = v;
+    return true;
+}
+
 /* Does the number fit an Int? */
 bool aion_bigint_fits(const void *a) {
-    if (!load()) return false;
-    Mpz x;
-    read_value(&x, a);
-    bool fits = g.fits_slong(&x) != 0;
-    g.clear(&x);
-    return fits;
+    uint64_t v;
+    bool negative;
+    if (!magnitude_of(a, &v, &negative)) return false;
+    return negative ? v <= (uint64_t)1 << 63 : v <= (uint64_t)INT64_MAX;
 }
 
 int64_t aion_bigint_to_int(const void *a) {
-    if (!load()) return 0;
-    Mpz x;
-    read_value(&x, a);
-    int64_t n = (int64_t)g.get_si(&x);
-    g.clear(&x);
-    return n;
+    uint64_t v = 0;
+    bool negative;
+    if (!magnitude_of(a, &v, &negative)) return 0;
+    return negative ? (int64_t)((uint64_t)0 - v) : (int64_t)v;
 }
 
 double aion_bigint_to_float(const void *a) {
