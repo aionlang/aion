@@ -1,0 +1,4 @@
+// error: `Box` needs type arguments
+open type Box<T>(value: T)
+type IntBox(n: Int) : Box(n)
+println(IntBox(1).value)

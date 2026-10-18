@@ -1,0 +1,12 @@
+Box of 1 1
+IntBox 6 5
+n: Box of 7 7
+8 4 IntBox 5 s: Box of text
+true false 10
+[Box of 1, IntBox 6, n: Box of 7]
+30 [a, b, c] a leaf
+30 a
+6 30
+twice 2 [s, s]
+IntBox 10 9
+200 Box of s198 n: Box of t199

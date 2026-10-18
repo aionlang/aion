@@ -111,7 +111,8 @@ pub(super) fn check_fn(ck: &Checker, id: FnId, work: &Work) -> Result<hir::Func>
         }
 
         // the part of construction that a subtype's constructor reuses on its own object
-        Work::TypeInit { ty, decl } => {
+        Work::TypeInit { ty, decl, subst } => {
+            cx.subst = subst.clone();
             cx.this = Some(*ty);
             let mut body = Vec::new();
             let fields = ck.t.ty(*ty).fields.clone();

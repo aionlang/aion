@@ -154,6 +154,8 @@ pub struct TypeDecl {
 #[derive(Debug)]
 pub struct ParentRef {
     pub name: Ident,
+    /// `: Box<Int>(…)` — the type arguments, if the parent is generic.
+    pub type_args: Vec<TypeRef>,
     /// Arguments for the parent's constructor, evaluated with the child's parameters in scope.
     pub args: Vec<Arg>,
     pub span: Span,

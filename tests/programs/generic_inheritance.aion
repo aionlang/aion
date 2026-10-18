@@ -1,0 +1,61 @@
+// Inheritance from generic types: a generic parent with a concrete or a generic child, overriding, super and subtype conversion.
+open type Box<T>(value: T) {
+    open fn describe() = "Box of $value"
+    fn get() = value
+    fn toString() = describe()
+}
+
+type IntBox(n: Int) : Box<Int>(n) {
+    override fn describe() = "IntBox ${value + 1}"
+    fn double() = value * 2
+}
+
+type Named<T>(label: String, v: T) : Box<T>(v) {
+    override fn describe() = "$label: ${super.describe()}"
+}
+
+fn show<T>(b: Box<T>) = b.describe()
+
+boxes: List<Box<Int>> = [Box<Int>(1), IntBox(5), Named<Int>("n", 7)]
+for b in boxes { println(b.describe(), b.get()) }
+ib := IntBox(4)
+println(ib.double(), ib.get(), show(ib), show(Named("s", "text")))
+println(boxes[1] is IntBox, boxes[0] is IntBox, (boxes[1] as IntBox).double())
+println(boxes)
+
+// A chain of generic types, with fields of every kind of value at each level
+open type Base<T>(first: T) {
+    count: Int = 1
+    open fn size() = count
+}
+open type Middle<T>(first: T, second: T) : Base<T>(first) {
+    items: List<T> = List<T>()
+    init { items.add(first); items.add(second); count = items.size() }
+}
+type Leaf<T>(first: T, second: T, third: T) : Middle<T>(first, second) {
+    note: String = "leaf"
+    init { items.add(third); count += 1 }
+    override fn size() = count * 10
+}
+
+leaf := Leaf("a", "b", "c")
+println(leaf.size(), leaf.items, leaf.first, leaf.note)
+base: Base<String> = leaf
+println(base.size(), base.first)
+nums := Leaf(1, 2, 3)
+println(nums.items.fold(0) { a, b -> a + b }, nums.size())
+
+// A generic child of a generic parent that wraps the argument, and Box<Box<Int>>
+type Twice<T>(x: T) : Box<List<T>>([x, x]) {
+    override fn describe() = "twice ${value.size()}"
+}
+println(Twice(3).describe(), Twice("s").value)
+nested := Box<Box<Int>>(IntBox(9))
+println(nested.get().describe(), nested.get().get())
+
+// Collect many for the collector
+all := List<Box<String>>()
+for i in 0..200 {
+    all.add(if i % 2 == 0 { Box<String>("s$i") } else { Named("n", "t$i") })
+}
+println(all.size(), all[198], all[199])

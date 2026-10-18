@@ -203,7 +203,19 @@ impl Cx<'_, '_> {
                 // `List<T>` against the instance `List<Int>`.
                 let Ty::Obj(id) = actual else { return };
                 let (want, found) = match self.ck.t.lookup(tpl.module, name) {
-                    Some(Sym::GenericType(want)) => (want, self.ck.instance_of.borrow().get(&id).cloned()),
+                    // a subtype of an instance counts: `IntBox` against `Box<T>` finds `Box<Int>` among its parents
+                    Some(Sym::GenericType(want)) => {
+                        let mut cur = Some(id);
+                        let mut found = None;
+                        while let Some(c) = cur {
+                            found = self.ck.instance_of.borrow().get(&c).cloned();
+                            if found.as_ref().is_some_and(|(g, _)| *g == want) {
+                                break;
+                            }
+                            cur = self.ck.t.ty(c).parent;
+                        }
+                        (want, found)
+                    }
                     Some(Sym::GenericIface(want)) => (want, self.ck.iface_instance_of.borrow().get(&id).cloned()),
                     _ => return,
                 };

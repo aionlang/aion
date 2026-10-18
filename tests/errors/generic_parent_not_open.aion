@@ -1,0 +1,4 @@
+// error: `IntBox` cannot extend `Box<Int>`: it is not `open`
+type Box<T>(value: T)
+type IntBox(n: Int) : Box<Int>(n)
+println(IntBox(1).value)

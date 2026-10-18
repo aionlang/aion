@@ -339,14 +339,21 @@ impl<'a> Checker<'a> {
         // The library's `Tuple2<Int, String>` is written `(Int, String)`.
         let is_tuple = td.name.name.strip_prefix("Tuple").is_some_and(|n| matches!(n, "2" | "3" | "4" | "5"));
         let name = if is_tuple { format!("({})", arg_names.join(", ")) } else { format!("{}<{}>", td.name.name, arg_names.join(", ")) };
-        let id = self.t.add_type(TypeInfo::new(name));
+        let id = self.t.add_type(TypeInfo { open: td.open, ..TypeInfo::new(name) });
         // Register before resolving anything, so a self-referential type (`next: Node<T>`) finds itself.
         gt.instances.borrow_mut().insert(args.clone(), id);
         self.instance_of.borrow_mut().insert(id, (g, args.clone()));
 
         let subst: Subst = Rc::new(gt.tparams.iter().cloned().zip(args.iter().copied()).collect());
-        let fields = self.type_fields(gt.module, td, &subst, &[])?;
+        // `type Named<T>(…) : Box<T>(…)`: the parent is the instance for the same arguments, and comes first.
+        let parent = self.parent_of(gt.module, td, &subst)?;
+        if let Some(p) = parent {
+            self.t.update_type(id, |ti| ti.parent = Some(p));
+        }
+        let inherited = parent.map(|p| self.t.ty(p).fields.clone()).unwrap_or_default();
+        let fields = self.type_fields(gt.module, td, &subst, &inherited)?;
         self.t.update_type(id, |ti| ti.fields = fields);
+        self.inherit_methods(id);
 
         let module_name = &self.module_names[gt.module];
         for m in &td.methods {

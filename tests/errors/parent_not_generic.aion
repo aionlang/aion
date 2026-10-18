@@ -1,0 +1,4 @@
+// error: `Animal` is not generic
+open type Animal(name: String)
+type Dog(name: String) : Animal<Int>(name)
+println(Dog("rex").name)

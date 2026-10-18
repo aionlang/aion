@@ -593,6 +593,17 @@ impl<'a> Parser<'a> {
         let parent = if self.peek() == Some(Token::Colon) && !self.nl() {
             let colon = self.bump().span;
             let name = self.ident()?;
+            let mut type_args = Vec::new();
+            if self.peek() == Some(Token::Lt) && !self.nl() {
+                self.bump();
+                loop {
+                    type_args.push(self.type_ref()?);
+                    if !self.eat(Token::Comma) {
+                        break;
+                    }
+                }
+                self.expect(Token::Gt)?;
+            }
             let args = if self.peek() == Some(Token::LParen) && !self.nl() {
                 self.bump();
                 let args = self.scoped(true, false, |p| p.args())?;
@@ -601,7 +612,7 @@ impl<'a> Parser<'a> {
             } else {
                 Vec::new()
             };
-            Some(ParentRef { span: colon.to(self.prev_span()), name, args })
+            Some(ParentRef { span: colon.to(self.prev_span()), name, type_args, args })
         } else {
             None
         };

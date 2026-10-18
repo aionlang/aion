@@ -235,7 +235,7 @@ pub enum Work<'a> {
     Default { expr: &'a ast::Expr, subst: Subst },
     Ctor { ty: TypeId, decl: &'a ast::TypeDecl, subst: Subst },
     /// The initialiser of a type that is open or extends another (`this`, then the constructor's parameters).
-    TypeInit { ty: TypeId, decl: &'a ast::TypeDecl },
+    TypeInit { ty: TypeId, decl: &'a ast::TypeDecl, subst: Subst },
     /// A module's top-level statements.
     Init { stmts: Vec<&'a ast::Stmt> },
 }
@@ -480,6 +480,21 @@ pub fn analyze(loaded: &Loaded, map: &SourceMap, trace: bool) -> Result<hir::Pro
             }
             id += 1;
         }
+        // A method that subtypes may replace is called through a table naming every version, so all are needed
+        // (the methods of generic instances are otherwise only checked when something calls them).
+        for root in 0..ck.types_len() {
+            let vlist = ck.t.ty(root).vlist.clone();
+            for name in &vlist {
+                for s in (0..ck.types_len()).filter(|&s| s == root || ck.is_subtype(s, root)) {
+                    let Some(&f) = ck.t.ty(s).methods.get(name) else { continue };
+                    let mut fns = ck.fns.borrow_mut();
+                    if fns[f].state == State::New && !fns[f].used {
+                        fns[f].used = true;
+                        checked = true;
+                    }
+                }
+            }
+        }
         // Types used as an interface that gets printed need their `toString` compiled.
         let pending: Vec<TypeId> = {
             let (ups, shown) = (ck.upcasts.borrow(), ck.stringified.borrow());
@@ -561,9 +576,6 @@ impl<'a> Checker<'a> {
         let mut own_ifaces: Vec<(TypeId, &ast::InterfaceDecl)> = Vec::new();
         for item in &module.ast.items {
             match item {
-                Item::Type(td) if !td.type_params.is_empty() && (td.open || td.parent.is_some()) => {
-                    return Err(Diagnostic::new("generic types cannot take part in inheritance", td.name.span));
-                }
                 Item::Type(td) if td.type_params.is_empty() => {
                     let variants = td.variants.as_ref().map(|vs| vs.iter().map(|v| v.name.clone()).collect());
                     let id = self.t.add_type(TypeInfo { open: td.open, variants, ..TypeInfo::new(td.name.name.clone()) });
@@ -667,22 +679,7 @@ impl<'a> Checker<'a> {
 
         // 3a. Parents: `type Dog : Animal(…)`.  Parents come first, so a child sees their fields and methods.
         for &(id, td) in &own_types {
-            let Some(parent) = &td.parent else { continue };
-            let pid = match self.t.lookup(mi, &parent.name.name) {
-                Some(Sym::Type(pid)) => pid,
-                Some(Sym::GenericType(_)) => {
-                    return Err(Diagnostic::new("generic types cannot take part in inheritance", parent.name.span));
-                }
-                _ => return Err(Diagnostic::new(format!("unknown type `{}`", parent.name.name), parent.name.span)),
-            };
-            let p = self.t.ty(pid);
-            if p.iface.is_some() {
-                return Err(Diagnostic::new(format!("`{}` is an interface, which a type implements by having its methods, not by extending it", p.name), parent.name.span));
-            }
-            if !p.open {
-                return Err(Diagnostic::new(format!("`{}` cannot extend `{}`: it is not `open`", td.name.name, p.name), parent.name.span)
-                    .hint(format!("declare it `open type {}`", p.name)));
-            }
+            let Some(pid) = self.parent_of(mi, td, &empty)? else { continue };
             self.t.update_type(id, |ti| ti.parent = Some(pid));
         }
         let own_types = self.parents_first(own_types)?;
@@ -792,6 +789,42 @@ impl<'a> Checker<'a> {
             self.inits.push(init_fn);
         }
         Ok(())
+    }
+
+    /// The type that `td` extends (`: Animal(…)` or `: Box<T>(…)`, with the type arguments filled in from `subst`),
+    /// after checking that it can be extended.  A generic parent is instantiated.
+    fn parent_of(&self, mi: usize, td: &ast::TypeDecl, subst: &Subst) -> Result<Option<TypeId>> {
+        let Some(parent) = &td.parent else { return Ok(None) };
+        let pid = match self.t.lookup(mi, &parent.name.name) {
+            Some(Sym::Type(pid)) => {
+                if let Some(arg) = parent.type_args.first() {
+                    return Err(Diagnostic::new(format!("`{}` is not generic", parent.name.name), arg.span));
+                }
+                pid
+            }
+            Some(Sym::GenericType(g)) => {
+                if parent.type_args.is_empty() {
+                    return Err(Diagnostic::new(format!("`{}` needs type arguments", parent.name.name), parent.name.span)
+                        .hint(format!("write it like `: {}<Int>(…)`", parent.name.name)));
+                }
+                let targs = parent
+                    .type_args
+                    .iter()
+                    .map(|a| self.resolve_value_type(mi, a, subst))
+                    .collect::<Result<Vec<_>>>()?;
+                self.instantiate_type(g, targs, parent.name.span)?
+            }
+            _ => return Err(Diagnostic::new(format!("unknown type `{}`", parent.name.name), parent.name.span)),
+        };
+        let p = self.t.ty(pid);
+        if p.iface.is_some() {
+            return Err(Diagnostic::new(format!("`{}` is an interface, which a type implements by having its methods, not by extending it", p.name), parent.name.span));
+        }
+        if !p.open {
+            return Err(Diagnostic::new(format!("`{}` cannot extend `{}`: it is not `open`", td.name.name, p.name), parent.name.span)
+                .hint(format!("declare it `open type {}`", td.parent.as_ref().map_or("", |p| p.name.name.as_str()))));
+        }
+        Ok(Some(pid))
     }
 
     /// What interface `d` requires, with its type parameters bound by `subst`.
@@ -1184,7 +1217,7 @@ impl<'a> Checker<'a> {
                     params: init_params,
                     ret: Cell::new(Some(Ty::Void)),
                 },
-                Work::TypeInit { ty, decl: td },
+                Work::TypeInit { ty, decl: td, subst: subst.clone() },
             );
             self.t.update_type(ty, |ti| ti.init = Some(init));
         }
