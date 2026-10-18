@@ -30,6 +30,7 @@ usage:
   aion build [file.aion] [-o <out>]   compile to a native executable
   aion emit-ir [file.aion]            print the generated LLVM IR
   aion check [file.aion]              type-check without building anything
+  aion help                           show this text
   aion test [path…]                   run the programs in tests/ (each passes if it exits with status 0)
   aion fmt [--check] [path…]          tidy whitespace in .aion files
   aion new <name>                     create a project directory
@@ -123,7 +124,12 @@ fn parse_args(args: &[String]) -> Result<Cli, String> {
             // After the file, anything we don't know is the program's.
             _ if input.is_some() => program_args.push(arg.clone()),
             o if o.starts_with('-') => return Err(format!("unknown option `{o}`\n\n{USAGE}")),
-            _ => input = Some(PathBuf::from(arg)),
+            "help" if command.is_none() => return Err(USAGE.into()),
+            // `aion new <name>`: the name of the project to create
+            _ if matches!(command, Some(Subcommand::New)) => input = Some(PathBuf::from(arg)),
+            // anything else that is not a file of ours is not a command
+            file if file.ends_with(".aion") => input = Some(PathBuf::from(file)),
+            other => return Err(format!("error: unknown command `{other}`; type `aion help` for help")),
         }
     }
     let command = command.unwrap_or(Subcommand::Run);
@@ -424,6 +430,18 @@ mod tests {
         // before the file an unknown option is still an error, and builds take no arguments
         assert!(parse(&["-x", "script.aion"]).is_err());
         assert!(parse(&["build", "script.aion", "extra"]).is_err());
+    }
+
+    #[test]
+    fn only_a_name_ending_in_aion_is_a_file() {
+        let err = |args: &[&str]| parse(args).err().unwrap();
+        assert_eq!(err(&["repl"]), "error: unknown command `repl`; type `aion help` for help");
+        assert!(err(&["run", "script"]).contains("unknown command `script`"));
+        assert!(err(&["help"]).starts_with("Aion compiler"));
+        assert_eq!(parse(&["new", "myapp"]).unwrap().input.unwrap(), PathBuf::from("myapp"));
+        assert_eq!(parse(&["dir/x.aion"]).unwrap().input.unwrap(), PathBuf::from("dir/x.aion"));
+        // the program's own arguments are not looked at
+        assert_eq!(parse(&["x.aion", "repl"]).unwrap().program_args, ["repl"]);
     }
 
     #[test]
