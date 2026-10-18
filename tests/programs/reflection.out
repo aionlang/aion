@@ -1,0 +1,23 @@
+[Shape, Circle, Point]
+[x: Int, y: Int, label: String?] [name: String, radius: Float, tag: String]
+3 4 null null true false
+2 round circle
+true true 10 origin
+false false true null false
+true 5 true big true x
+[plus(Point) -> ?, dist2() -> ?, moved(Int, Int) -> Point, nothing() -> Unit, maybe(Bool) -> Int?, greet(String, String?) -> String, describe() -> ?]
+[area() -> ?, describe() -> ?, scale(Float, Int) -> Circle, grow(Float) -> Unit, rename(String) -> Unit]
+116 Point(x=11, y=6, label=null) Point(x=11, y=5, label=null) null
+10 null Hello world Hi Ann Hi world
+(10, 4) a circle of radius 5 75 Circle(name=big, radius=10, tag=round)
+6.5 moon true false
+Point has no method fly that takes 0 such arguments Point has no method moved that takes 1 such argument
+Point(x=7, y=8, label=null) Point [x: Int, y: Int, label: String?] 113
+Circle(name=circle, radius=1, tag=round) Circle(name=tiny, radius=1, tag=round) null null
+[[Int, Int]] [[Float, String]] [[String]]
+Shape true true true false
+Circle [name, radius, tag] a circle of radius 1
+Shape [name] a shape called plain
+Point [x, y, label] (10, 4)
+false false false false
+reflect does not know the type Int (only types declared in your own modules, not generic ones)

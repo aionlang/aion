@@ -1,0 +1,74 @@
+/** std.reflect: fields, methods and constructors of the program's own types, found and used by name. */
+import reflect
+
+open type Shape(name: String) {
+    open fn describe() = "a shape called $name"
+    fn rename(newName: String) { name = newName }
+    open fn area() -> Float = 0.0
+}
+
+type Circle(radius: Float, name: String = "circle") : Shape(name) {
+    tag: String = "round"
+    override fn area() = 3.0 * radius * radius
+    override fn describe() = "a circle of radius $radius"
+    fn scale(factor: Float, times: Int = 1) -> Circle = Circle(radius * factor, name)
+    fn grow(by: Float) { radius += by }
+}
+
+type Point(x: Int, y: Int) {
+    label: String? = null
+    fn plus(other: Point) = Point(x + other.x, y + other.y)
+    fn dist2() = x * x + y * y
+    fn moved(dx: Int, dy: Int) -> Point = Point(x + dx, y + dy)
+    fn nothing() { }
+    fn maybe(flag: Bool) -> Int? = flag ? x : null
+    fn greet(greeting: String, who: String? = null) -> String = "$greeting ${who ?: "world"}"
+}
+
+type Pair<T>(first: T, second: T)
+enum Color { Red, Green }
+interface Named { fn label() -> String }
+
+fn Point.describe() = "($x, $y)"
+
+p := Point(3, 4)
+c := Circle(2.0)
+
+println(reflect.typeNames())
+println(reflect.fields(p), reflect.fields(c))
+println(reflect.get(p, "x"), reflect.get(p, "y"), reflect.get(p, "label"), reflect.get(p, "nothing"), reflect.hasField(p, "x"), reflect.hasField(p, "z"))
+println(reflect.get(c, "radius"), reflect.get(c, "tag"), reflect.get(c, "name"))
+
+// writing
+println(reflect.set(p, "x", 10), reflect.set(p, "label", "origin"), p.x, p.label)
+println(reflect.set(p, "x", "text"), reflect.set(p, "z", 1), reflect.set(p, "label", null), p.label, reflect.set(p, "y", null))
+println(reflect.set(c, "radius", 5), c.radius, reflect.set(c, "name", "big"), c.name, reflect.set(c, "tag", "x"), c.tag)
+
+// methods
+println(reflect.methods(p))
+println(reflect.methods(c))
+println(reflect.call(p, "dist2"), reflect.call(p, "moved", [1, 2]), reflect.call(p, "plus", [Point(1, 1)]), reflect.call(p, "nothing"))
+println(reflect.call(p, "maybe", [true]), reflect.call(p, "maybe", [false]), reflect.call(p, "greet", ["Hello"]), reflect.call(p, "greet", ["Hi", "Ann"]), reflect.call(p, "greet", ["Hi", null]))
+println(reflect.call(p, "describe"), reflect.call(c, "describe"), reflect.call(c, "area"), reflect.call(c, "scale", [2, 3]))
+reflect.call(c, "grow", [1.5])
+reflect.call(c, "rename", ["moon"])
+println(c.radius, c.name, reflect.hasMethod(c, "rename"), reflect.hasMethod(c, "fly"))
+println(assertFails { reflect.call(p, "fly") }, assertFails { reflect.call(p, "moved", [1]) })
+
+// making objects
+q := reflect.create("Point", [7, 8])
+println(q, typeOf(q!!), reflect.fields(q!!), reflect.call(q!!, "dist2"))
+println(reflect.create("Circle", [1.0]), reflect.create("Circle", [1.0, "tiny"]), reflect.create("Circle", []), reflect.create("Nothing", []))
+println(reflect.constructors("Point"), reflect.constructors("Circle"), reflect.constructors("Shape"))
+
+// the type tree
+println(reflect.parentOf("Circle"), reflect.parentOf("Shape").isEmpty(), reflect.isInstance(c, "Shape"), reflect.isInstance(c, "Circle"), reflect.isInstance(p, "Shape"))
+shapes := List<Any>()
+shapes.add(Circle(1.0))
+shapes.add(Shape("plain"))
+shapes.add(p)
+for s in shapes { println(typeOf(s), reflect.fields(s).map { it.name }, reflect.call(s, "describe")) }
+
+// what it does not know
+println(reflect.isKnown("Pair"), reflect.isKnown("Color"), reflect.isKnown("Named"), reflect.isKnown("List"))
+println(assertFails { reflect.fields(5) })

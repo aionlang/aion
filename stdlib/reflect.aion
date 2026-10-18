@@ -1,0 +1,284 @@
+// import reflect
+//
+//   type Point(x: Int, y: Int) { fn plus(other: Point) = Point(x + other.x, y + other.y) }
+//   p := Point(3, 4)
+//
+//   println(reflect.fields(p))                                   // [x: Int, y: Int]
+//   println(reflect.get(p, "x"), reflect.set(p, "y", 10), p.y)   // 3 true 10
+//   println(reflect.methods(p))                                  // [plus(Point) -> ?]
+//   println(reflect.call(p, "plus", [Point(1, 1)]))              // Point(x=4, y=11)
+//   q := reflect.create("Point", [1, 2])                         // a Point, made from its name
+//   println(typeOf(q!!), reflect.isInstance(q!!, "Point"), reflect.typeNames())   // Point true [Point]
+//
+// Looking at a program's own types while it runs: the fields of an object and their types, reading and writing a
+// field by name, the methods and calling one by name, and making an object from the name of its type.  It works for
+// the types your program declares in its own modules (not generic types, enums, interfaces or the standard library's
+// types), for any value that is held as an `Any`.
+//
+// How: when a program imports `reflect`, the compiler adds to each of the program's modules a short piece of ordinary
+// code that registers the module's types here.  Nothing is added for a program that does not import `reflect`.
+// Arguments to `call` and `create` and values for `set` are converted like `as` does (`3` for a Float parameter
+// becomes `3.0`); a wrong kind of argument stops the program, as a failed `as` does.  Fields and methods whose types
+// include a function type, and methods with their own type parameters, `vararg`s or names starting with `_`, are
+// left out of `call`.  Two types of the same name in different modules are one type here (the later one wins).
+
+// What a field is called and the type it was declared with, as written ("Int", "List<String>", "Shape?").
+type FieldInfo(name: String, typeName: String) {
+    fn toString() = "$name: $typeName"
+}
+
+// A method as `methods` reports it: the name, the parameter types, the result type ("Unit" for none, "?" when the
+// method has no declared type and its body decides), and the type that declares it.
+type MethodSig(name: String, paramTypes: List<String>, returnType: String, owner: String) {
+    fn toString() = "$name(${paramTypes.join(", ")}) -> $returnType"
+}
+
+// ---- used by the code the compiler adds (public only because that code lives in other modules) ----
+
+type MethodInfo(
+    name: String,
+    paramTypes: List<String>,
+    returnType: String,
+    accepts: (List<Any?>) -> Bool,
+    invoke: (Any, List<Any?>) -> Any?
+)
+
+type CtorInfo(paramTypes: List<String>, accepts: (List<Any?>) -> Bool, make: (List<Any?>) -> Any?)
+
+type TypeInfo(
+    name: String,
+    parent: String,
+    fieldNames: List<String>,
+    fieldTypes: List<String>,
+    getter: (Any, Int) -> Any?,
+    setter: (Any, Int, Any?) -> Bool,
+    methods: List<MethodInfo>,
+    constructors: List<CtorInfo>
+)
+
+// Declared without a value, so that registrations made while other modules start up (before this one has run) work.
+registry: Map<String, TypeInfo>?
+
+fn __types() -> Map<String, TypeInfo> {
+    if registry == null { registry = Map<String, TypeInfo>() }
+    return registry!!
+}
+
+fn register(info: TypeInfo) {
+    __types()[info.name] = info
+}
+
+// Conversions to `Any?` for every kind of value (the compiler's code boxes results with these); objects, optional or not,
+// take the last one.
+fn box(v: Int) -> Any? = v
+fn box(v: Float) -> Any? = v
+fn box(v: Bool) -> Any? = v
+fn box(v: Char) -> Any? = v
+fn box(v: String) -> Any? = v
+fn box(v: Bytes) -> Any? = v
+fn box(v: Int?) -> Any? {
+    if v == null { return null }
+    return v
+}
+fn box(v: Float?) -> Any? {
+    if v == null { return null }
+    return v
+}
+fn box(v: Bool?) -> Any? {
+    if v == null { return null }
+    return v
+}
+fn box(v: Char?) -> Any? {
+    if v == null { return null }
+    return v
+}
+fn box(v: String?) -> Any? {
+    if v == null { return null }
+    return v
+}
+fn box(v: Bytes?) -> Any? {
+    if v == null { return null }
+    return v
+}
+fn box(v: Any?) -> Any? = v
+
+// Argument number `i`, which must not be null.
+fn arg(a: List<Any?>, i: Int) -> Any {
+    v := a[i]
+    if v == null { panic("argument ${i + 1} must not be null") }
+    return v!!
+}
+
+fn argOrNull(a: List<Any?>, i: Int) -> Any? = a[i]
+
+// A Float parameter also takes an Int.
+fn argFloat(a: List<Any?>, i: Int) -> Float {
+    v := a[i]
+    if v is Int { return v as Float }
+    return arg(a, i) as Float
+}
+
+fn argFloatOrNull(a: List<Any?>, i: Int) -> Float? {
+    v := a[i]
+    if v == null { return null }
+    if v is Int { return v as Float }
+    return v as? Float
+}
+
+// ---- looking types up ----
+
+// The names of the types known to `reflect`, in the order they were registered.
+fn typeNames() -> List<String> = __types().keys()
+
+fn isKnown(typeName: String) -> Bool = __types().containsKey(typeName)
+
+// The name of the type a type extends, or "" (also for an unknown type).
+fn parentOf(typeName: String) -> String {
+    info := __types().getOrNull(typeName)
+    return info == null ? "" : info.parent
+}
+
+// Is the value an instance of the type called this, or of a type that extends it?
+fn isInstance(x: Any, typeName: String) -> Bool {
+    name := typeOf(x)
+    while !name.isEmpty() {
+        if name == typeName { return true }
+        name = parentOf(name)
+    }
+    return false
+}
+
+// The types from the oldest ancestor down to this one.
+fn __chain(typeName: String) -> List<TypeInfo> {
+    out := List<TypeInfo>()
+    name := typeName
+    while !name.isEmpty() {
+        info := __types().getOrNull(name)
+        if info == null { break }
+        out.insert(0, info)
+        name = info.parent
+    }
+    return out
+}
+
+fn __need(x: Any) -> List<TypeInfo> {
+    chain := __chain(typeOf(x))
+    if chain.isEmpty() {
+        panic("reflect does not know the type ${typeOf(x)} (only types declared in your own modules, not generic ones)")
+    }
+    return chain
+}
+
+// ---- fields ----
+
+// The fields of an object, those of its ancestors first.
+fn fields(x: Any) -> List<FieldInfo> {
+    out := List<FieldInfo>()
+    seen := List<String>()
+    for info in __need(x) {
+        for i in 0..info.fieldNames.size() {
+            // a constructor parameter that repeats an ancestor's field is that field, not another
+            if seen.contains(info.fieldNames[i]) { continue }
+            seen.add(info.fieldNames[i])
+            out.add(FieldInfo(info.fieldNames[i], info.fieldTypes[i]))
+        }
+    }
+    return out
+}
+
+fn hasField(x: Any, name: String) -> Bool {
+    for info in __need(x) {
+        if info.fieldNames.contains(name) { return true }
+    }
+    return false
+}
+
+// The value of a field, as an `Any?` (null for a null field and also for a name the type does not have: see `hasField`).
+// A field whose type includes a function type reads as null.
+fn get(x: Any, name: String) -> Any? {
+    chain := __need(x)
+    k := chain.size() - 1
+    while k >= 0 {
+        i := chain[k].fieldNames.indexOf(name)
+        if i >= 0 { return chain[k].getter(x, i) }
+        k -= 1
+    }
+    return null
+}
+
+// Give a field a new value.  False if there is no such field, the value is of the wrong kind (a text for an Int
+// field, null for a field that cannot be null) or the field's type cannot be set this way.
+fn set(x: Any, name: String, value: Any?) -> Bool {
+    chain := __need(x)
+    k := chain.size() - 1
+    while k >= 0 {
+        i := chain[k].fieldNames.indexOf(name)
+        if i >= 0 { return chain[k].setter(x, i, value) }
+        k -= 1
+    }
+    return false
+}
+
+// ---- methods ----
+
+// The methods an object can be called with, those of the type itself first, each name and parameter list once.
+fn methods(x: Any) -> List<MethodSig> {
+    out := List<MethodSig>()
+    chain := __need(x)
+    k := chain.size() - 1
+    while k >= 0 {
+        for m in chain[k].methods {
+            seen := false
+            for o in out {
+                if o.name == m.name && o.paramTypes.join(",") == m.paramTypes.join(",") { seen = true }
+            }
+            if !seen { out.add(MethodSig(m.name, m.paramTypes, m.returnType, chain[k].name)) }
+        }
+        k -= 1
+    }
+    return out
+}
+
+fn hasMethod(x: Any, name: String) -> Bool {
+    for m in methods(x) {
+        if m.name == name { return true }
+    }
+    return false
+}
+
+// Call a method by name.  The arguments are matched to the method by their number and kinds; the answer is `Any?`
+// (null for a method that gives nothing).  Stops the program if no method fits.
+fn call(x: Any, name: String, args: List<Any?> = List<Any?>()) -> Any? {
+    chain := __need(x)
+    k := chain.size() - 1
+    while k >= 0 {
+        for m in chain[k].methods {
+            if m.name == name && m.accepts(args) { return m.invoke(x, args) }
+        }
+        k -= 1
+    }
+    panic("${typeOf(x)} has no method $name that takes ${args.size()} such argument${args.size() == 1 ? "" : "s"}")
+}
+
+// ---- making objects ----
+
+// A new object of the type with this name, made by the constructor that fits the arguments; null if there is no such
+// type, or no constructor takes these arguments.
+fn create(typeName: String, args: List<Any?> = List<Any?>()) -> Any? {
+    info := __types().getOrNull(typeName)
+    if info == null { return null }
+    for c in info.constructors {
+        if c.accepts(args) { return c.make(args) }
+    }
+    return null
+}
+
+// The parameter types of the constructors of a type, for example [[], ["String"], ["String", "Int"]].
+fn constructors(typeName: String) -> List<List<String>> {
+    info := __types().getOrNull(typeName)
+    out := List<List<String>>()
+    if info != null {
+        for c in info.constructors { out.add(c.paramTypes) }
+    }
+    return out
+}

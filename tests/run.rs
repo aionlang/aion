@@ -924,6 +924,26 @@ println(http2.get("https://localhost:{plain_port}/hello.txt", verify: false), ht
     );
 }
 
+/// Types declared in other modules are registered with `reflect` whichever order the modules are imported in.
+#[test]
+fn reflection_sees_the_types_of_every_module() {
+    let dir = scratch("reflect_modules");
+    write(&dir.join("animals.aion"), "type Dog(name: String, age: Int = 1) {\n    fn bark(times: Int) = \"woof \".repeat(times).trim()\n}\n");
+    write(&dir.join("cats.aion"), "type Cat(name: String) {\n    fn purr() = \"purr\"\n}\n");
+    write(
+        &dir.join("first.aion"),
+        "import animals\nimport reflect\nimport cats\nd := reflect.create(\"Dog\", [\"Rex\"])!!\nprintln(reflect.fields(d), reflect.call(d, \"bark\", [2]), reflect.typeNames())\nprintln(reflect.call(reflect.create(\"Cat\", [\"Tom\"])!!, \"purr\"))\n",
+    );
+    write(
+        &dir.join("second.aion"),
+        "import reflect\nimport cats\nimport animals\nprintln(reflect.typeNames(), reflect.get(animals.Dog(\"Rex\", 5), \"age\"))\n",
+    );
+    let out = aion_in(&dir, &["first.aion"]);
+    assert_eq!(stdout(&out), "[name: String, age: Int] woof woof [Dog, Cat]\npurr\n", "{}", stderr(&out));
+    let out = aion_in(&dir, &["second.aion"]);
+    assert_eq!(stdout(&out), "[Cat, Dog] 5\n", "{}", stderr(&out));
+}
+
 /// `term.readKey` names the keys arriving on standard input, including escape sequences.
 #[test]
 fn keys_are_read_from_standard_input() {

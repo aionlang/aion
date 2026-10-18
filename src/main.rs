@@ -12,6 +12,7 @@ mod format;
 mod loader;
 mod manage;
 mod project;
+mod reflect;
 mod repl;
 mod sema;
 mod syntax;
@@ -217,7 +218,8 @@ fn compile(
     let (inline, lock) = inline_dependencies(entry, project).map_err(|d| (d, None))?;
     let packages = project::resolve(project, dir, &inline, lock.as_deref()).map_err(|d| (d, None))?;
     let result = (|| {
-        let loaded = loader::load(map, entry, packages)?;
+        let mut loaded = loader::load(map, entry, packages)?;
+        reflect::instrument(&mut loaded, map)?;
         for w in &loaded.warnings {
             eprint!("{}", w.render(map));
         }
