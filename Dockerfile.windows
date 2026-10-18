@@ -1,0 +1,24 @@
+# aion.exe for 64-bit Windows, cross-compiled with MinGW: nothing to install on the host but Docker.
+#
+#   docker build -f Dockerfile.windows --output dist .
+#
+# leaves dist/aion.exe.  It runs the compiler's own commands (check, emit-ir, fmt, new, ...); compiling and running
+# programs on Windows also needs clang on the PATH, and the C parts of the standard library are still POSIX only
+# (see docs/LOCAL-BUILDING.MD), so use the Linux image (Dockerfile) or WSL for that for now.
+
+# ---- build the compiler for Windows ------------------------------------------
+FROM rust:1-slim-trixie AS build
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 \
+ && rm -rf /var/lib/apt/lists/* \
+ && rustup target add x86_64-pc-windows-gnu
+WORKDIR /src
+COPY Cargo.toml Cargo.lock build.rs ./
+COPY src ./src
+COPY runtime ./runtime
+COPY stdlib ./stdlib
+RUN cargo build --release --locked --target x86_64-pc-windows-gnu
+
+# ---- only the executable leaves ---------------------------------------------
+FROM scratch AS export
+COPY --from=build /src/target/x86_64-pc-windows-gnu/release/aion.exe /aion.exe

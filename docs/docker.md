@@ -59,6 +59,19 @@ docker run --rm -v "$PWD":/work aion new myapp             # create a project
 docker run --rm -it -v "$PWD":/work --entrypoint bash aion
 ```
 
+## A Windows executable
+
+`Dockerfile.windows` cross-compiles the compiler with MinGW, so a Windows `aion.exe` needs nothing installed but Docker:
+
+```powershell
+docker build -f Dockerfile.windows --output dist .
+.\distion.exe --version
+```
+
+The executable runs the compiler's own commands (`check`, `emit-ir`, `fmt`, `new`, `help`).  Compiling and running programs on
+Windows also needs clang on the `PATH`, and the C parts of the standard library are still POSIX only, so run programs with the
+image above (or WSL) for now.
+
 ## Keeping the build cache
 
 Compiled programs and cloned git dependencies go to `/cache`. Mount a named volume to make re-runs

@@ -39,8 +39,8 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 > The Windows path (`-lws2_32` for sockets, `.exe` naming) is written but has not
 > been exercised since the 0.2 rewrite; please report problems.
 
-`aion.exe` itself can be built without a Windows machine, by cross-compiling in a Linux container
-(`scripts/build-windows.sh` has the command; the result is `dist/aion.exe`).  It runs the compiler's own commands
+`aion.exe` itself can be built with nothing but Docker, by cross-compiling in a Linux container:
+`docker build -f Dockerfile.windows --output dist .` leaves `dist/aion.exe` (see [docker.md](docker.md#a-windows-executable)).  It runs the compiler's own commands
 (`check`, `emit-ir`, `fmt`, `new`, `help`, ...).  Compiling and running programs on Windows also needs clang, and the
 C parts of the standard library are still POSIX only (the prelude's `memmem`, and `fs`, `os`, `time`, `net`, `term`
 and the modules that load a library with `dlopen`), so use the Docker image or WSL for that for now.
