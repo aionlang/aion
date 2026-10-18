@@ -187,7 +187,7 @@ Always in scope.
 `interface Comparable<T> { fn compareTo(other: T) -> Int }` (negative, zero or
 positive); `Int`, `Float`, `String`, `Char` and `Bool` have `compareTo`, and any
 type with a matching method qualifies.  `List` has `sorted()`, `sortedDescending()`,
-`sortedBy(key)`, `sortedWith(compare)` (a stable O(n log n) merge sort),
+`sortedBy(key)`, `sortedWith(compare)` (a stable O(n log n) merge sort that uses the runs already in the data, as Timsort does),
 `maxOrNull()` and `minOrNull()`.
 
 #### Collections

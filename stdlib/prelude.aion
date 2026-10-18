@@ -594,47 +594,112 @@ type List<T> {
     }
 
     // A new list, sorted by `compare(a, b)`: negative if a goes first, positive if b does.
-    // A stable merge sort (equal elements keep their order), O(n log n).
+    // A stable natural merge sort in the style of Timsort, O(n log n): it finds the runs already in the
+    // data (ascending, or strictly descending and then reversed), grows short ones to 32 elements with a
+    // binary insertion sort, and merges neighbouring runs.  Sorted or reversed input takes about n comparisons.
     fn sortedWith(compare: (T, T) -> Int) -> List<T> {
         n := count
         src := Array<T>(n)
         for i in 0..n { src[i] = items[i] }
-        spare := Array<T>(n)
-        width := 1
-        while width < n {
-            lo := 0
-            while lo < n {
-                mid := if lo + width < n { lo + width } else { n }
-                hi := if lo + 2 * width < n { lo + 2 * width } else { n }
-                i := lo
-                j := mid
-                k := lo
-                while i < mid && j < hi {
-                    if compare(src[j], src[i]) < 0 {
-                        spare[k] = src[j]
-                        j += 1
-                    } else {
-                        spare[k] = src[i]
-                        i += 1
+
+        // The runs: run r is src[bounds[r] until bounds[r + 1]].
+        bounds := List<Int>()
+        lo := 0
+        while lo < n {
+            hi := lo + 1
+            if hi < n {
+                if compare(src[hi], src[lo]) < 0 {
+                    while hi < n && compare(src[hi], src[hi - 1]) < 0 { hi += 1 }
+                    left := lo
+                    right := hi - 1
+                    while left < right {
+                        t := src[left]
+                        src[left] = src[right]
+                        src[right] = t
+                        left += 1
+                        right -= 1
                     }
-                    k += 1
+                } else {
+                    while hi < n && compare(src[hi], src[hi - 1]) >= 0 { hi += 1 }
                 }
-                while i < mid {
-                    spare[k] = src[i]
-                    i += 1
-                    k += 1
-                }
-                while j < hi {
-                    spare[k] = src[j]
-                    j += 1
-                    k += 1
-                }
-                lo += 2 * width
             }
+            if hi - lo < 32 && hi < n {
+                end := if lo + 32 < n { lo + 32 } else { n }
+                for i in hi..end {
+                    x := src[i]
+                    a := lo
+                    b := i
+                    while a < b {
+                        m := (a + b) / 2
+                        if compare(x, src[m]) < 0 { b = m } else { a = m + 1 }
+                    }
+                    j := i
+                    while j > a {
+                        src[j] = src[j - 1]
+                        j -= 1
+                    }
+                    src[a] = x
+                }
+                hi = end
+            }
+            bounds.add(lo)
+            lo = hi
+        }
+        bounds.add(n)
+
+        // Merge neighbouring runs, pass by pass, until one is left.
+        spare := Array<T>(n)
+        while bounds.size() > 2 {
+            next := List<Int>()
+            r := 0
+            while r + 1 < bounds.size() {
+                first := bounds[r]
+                if r + 2 >= bounds.size() {
+                    for k in first..n { spare[k] = src[k] }
+                    next.add(first)
+                    r += 1
+                } else {
+                    mid := bounds[r + 1]
+                    hi := bounds[r + 2]
+                    i := first
+                    j := mid
+                    k := first
+                    if compare(src[mid], src[mid - 1]) >= 0 {
+                        while k < hi {
+                            spare[k] = src[k]
+                            k += 1
+                        }
+                    } else {
+                        while i < mid && j < hi {
+                            if compare(src[j], src[i]) < 0 {
+                                spare[k] = src[j]
+                                j += 1
+                            } else {
+                                spare[k] = src[i]
+                                i += 1
+                            }
+                            k += 1
+                        }
+                        while i < mid {
+                            spare[k] = src[i]
+                            i += 1
+                            k += 1
+                        }
+                        while j < hi {
+                            spare[k] = src[j]
+                            j += 1
+                            k += 1
+                        }
+                    }
+                    next.add(first)
+                    r += 2
+                }
+            }
+            next.add(n)
+            bounds = next
             done := spare
             spare = src
             src = done
-            width *= 2
         }
         out := List<T>()
         for i in 0..n { out.add(src[i]) }

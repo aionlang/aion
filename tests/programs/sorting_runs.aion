@@ -1,0 +1,78 @@
+/** The sort finds runs already in the data: it must agree with a plain insertion sort, stay stable, and cost
+ *  about n comparisons on sorted or reversed input. */
+type Item(key: Int, order: Int)
+
+fn reference(xs: List<Int>) -> List<Int> {
+    out := xs.copy()
+    for i in 1..out.size() {
+        x := out[i]
+        j := i - 1
+        while j >= 0 && out[j] > x {
+            out[j + 1] = out[j]
+            j -= 1
+        }
+        out[j + 1] = x
+    }
+    return out
+}
+
+seed := 7
+fn next(bound: Int) -> Int {
+    seed = (seed * 1103515245 + 12345) % 2147483648
+    return seed % bound
+}
+
+fn pattern(kind: Int, n: Int) -> List<Int> {
+    xs := List<Int>()
+    for i in 0..n {
+        xs.add(when kind {
+            0 -> next(1000)
+            1 -> i
+            2 -> n - i
+            3 -> 5
+            4 -> if (i / 10) % 2 == 0 { i } else { n - i }
+            else -> next(4)
+        })
+    }
+    return xs
+}
+
+bad := 0
+for kind in 0..6 {
+    for n in [0, 1, 2, 3, 31, 32, 33, 34, 63, 64, 65, 100, 257, 1000] {
+        xs := pattern(kind, n)
+        got := xs.sortedWith { a, b -> a - b }
+        if got.toString() != reference(xs).toString() { bad += 1 }
+    }
+}
+println("mismatches:", bad)
+
+// stability, including inside reversed runs and insertion-sorted chunks
+for n in [10, 40, 200, 1000] {
+    items := List<Item>()
+    for i in 0..n { items.add(Item(next(5), i)) }
+    sorted := items.sortedWith { a, b -> a.key - b.key }
+    stable := true
+    for i in 1..n {
+        if sorted[i - 1].key > sorted[i].key { stable = false }
+        if sorted[i - 1].key == sorted[i].key && sorted[i - 1].order > sorted[i].order { stable = false }
+    }
+    println(n, "stable:", stable)
+}
+
+// a strictly descending run is reversed, equal elements are not
+equal := List<Item>()
+for k in [3, 3, 2, 2, 1, 1] { equal.add(Item(k, equal.size())) }
+println(equal.sortedWith { a, b -> a.key - b.key }.map { "${it.key}${it.order}" })
+
+compares := 0
+fn counted(a: Int, b: Int) -> Int {
+    compares += 1
+    return a - b
+}
+asc := pattern(1, 1000)
+asc.sortedWith { a, b -> counted(a, b) }
+println("sorted input:", compares)
+compares = 0
+pattern(2, 1000).sortedWith { a, b -> counted(a, b) }
+println("reversed input:", compares)

@@ -1,0 +1,8 @@
+mismatches: 0
+10 stable: true
+40 stable: true
+200 stable: true
+1000 stable: true
+[14, 15, 22, 23, 30, 31]
+sorted input: 1000
+reversed input: 1000
