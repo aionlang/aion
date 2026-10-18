@@ -1,0 +1,11 @@
+/** A method the program declares hides the standard library's method of the same name, for the program only:
+ *  the library's own code keeps calling its own. */
+fn Int.isEven() = if this % 2 == 0 { "even" } else { "odd" }
+fn Int.coerceIn(low: Int) = if this < low { low } else { this }
+fn List<T>.first() -> T = get(size() - 1)
+fn String.reversed() = "reversed: " + this
+
+println(4.isEven(), 7.isEven())
+println(15.coerceIn(0, 10), 2.coerceIn(5))
+println([1, 2, 3].first(), "abc".first(), "abc".reversed())
+println([3, 1, 2].sorted(), "a b".words(), ["x", "y"].joinToString("-"))

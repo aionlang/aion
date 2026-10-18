@@ -31,6 +31,9 @@ pub struct TypeInfo {
     pub name: String,
     pub fields: Vec<hir::Field>,
     pub methods: HashMap<String, FnId>,
+    /// Methods the program's own code declared with the name of one the standard library declared: user code
+    /// calls these, while the standard library's code keeps calling its own (`methods`).
+    pub user_methods: HashMap<String, FnId>,
     /// `static fn`s: called as `Type.name(…)`, with no `this`.
     pub statics: HashMap<String, FnId>,
     /// Methods with their own type parameters, by name → index into the checker's templates.
@@ -67,6 +70,7 @@ impl TypeInfo {
             name,
             fields: Vec::new(),
             methods: HashMap::new(),
+            user_methods: HashMap::new(),
             statics: HashMap::new(),
             generic_methods: HashMap::new(),
             ctor: usize::MAX,
@@ -288,6 +292,10 @@ pub struct Checker<'a> {
     ext_methods: RefCell<HashMap<(u8, String), FnId>>,
     /// Functions and methods that share a name: the first one declared maps to all of them, in order.
     overloads: RefCell<HashMap<FnId, Vec<FnId>>>,
+    /// Methods of built-in types that the program's own code declared over one of the standard library's.
+    ext_overrides: RefCell<HashMap<(u8, String), FnId>>,
+    /// Which modules are the standard library's.
+    std_modules: Vec<bool>,
     /// Names of module variables that functions, lambdas or other modules assign:
     /// these are never narrowed by null checks.
     unstable_globals: HashSet<(usize, String)>,
@@ -440,7 +448,7 @@ struct FileLines {
 
 /// `trace` makes the program keep a stack of the user's own functions and lines, which a panic prints.
 pub fn analyze(loaded: &Loaded, map: &SourceMap, trace: bool) -> Result<hir::Program> {
-    let mut ck = Checker::declare(loaded)?;
+    let mut ck = Checker::declare(loaded, map)?;
     ck.trace = trace;
     ck.files = (0..map.len() as u32)
         .map(|id| {
@@ -504,7 +512,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn declare(loaded: &'a Loaded) -> Result<Self> {
+    fn declare(loaded: &'a Loaded, map: &SourceMap) -> Result<Self> {
         let mut ck = Checker {
             t: Tables::default(),
             fns: RefCell::new(Vec::new()),
@@ -526,12 +534,15 @@ impl<'a> Checker<'a> {
             depth: Cell::new(0),
             ext_methods: RefCell::new(HashMap::new()),
             overloads: RefCell::new(HashMap::new()),
+            ext_overrides: RefCell::new(HashMap::new()),
+            std_modules: Vec::new(),
             unstable_globals: unstable_globals(loaded),
             overrides: RefCell::new(Vec::new()),
             is_targets: RefCell::new(BTreeSet::new()),
             upcasts: RefCell::new(BTreeSet::new()),
             stringified: RefCell::new(BTreeSet::new()),
         };
+        ck.std_modules = loaded.modules.iter().map(|m| map.file(m.file).name.starts_with("<std>")).collect();
         for module in 0..loaded.modules.len() {
             ck.declare_module(loaded, module)?;
         }
@@ -1028,6 +1039,20 @@ impl<'a> Checker<'a> {
         if decl.modifier != ast::Modifier::None && !decl.type_params.is_empty() {
             return Err(Diagnostic::new("a generic method cannot be `open`", decl.name.span));
         }
+        // The program's own method of a name the standard library's methods already use hides the library's, for
+        // the program (the library's own code keeps calling its own).
+        let std_first = existing.methods.get(name).copied().filter(|&f| {
+            !inherited
+                && !self.is_std_module(mi)
+                && self.is_std_module(self.func(f).module)
+                && decl.modifier == ast::Modifier::None
+                && decl.type_params.is_empty()
+                && !existing.open
+                && existing.parent.is_none()
+                && !existing.virtuals.contains_key(name)
+                && !existing.generic_methods.contains_key(name)
+                && !existing.statics.contains_key(name)
+        });
         // A second method of the same name is another version of it, unless a subtype could replace the method.
         let first = existing.methods.get(name).copied().filter(|_| {
             !inherited
@@ -1041,6 +1066,7 @@ impl<'a> Checker<'a> {
         });
         if !inherited
             && first.is_none()
+            && std_first.is_none()
             && (existing.methods.contains_key(name)
                 || existing.generic_methods.contains_key(name)
                 || existing.statics.contains_key(name))
@@ -1067,6 +1093,20 @@ impl<'a> Checker<'a> {
         }
         let symbol = method_symbol(module_name, &owner, ty, &decl.name.name);
         let mut info = self.signature(mi, decl, FuncKind::Method, Some(Ty::Obj(ty)), symbol, subst)?;
+        if let Some(std_first) = std_first {
+            let mine = self.t.ty(ty).user_methods.get(name).copied();
+            let duplicate = format!("`{owner}` already has a method `{}`", decl.name.name);
+            let (suffix, mut versions) = self.override_versions(mine, std_first, &info, decl.name.span, duplicate)?;
+            info.symbol.push_str(&suffix);
+            let id = self.declare_fn(info, Work::Method { decl, subst: subst.clone() });
+            let primary = mine.unwrap_or(id);
+            versions.push(id);
+            self.set_versions(primary, versions);
+            self.t.update_type(ty, |ti| {
+                ti.user_methods.insert(name.clone(), primary);
+            });
+            return Ok(());
+        }
         if let Some(first) = first {
             let duplicate = format!("`{owner}` already has a method `{}`", decl.name.name);
             info.symbol.push_str(&self.overload_suffix(first, &info, decl.name.span, duplicate)?);
@@ -1164,7 +1204,12 @@ impl<'a> Checker<'a> {
     /// `fn String.shout() = …` / `extern fn String.length() -> Int`: a method on a built-in type.
     fn declare_builtin_method(&self, module_name: &str, mi: usize, ty: Ty, decl: &'a ast::FnDecl) -> Result<()> {
         let key = (builtin_key(ty), decl.name.name.clone());
-        let first = self.ext_methods.borrow().get(&key).copied();
+        let mut first = self.ext_methods.borrow().get(&key).copied();
+        // The program's own method of a name the standard library already uses hides it, for the program.
+        let std_first = first.filter(|&f| !self.is_std_module(mi) && self.is_std_module(self.func(f).module));
+        if std_first.is_some() {
+            first = self.ext_overrides.borrow().get(&key).copied();
+        }
         let duplicate = format!("`{}` already has a method `{}`", self.t.ty_name(ty), decl.name.name);
         if decl.is_static {
             return Err(Diagnostic::new("`static fn` is not supported on built-in types", decl.name.span)
@@ -1175,6 +1220,16 @@ impl<'a> Checker<'a> {
         }
         let symbol = symbol_for(module_name, Some(&self.t.ty_name(ty)), decl);
         let mut info = self.signature(mi, decl, FuncKind::Method, Some(ty), symbol, &self.empty)?;
+        if let Some(std_first) = std_first {
+            let (suffix, mut versions) = self.override_versions(first, std_first, &info, decl.name.span, duplicate)?;
+            info.symbol.push_str(&suffix);
+            let id = self.declare_fn(info, Work::Method { decl, subst: self.empty.clone() });
+            let primary = first.unwrap_or(id);
+            versions.push(id);
+            self.set_versions(primary, versions);
+            self.ext_overrides.borrow_mut().insert(key, primary);
+            return Ok(());
+        }
         if let Some(first) = first {
             info.symbol.push_str(&self.overload_suffix(first, &info, decl.name.span, duplicate)?);
         }
@@ -1186,6 +1241,39 @@ impl<'a> Checker<'a> {
             }
         }
         Ok(())
+    }
+
+    pub fn is_std_module(&self, module: usize) -> bool {
+        self.std_modules.get(module).copied().unwrap_or(false)
+    }
+
+    /// A method the program declared over a standard-library one of the same name, made from the versions
+    /// the program wrote and the standard library's versions that they do not replace.
+    /// `mine` is the program's first version so far (if any), `std_first` the standard library's, and `info`
+    /// the new declaration: gives the text for its symbol, and the versions it leaves in place.
+    fn override_versions(
+        &self,
+        mine: Option<FnId>,
+        std_first: FnId,
+        info: &FnInfo,
+        span: Span,
+        duplicate: String,
+    ) -> Result<(String, Vec<FnId>)> {
+        let same = |v: FnId| {
+            let other = self.func(v);
+            other.params.len() == info.params.len() && other.params.iter().zip(&info.params).all(|(a, b)| a.ty == b.ty)
+        };
+        let mut versions = match mine {
+            Some(first) => self.overloads_of(first).unwrap_or_else(|| vec![first]),
+            None => self.overloads_of(std_first).unwrap_or_else(|| vec![std_first]),
+        };
+        let written = versions.iter().filter(|&&v| !self.is_std_module(self.func(v).module)).count();
+        if versions.iter().any(|&v| same(v) && !self.is_std_module(self.func(v).module)) {
+            return Err(Diagnostic::new(duplicate, span));
+        }
+        // the program's own version replaces the standard library's with the same parameters
+        versions.retain(|&v| !same(v));
+        Ok((if written == 0 { String::new() } else { format!("__v{written}") }, versions))
     }
 
     /// Every version of an overloaded function or method (the first declared, which is what a lookup by
@@ -1217,6 +1305,18 @@ impl<'a> Checker<'a> {
             .unwrap_or(first)
     }
 
+    /// Make `primary` stand for `versions` (or for itself alone when that is all).
+    fn set_versions(&self, primary: FnId, versions: Vec<FnId>) {
+        let mut table = self.overloads.borrow_mut();
+        let mut all = vec![primary];
+        all.extend(versions.into_iter().filter(|&v| v != primary));
+        if all.len() > 1 {
+            table.insert(primary, all);
+        } else {
+            table.remove(&primary);
+        }
+    }
+
     fn add_overload(&self, first: FnId, id: FnId) {
         self.overloads.borrow_mut().entry(first).or_insert_with(|| vec![first]).push(id);
     }
@@ -1227,6 +1327,17 @@ impl<'a> Checker<'a> {
             &self.fns.borrow()[id].work,
             Some(Work::Fn { decl, .. } | Work::Method { decl, .. }) if matches!(decl.body, ast::FnBody::Extern { .. })
         )
+    }
+
+    /// [`Self::ext_method`] as code in `module` sees it: the program's own methods hide the standard library's
+    /// of the same name, but the standard library's own code still calls its own.
+    pub fn ext_method_from(&self, module: usize, ty: Ty, name: &str) -> Option<FnId> {
+        if !self.is_std_module(module)
+            && let Some(&mine) = self.ext_overrides.borrow().get(&(builtin_key(ty), name.to_string()))
+        {
+            return Some(mine);
+        }
+        self.ext_method(ty, name)
     }
 
     /// The method `name` that was added to built-in type `ty`, if any.

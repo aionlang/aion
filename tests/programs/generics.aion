@@ -48,8 +48,8 @@ println(repeat(Box(0), 100, { Box(it.get() + 1) }).get())
 // Methods on built-in types.
 fn String.shout() = "$this!"
 fn Int.double() = this * 2
-fn Int.isEvenNumber() = this % 2 == 0
+fn Int.isEven() = this % 2 == 0
 fn String.twice() = shout() + shout()
 
-println("hi".shout(), 21.double(), 4.isEvenNumber(), 7.isEvenNumber(), "ab".twice())
+println("hi".shout(), 21.double(), 4.isEven(), 7.isEven(), "ab".twice())
 println("héllo".length(), "banana".contains("nan"), "shout".upper(), "ABC".lower(), "abc".startsWith("ab"))

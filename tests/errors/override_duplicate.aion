@@ -1,0 +1,3 @@
+// error: `Int` already has a method `shout`
+fn Int.shout() = 1
+fn Int.shout() = 2

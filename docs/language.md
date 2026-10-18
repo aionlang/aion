@@ -662,12 +662,12 @@ is `this`.
 
 ```aion
 fn String.shout() = "$this!"
-fn Int.isEvenNumber() = this % 2 == 0
+fn Int.isEven() = this % 2 == 0
 fn Int.times(action: (Int) -> Unit) {
     for i in 0..this { action(i) }
 }
 
-println("hi".shout(), 4.isEvenNumber(), "héllo".length(), "banana".contains("nan"))
+println("hi".shout(), 4.isEven(), "héllo".length(), "banana".contains("nan"))
 3.times { print(it, "") }
 println()
 ```
@@ -678,6 +678,13 @@ println()
 `lower()`; offsets are in bytes.  Methods are visible everywhere once the module that
 declares them is part of the program (extension methods are global, so name
 them with care).
+
+A method your program declares hides the standard library's method of the same name, for your
+program: the library may add `Int.isEven()` in a later version without breaking a program that
+already has its own.  The library's own code keeps calling its own method.  The same goes for the
+methods you add to `List`, `Map` and `Set`.  If the parameters differ, both are available (see
+[overloading](#overloading)); if they are the same, yours is the one called.  Two methods of your
+own with the same parameters are still an error.
 
 ## Collections
 

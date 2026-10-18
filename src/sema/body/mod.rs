@@ -1177,7 +1177,7 @@ impl<'c, 'a> Cx<'c, 'a> {
         for _ in 0..4 {
             let iter_fn = match coll.ty {
                 Ty::Obj(t) => self.ck.t.ty(t).methods.get("iter").copied(),
-                other => self.ck.ext_method(other, "iter"),
+                other => self.ck.ext_method_from(self.module, other, "iter"),
             };
             let Some(iter_fn) = iter_fn else { break };
             let before = coll.ty;
@@ -1239,7 +1239,7 @@ impl<'c, 'a> Cx<'c, 'a> {
         let whole = self.value(obj)?;
         let method = match whole.ty {
             Ty::Obj(t) => self.ck.t.ty(t).methods.get("slice").copied(),
-            other => self.ck.ext_method(other, "slice"),
+            other => self.ck.ext_method_from(self.module, other, "slice"),
         };
         let Some(method) = method else {
             return Err(Diagnostic::new(format!("a {} cannot be sliced", self.name(whole.ty)), span)
@@ -1279,7 +1279,7 @@ impl<'c, 'a> Cx<'c, 'a> {
     /// `collection.size()`
     fn size_of(&mut self, coll: hir::Expr, span: Span) -> Result<hir::Expr> {
         if !matches!(coll.ty, Ty::Obj(_))
-            && let Some(size) = self.ck.ext_method(coll.ty, "size")
+            && let Some(size) = self.ck.ext_method_from(self.module, coll.ty, "size")
         {
             let call = self.call_values(size, Some(coll), Vec::new(), span)?;
             return self.coerce(call, Ty::Int, span);
@@ -1458,7 +1458,7 @@ impl<'c, 'a> Cx<'c, 'a> {
         }
         // `bytes[i] = v`: a `set` method added to a built-in type
         if !matches!(obj.ty, Ty::Obj(_))
-            && let Some(set) = self.ck.ext_method(obj.ty, "set")
+            && let Some(set) = self.ck.ext_method_from(self.module, obj.ty, "set")
             && let [_, _, value] = self.ck.func(set).params.as_slice()
         {
             return Ok(value.ty);
@@ -1471,7 +1471,7 @@ impl<'c, 'a> Cx<'c, 'a> {
     fn get_element(&mut self, obj: hir::Expr, index: hir::Expr, span: Span) -> Result<hir::Expr> {
         // `"text"[i]`: a `get` method added to a built-in type
         if !matches!(obj.ty, Ty::Obj(_))
-            && let Some(get) = self.ck.ext_method(obj.ty, "get")
+            && let Some(get) = self.ck.ext_method_from(self.module, obj.ty, "get")
         {
             return self.call_values(get, Some(obj), vec![(index, span)], span);
         }
@@ -1494,7 +1494,7 @@ impl<'c, 'a> Cx<'c, 'a> {
     /// `obj[index] = value`
     fn set_element(&mut self, obj: hir::Expr, index: hir::Expr, value: hir::Expr, span: Span) -> Result<hir::Stmt> {
         if !matches!(obj.ty, Ty::Obj(_))
-            && let Some(set) = self.ck.ext_method(obj.ty, "set")
+            && let Some(set) = self.ck.ext_method_from(self.module, obj.ty, "set")
         {
             let call = self.call_values(set, Some(obj), vec![(index, span), (value, span)], span)?;
             return Ok(hir::Stmt::Expr(call));
@@ -2730,7 +2730,7 @@ impl<'c, 'a> Cx<'c, 'a> {
         // `a + b` on Bytes joins them.
         if l.ty == Ty::Bytes
             && op == B::Add
-            && let Some(concat) = self.ck.ext_method(Ty::Bytes, "concat")
+            && let Some(concat) = self.ck.ext_method_from(self.module, Ty::Bytes, "concat")
         {
             return self.call_values(concat, Some(l), vec![(r, span)], span);
         }
@@ -2800,10 +2800,10 @@ impl<'c, 'a> Cx<'c, 'a> {
                 info.methods.get(name).copied()
             }
             Ty::Int | Ty::Float | Ty::Str | Ty::Char | Ty::Bool | Ty::Bytes if matches!(r, Ty::Obj(_)) => {
-                self.ck.ext_method(l, name)
+                self.ck.ext_method_from(self.module, l, name)
             }
             // `"ab" * 3` and `'-' * 10` are text repeated.
-            Ty::Str | Ty::Char if r == Ty::Int && op == ast::BinOp::Mul => self.ck.ext_method(l, name),
+            Ty::Str | Ty::Char if r == Ty::Int && op == ast::BinOp::Mul => self.ck.ext_method_from(self.module, l, name),
             _ => None,
         }?;
         Some((method, name, compare))
@@ -3000,7 +3000,7 @@ impl<'c, 'a> Cx<'c, 'a> {
                 // Inside a method added to a built-in type, its siblings can be called bare.
                 if self.this.is_none()
                     && let Some(this) = self.find_local("this")
-                    && let Some(m) = self.ck.ext_method(self.locals[this].ty, n)
+                    && let Some(m) = self.ck.ext_method_from(self.module, self.locals[this].ty, n)
                 {
                     let recv = self.local_expr(this);
                     return self.call_fn(m, Some(recv), args, span);
@@ -3183,11 +3183,11 @@ impl<'c, 'a> Cx<'c, 'a> {
         };
         if recv.ty == Ty::Int
             && matches!(member.name.as_str(), "and" | "or" | "xor" | "shl" | "shr" | "ushr" | "inv")
-            && self.ck.ext_method(Ty::Int, &member.name).is_none()
+            && self.ck.ext_method_from(self.module, Ty::Int, &member.name).is_none()
         {
             return self.bit_operation(recv, member, args, span);
         }
-        if let Some(id) = self.ck.ext_method(recv.ty, &member.name) {
+        if let Some(id) = self.ck.ext_method_from(self.module, recv.ty, &member.name) {
             if !type_args.is_empty() {
                 return Err(not_generic(&member.name));
             }
@@ -3207,7 +3207,8 @@ impl<'c, 'a> Cx<'c, 'a> {
             }
             return self.array_method(recv, member, args, span);
         }
-        if let Some(&id) = info.methods.get(&member.name) {
+        let mine = if self.ck.is_std_module(self.module) { None } else { info.user_methods.get(&member.name) };
+        if let Some(&id) = mine.or(info.methods.get(&member.name)) {
             if !type_args.is_empty() {
                 return Err(not_generic(&member.name));
             }
