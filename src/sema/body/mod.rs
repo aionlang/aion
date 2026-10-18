@@ -2801,6 +2801,8 @@ impl<'c, 'a> Cx<'c, 'a> {
             Ty::Int | Ty::Float | Ty::Str | Ty::Char | Ty::Bool | Ty::Bytes if matches!(r, Ty::Obj(_)) => {
                 self.ck.ext_method(l, name)
             }
+            // `"ab" * 3` and `'-' * 10` are text repeated.
+            Ty::Str | Ty::Char if r == Ty::Int && op == ast::BinOp::Mul => self.ck.ext_method(l, name),
             _ => None,
         }?;
         Some((method, name, compare))

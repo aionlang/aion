@@ -477,7 +477,8 @@ println(text[0], text.charAt(1))                   // h é   (offsets are bytes)
 ```
 
 `c + n` and `c - n` are Chars, `c - d` is the distance (an `Int`), and `"$c"` or
-`c.toString()` makes text.  Letter and case rules are exact for ASCII, Latin-1,
+`c.toString()` makes text.  `c * n` and `s * n` repeat a Char or a String `n` times:
+`'-' * 3` is `"---"`.  Letter and case rules are exact for ASCII, Latin-1,
 Greek and Cyrillic and a rule of thumb for other scripts.  `s[i]` and `charAt(i)`
 take a **byte** offset (the character that starts there), so use `chars()` or a
 `for` loop to walk text with non-ASCII letters.

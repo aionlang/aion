@@ -1,0 +1,8 @@
+/** `*` repeats text: `'a' * 3` and `"ab" * 3` are strings. */
+fn main() {
+    println('a' * 10)
+    println("ab" * 3 + "|")
+    println('-' * 0 + "|")
+    n := 4
+    println("=" * (n + 1))
+}

@@ -2119,6 +2119,10 @@ fn Float.coerceAtLeast(low: Float) = if this < low { low } else { this }
 fn Float.coerceAtMost(high: Float) = if this > high { high } else { this }
 /** The number, kept between `low` and `high`. */
 fn Float.coerceIn(low: Float, high: Float) = this.clamp(low, high)
+/** The character repeated `n` times, as text: `'-' * 3` is `"---"`. */
+fn Char.times(n: Int) -> String = toString().repeat(n)
+/** The text repeated `n` times: `"ab" * 3` is `"ababab"`. */
+fn String.times(n: Int) -> String = repeat(n)
 /** Is the character a letter or a digit? */
 fn Char.isLetterOrDigit() = isLetter() || isDigit()
 
