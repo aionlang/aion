@@ -1,0 +1,51 @@
+/**
+ * Everyday helpers that need no import: `abs min max clamp`, `repeat`, `require check error`, `listOf`,
+ * string helpers (`padStart reversed words capitalize trimIndent toInt format ...`), and the list, map and
+ * set methods people reach for (`sort remove insert flatten unzip getOrPut merge union intersect ...`).
+ */
+fn main() {
+    println(abs(-3), abs(-2.5), min(2, 5), max("a", "b"), clamp(15, 0, 10), 15.coerceIn(0, 10), 4.isEven(), 7.isOdd())
+    repeat(3) { print("*$it ") }
+    println()
+    require(1 < 2, "math works")
+    check(true)
+    println(listOf(1, 2, 3), emptyList<Int>().size(), emptyMap<String, Int>().size())
+
+    println("7".padStart(3, '0'), "ab".padEnd(4, '.') + "|", "abc".reversed(), "abc".first(), "abc".last())
+    println("hello".take(2), "hello".drop(3), "hello".takeLast(2), "hello".dropLast(2), "banana".count { it == 'a' })
+    println("a1b2".filter { it.isDigit() }, "hello world".capitalize(), " a  b\tc ".words(), "pre-fix".removePrefix("pre-"))
+    println("12".toInt() + 1, "2.5".toFloat() * 2.0, "true".toBool(), "x".isNotEmpty(), "abc".toList())
+    println("""
+        line one
+          indented
+    """.trimIndent())
+
+    println("%d items cost %.2f".format(3, 4.5), "[%5d|%-5d|%05d]".format(42, 42, 42), "%s=%x %b %c %%".format("n", 255, 5, 'z'))
+    println("%+d %+.1f %8.3f|%-8s|%8s|".format(5, 2.25, 3.14159, "ab", "cd"))
+
+    xs := [3, 1, 2]
+    xs.sort()
+    println(xs, xs.indices(), xs.lastIndex(), xs.isNotEmpty())
+    xs.reverse()
+    xs.insert(1, 9)
+    println(xs, xs.remove(9), xs.remove(100), xs)
+    xs.removeIf { it == 3 }
+    println(xs, xs.indexOfFirst { it == 1 }, xs.indexOfLast { it > 5 })
+    println([[1], [2, 3]].flatten(), [(1, "a"), (2, "b")].unzip(), [1, 2, 3].joinToString("-", "<", ">"))
+    println(["a", "bb", "cc"].maxOf { it.length() }, ["a", "bb"].minOf { it.length() }, [1, 2, 3, 4].takeLast(2), [1, 2, 3, 4].dropLast(3))
+    println(["x", "yy"].associateBy { it.length() }, [5, 6].getOrElse(9) { -1 }, [3, 1, 2].sortedByDescending { it })
+    ys := [5, 4, 3]
+    ys.sortBy { it }
+    ys.swap(0, 2)
+    println(ys)
+
+    m := Map<String, Int>()
+    println(m.getOrPut("a") { 1 }, m.getOrPut("a") { 99 })
+    m.merge("a", 5) { x, y -> x + y }
+    m.merge("b", 7) { x, y -> x + y }
+    println(m, m.mapValues { it * 10 }, m.filter { k, v -> v > 6 }, m.any { k, v -> v > 6 }, m.count { k, v -> v > 0 })
+
+    a := setOf([1, 2, 3])
+    b := setOf([2, 3, 4])
+    println(a.union(b), a.intersect(b), a.subtract(b), a.isSubsetOf(a.union(b)), a.filter { it > 1 })
+}
