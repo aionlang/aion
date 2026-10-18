@@ -34,6 +34,28 @@ struct Variant {
     args: Vec<Arg>,
 }
 
+/// The words that begin a declaration, for suggesting a correction to a misspelled one.
+const DECLARATION_WORDS: [&str; 15] = [
+    "fn", "type", "data", "open", "static", "extern", "enum", "interface", "import", "from", "val", "synonym", "syn",
+    "typealias", "constructor",
+];
+
+/// How many single-character insertions, deletions or replacements turn `a` into `b`.
+fn edit_distance(a: &str, b: &str) -> usize {
+    let b: Vec<char> = b.chars().collect();
+    let mut row: Vec<usize> = (0..=b.len()).collect();
+    for (i, ca) in a.chars().enumerate() {
+        let mut diagonal = row[0];
+        row[0] = i + 1;
+        for (j, &cb) in b.iter().enumerate() {
+            let above = row[j + 1];
+            row[j + 1] = (diagonal + usize::from(ca != cb)).min(above + 1).min(row[j] + 1);
+            diagonal = above;
+        }
+    }
+    row[b.len()]
+}
+
 struct Parser<'a> {
     file: u32,
     src: &'a str,
@@ -306,7 +328,7 @@ impl<'a> Parser<'a> {
                     variables.extend(lets);
                 }
                 Token::Interface => items.push(Item::Interface(self.interface_decl()?)),
-                // `synonym Scope<V> = Map<String, V>`; `typealias` means the same
+                // `synonym Scope<V> = Map<String, V>`; `syn` and `typealias` mean the same
                 Token::Ident if self.at_alias() => items.push(Item::Alias(self.alias_decl()?)),
                 Token::Extern => {
                     let start = self.bump().span;
@@ -683,10 +705,35 @@ impl<'a> Parser<'a> {
     }
 
 
+    /// Two names in a row can't start a statement, so when the first is a near miss of a word that
+    /// starts a declaration (`synonim Name = …`), say which word was probably meant.
+    fn misspelled_keyword(&self) -> Option<Diagnostic> {
+        let tok = *self.toks.get(self.pos)?;
+        let next = self.toks.get(self.pos + 1)?;
+        if tok.kind != Token::Ident || next.kind != Token::Ident || next.nl {
+            return None;
+        }
+        let word = self.text(tok);
+        if DECLARATION_WORDS.contains(&word) {
+            return None;
+        }
+        if matches!(word, "var" | "let" | "const") {
+            return Some(
+                Diagnostic::new(format!("`{word}` is not an Aion keyword"), tok.span)
+                    .hint("declare a variable with `name := value`, or `val name = value` if it never changes"),
+            );
+        }
+        let reach = if word.chars().count() <= 3 { 1 } else { 2 };
+        let (best, distance) = DECLARATION_WORDS.iter().map(|&k| (k, edit_distance(word, k))).min_by_key(|&(_, d)| d)?;
+        (distance <= reach).then(|| {
+            Diagnostic::new(format!("unknown word `{word}`"), tok.span).hint(format!("did you mean `{best}`?"))
+        })
+    }
+
     /// `val name =` / `val name:`: a read-only variable (`val` is a keyword only here).
-    /// `synonym Name =` / `typealias Name<T> =`: two names in a row can't start anything else.
+    /// `synonym Name =` / `syn Name =` / `typealias Name<T> =`: two names in a row can't start anything else.
     fn at_alias(&self) -> bool {
-        matches!(self.text(self.toks[self.pos]), "synonym" | "typealias")
+        matches!(self.text(self.toks[self.pos]), "synonym" | "syn" | "typealias")
             && self.peek_at(1) == Some(Token::Ident)
             && matches!(self.peek_at(2), Some(Token::Eq | Token::Lt))
     }
@@ -974,6 +1021,9 @@ impl<'a> Parser<'a> {
 
     /// One statement, appended to `out`.  Destructuring (`a, b := e`) expands to several.
     fn stmt_into(&mut self, out: &mut Vec<Stmt>) -> Result<()> {
+        if let Some(unknown) = self.misspelled_keyword() {
+            return Err(unknown);
+        }
         let start = self.here();
         let kind = match self.peek() {
             Some(Token::Return) => {
@@ -2426,6 +2476,26 @@ mod tests {
         assert_eq!(m.items.len(), 3);
         assert!(matches!(&m.items[0], Item::Fn(f) if matches!(f.body, FnBody::Expr(_)) && f.ret.is_some()));
         assert!(matches!(&m.items[1], Item::Fn(f) if matches!(&f.body, FnBody::Extern { symbol: Some(s) } if s == "c_f")));
+    }
+
+    #[test]
+    fn a_misspelled_declaration_word_is_named() {
+        let err = |src: &str| Parser::new(0, src, 0).and_then(|mut p| p.module().map(|_| ())).unwrap_err();
+        let e = err("synonim Cmp = (Int) -> Bool
+");
+        assert!(e.message.contains("unknown word `synonim`"), "{}", e.message);
+        assert_eq!(e.hint.as_deref(), Some("did you mean `synonym`?"));
+        assert_eq!(err("fun add(a: Int) = a
+").hint.as_deref(), Some("did you mean `fn`?"));
+        assert!(err("var x = 1
+").message.contains("not an Aion keyword"));
+        // a near miss followed by something else is left to the usual error, and the real words parse
+        assert!(!err("synonim = 1 +
+").message.contains("unknown word"));
+        assert_eq!(module("syn Cmp = (Int) -> Bool
+").items.len(), 1);
+        assert_eq!(module("typealias Cmp = (Int) -> Bool
+").items.len(), 1);
     }
 
     #[test]

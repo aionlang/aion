@@ -5,7 +5,7 @@
  *
  * A synonym is only another name, so it is the same type as what it names: a `Prices` can be passed
  * where a `Map<String, Float>` is expected and the other way round.  It can take type parameters, and
- * it can be called like the constructor of the type it names.  `typealias` is a second spelling.
+ * it can be called like the constructor of the type it names.  `syn` and `typealias` are other spellings.
  */
 synonym Prices = Map<String, Float>
 synonym Table<V> = Map<String, V>

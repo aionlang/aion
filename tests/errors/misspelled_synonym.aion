@@ -1,0 +1,2 @@
+// error: unknown word `synonim`
+synonim Comparator = (Int, Int) -> Bool

@@ -60,7 +60,7 @@ pub enum Item {
     Fn(FnDecl),
     Type(TypeDecl),
     Interface(InterfaceDecl),
-    /// `synonym Name = Type` (or `typealias`)
+    /// `synonym Name = Type` (or `syn`, or `typealias`)
     Alias(AliasDecl),
     /// `fn Animal.speak() { ... }` — a method declared outside its type.
     /// For a generic type, `fn List<T>.first()` names the type's parameters.

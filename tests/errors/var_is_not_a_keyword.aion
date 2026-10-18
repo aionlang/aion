@@ -1,0 +1,2 @@
+// error: `var` is not an Aion keyword
+var count = 0

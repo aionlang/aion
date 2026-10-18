@@ -1,0 +1,12 @@
+/** `syn` is a short spelling of `synonym`; `typealias` is another. */
+syn Comparator = (Int, Int) -> Bool
+syn Table<V> = Map<String, V>
+typealias Names = List<String>
+
+fn check(a: Int, b: Int, ok: Comparator) = ok(a, b)
+
+println(check(1, 2) { x, y -> x < y })
+t := Table<Int>()
+t["a"] = 1
+names: Names = ["x"]
+println(t, names)
