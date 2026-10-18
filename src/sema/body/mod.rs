@@ -3475,9 +3475,22 @@ impl<'c, 'a> Cx<'c, 'a> {
             return Ok((only, Vec::new()));
         }
         // Arguments that need their context (a lambda, an empty list) stay unevaluated and fit any version.
+        // An argument that has an error of its own is reported as that error, not as a problem with the choice.
+        let mut broken: Option<Diagnostic> = None;
         let pre: Vec<Option<hir::Expr>> = args
             .iter()
-            .map(|a| if matches!(a.value.kind, A::Lambda { .. }) { None } else { self.value(&a.value).ok() })
+            .map(|a| {
+                if matches!(a.value.kind, A::Lambda { .. }) {
+                    return None;
+                }
+                match self.value(&a.value) {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        broken.get_or_insert(e);
+                        None
+                    }
+                }
+            })
             .collect();
         let given: Vec<String> = pre.iter().map(|p| p.as_ref().map_or("…".to_string(), |e| self.name(e.ty))).collect();
         let mut scored: Vec<(usize, FnId)> = Vec::new();
@@ -3502,6 +3515,11 @@ impl<'c, 'a> Cx<'c, 'a> {
         }
         let best = scored.iter().map(|&(s, _)| s).max();
         let top: Vec<FnId> = scored.iter().filter(|&&(s, _)| Some(s) == best).map(|&(_, v)| v).collect();
+        if top.len() != 1
+            && let Some(e) = broken
+        {
+            return Err(e);
+        }
         match top[..] {
             [chosen] => Ok((chosen, pre)),
             [] => Err(Diagnostic::new(format!("no version of `{name}` accepts ({})", given.join(", ")), span)

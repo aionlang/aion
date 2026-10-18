@@ -1,0 +1,4 @@
+// error: a Int has no method `nothing`
+fn f(x: Int) = x
+fn f(x: String) = x
+f(5.nothing())
