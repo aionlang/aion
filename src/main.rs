@@ -80,7 +80,9 @@ struct Cli {
 fn parse_args(args: &[String]) -> Result<Cli, String> {
     let mut command = None;
     let (mut input, mut output) = (None, None);
-    let mut opts = toolchain::Options { opt_level: "2".into(), keep_temps: false, trace: true };
+    // `AION_OPT=0` makes builds faster and slower-running by default (the test suite uses it); `-O<n>` wins.
+    let default_opt = std::env::var("AION_OPT").ok().filter(|o| matches!(o.as_str(), "0" | "1" | "2" | "3" | "s" | "z"));
+    let mut opts = toolchain::Options { opt_level: default_opt.unwrap_or_else(|| "2".into()), keep_temps: false, trace: true };
     let mut program_args = Vec::new();
     let mut project = None;
 

@@ -1,0 +1,57 @@
+/**
+ * Streams: a lazy pipeline over a collection, as in Java.
+ *
+ *   aion examples/streams.aion
+ *
+ * `list.stream()` starts one; `filter`, `map`, `sorted`, `limit` ... build it; a last step such as
+ * `toList`, `sum`, `joining`, `groupBy` or `reduce` runs it.  The functions you pass have these types
+ * (all defined in the prelude as `synonym`s, so they are just names for function types):
+ *
+ *   Predicate<T>      (T) -> Bool        filter, anyMatch, takeWhile, partition ...
+ *   Function<T, R>    (T) -> R           map, flatMap, groupBy, sortedBy ...
+ *   Consumer<T>       (T) -> Unit        forEach, peek
+ *   Supplier<T>       () -> T            generate
+ *   BinaryOperator<T> (T, T) -> T        reduce
+ *   Comparator<T>     (T, T) -> Int      sortedWith, minWith
+ */
+type Order(customer: String, item: String, price: Int)
+
+fn main() {
+    orders := [
+        Order("ann", "tea", 3), Order("bob", "cake", 5), Order("ann", "cake", 5),
+        Order("cy", "tea", 3), Order("bob", "coffee", 4), Order("ann", "coffee", 4),
+    ]
+
+    // total per customer, biggest spender first
+    totals := orders.stream().groupBy { it.customer }
+    ranked := totals.keys().stream().sortedBy { -totals[it].stream().sumOf { o -> o.price } }.toList()
+    for name in ranked {
+        println("$name: ${totals[name].stream().sumOf { it.price }}")
+    }
+
+    println(orders.stream().map { it.item }.distinct().sorted().joining(", "))
+    println(orders.stream().filter { it.price > 3 }.count())
+    println(orders.stream().anyMatch { it.item == "tea" }, orders.stream().allMatch { it.price > 3 })
+
+    // lazy: only as many orders are looked at as needed
+    first := orders.stream().peek { println("looking at ${it.item}") }.find { it.price == 5 }
+    println(first?.customer)
+
+    // endless streams, cut with limit
+    println(iterate(1) { it * 3 }.limit(6).toList())
+    println(streamRange(1, 6).map { it * it }.filter { it % 2 == 1 }.sum())
+    println(generate { "ab" }.limit(3).joining(""))
+}
+
+// > ann: 12
+// > bob: 9
+// > cy: 3
+// > cake, coffee, tea
+// > 4
+// > true false
+// > looking at tea
+// > looking at cake
+// > bob
+// > [1, 3, 9, 27, 81, 243]
+// > 35
+// > ababab

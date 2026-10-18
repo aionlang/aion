@@ -116,13 +116,13 @@ impl<'a> Checker<'a> {
             return Err(Diagnostic::new(format!("`{name}` takes {want} type argument(s), not {}", targs.len()), span)
                 .hint(format!("write it like `{name}<{params}>`")));
         }
-        if self.depth.get() > MAX_DEPTH {
+        if self.resolving_aliases.borrow().contains(&a) {
             return Err(Diagnostic::new(format!("`{name}` is defined in terms of itself"), alias.decl.name.span));
         }
         let subst: Subst = Rc::new(alias.decl.type_params.iter().map(|p| p.name.clone()).zip(targs).collect());
-        self.depth.set(self.depth.get() + 1);
+        self.resolving_aliases.borrow_mut().push(a);
         let ty = self.resolve_type(alias.module, &alias.decl.target, &subst);
-        self.depth.set(self.depth.get() - 1);
+        self.resolving_aliases.borrow_mut().pop();
         ty
     }
 

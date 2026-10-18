@@ -270,6 +270,8 @@ pub struct Checker<'a> {
     generic_types: RefCell<Vec<Rc<GenericType<'a>>>>,
     generic_ifaces: RefCell<Vec<Rc<GenericIface<'a>>>>,
     aliases: RefCell<Vec<Rc<Alias<'a>>>>,
+    /// The synonyms being resolved right now, to catch one that is defined through itself.
+    resolving_aliases: RefCell<Vec<usize>>,
     /// For a type that is an instance of a generic one: which, and with what arguments.
     instance_of: RefCell<HashMap<TypeId, (usize, Vec<Ty>)>>,
     /// The same for instances of generic interfaces.
@@ -286,7 +288,7 @@ pub struct Checker<'a> {
     ext_methods: RefCell<HashMap<(u8, String), FnId>>,
     /// Names of module variables that functions, lambdas or other modules assign:
     /// these are never narrowed by null checks.
-    unstable_globals: HashSet<String>,
+    unstable_globals: HashSet<(usize, String)>,
     /// Types named on the right of `is` / `as`.
     is_targets: RefCell<BTreeSet<TypeId>>,
     /// `override fn`s with the method each replaces, to check that the signatures agree.
@@ -511,6 +513,7 @@ impl<'a> Checker<'a> {
             generic_types: RefCell::new(Vec::new()),
             generic_ifaces: RefCell::new(Vec::new()),
             aliases: RefCell::new(Vec::new()),
+            resolving_aliases: RefCell::new(Vec::new()),
             instance_of: RefCell::new(HashMap::new()),
             iface_instance_of: RefCell::new(HashMap::new()),
             module_names: loaded.modules.iter().map(|m| m.name.clone()).collect(),
@@ -1401,6 +1404,12 @@ impl<'a> Checker<'a> {
         None
     }
 
+    /// Is the module variable `g` (named `name`) assigned somewhere that makes null checks on it unreliable?
+    pub fn is_unstable_global(&self, g: GlobalId, name: &str) -> bool {
+        let module = self.func(self.t.globals[g].init_fn).module;
+        [module, usize::MAX].into_iter().any(|m| self.unstable_globals.contains(&(m, name.to_string())))
+    }
+
     /// The prelude's `Any`.
     pub fn any_type(&self) -> Option<TypeId> {
         match self.t.scopes[0].items.get("Any") {
@@ -1529,21 +1538,25 @@ impl<'a> Checker<'a> {
     }
 }
 
-/// Names that some function body, lambda or `module.name = …` assigns.  Top-level
-/// statements assigning their own variables in sequence do not count.
-fn unstable_globals(loaded: &Loaded) -> HashSet<String> {
+/// Module variables that are assigned somewhere other than straight-line top-level code, so a null check on
+/// them proves nothing later.  Keyed by the module the assignment is in: the prelude (module 0) cannot assign
+/// a variable of the program, so its assignments only count against its own variables; an assignment in any
+/// other module counts for every module (`MAX`), as does an assignment to a field (`a.name = …`).
+fn unstable_globals(loaded: &Loaded) -> HashSet<(usize, String)> {
     use ast::FnBody;
+    const EVERYWHERE: usize = usize::MAX;
     let mut names = HashSet::new();
-    let mut anywhere = |a: body::Assign<'_>| {
-        names.insert(a.name.to_string());
-    };
     let fn_decl = |d: &ast::FnDecl, note: &mut dyn FnMut(body::Assign<'_>)| match &d.body {
         FnBody::Block(stmts) => body::walk_stmts(stmts, false, note),
         FnBody::Expr(e) => body::walk_expr(e, false, note),
         FnBody::Extern { .. } => {}
     };
     let mut top_level = Vec::new();
-    for module in &loaded.modules {
+    for (mi, module) in loaded.modules.iter().enumerate() {
+        let scope = if mi == 0 { 0 } else { EVERYWHERE };
+        let mut anywhere = |a: body::Assign<'_>| {
+            names.insert((if a.field { EVERYWHERE } else { scope }, a.name.to_string()));
+        };
         for item in &module.ast.items {
             match item {
                 Item::Fn(d) | Item::Method { decl: d, .. } => fn_decl(d, &mut anywhere),
@@ -1555,16 +1568,16 @@ fn unstable_globals(loaded: &Loaded) -> HashSet<String> {
                     }
                     td.methods.iter().for_each(|m| fn_decl(m, &mut anywhere));
                 }
-                Item::Stmt(s) => top_level.push(s),
+                Item::Stmt(s) => top_level.push((scope, s)),
                 Item::Interface(_) | Item::Alias(_) => {}
             }
         }
     }
     // Plain top-level assignments are straight-line code; only lambdas and `a.b = …` count.
-    for s in top_level {
+    for (scope, s) in top_level {
         body::walk_stmt(s, false, &mut |a| {
             if a.in_lambda || a.field {
-                names.insert(a.name.to_string());
+                names.insert((if a.field { EVERYWHERE } else { scope }, a.name.to_string()));
             }
         });
     }

@@ -1302,3 +1302,758 @@ fn __cast_String_Bool(s: String) -> Bool {
 fn __cast_String_Int_safe(s: String) -> Int? = s.toIntOrNull()
 fn __cast_String_Float_safe(s: String) -> Float? = s.toFloatOrNull()
 fn __cast_String_Bool_safe(s: String) -> Bool? = if s == "true" { true } else if s == "false" { false } else { null }
+
+// ── Function types ──────────────────────────────────────────────────────────────────────────────
+/** A test on a value: `Predicate<Int>` is `(Int) -> Bool`.  `filter`, `any`, `takeWhile` and friends take one. */
+synonym Predicate<T> = (T) -> Bool
+/** A test on two values: `(A, B) -> Bool`. */
+synonym BiPredicate<A, B> = (A, B) -> Bool
+/** Turns a `T` into an `R`: `(T) -> R`.  What `map` takes. */
+synonym Function<T, R> = (T) -> R
+/** Turns two values into a third: `(A, B) -> R`. */
+synonym BiFunction<A, B, R> = (A, B) -> R
+/** Does something with a value and gives nothing back: `(T) -> Unit`.  What `forEach` and `peek` take. */
+synonym Consumer<T> = (T) -> Unit
+/** Makes a value out of nothing: `() -> T`.  What `generate` takes. */
+synonym Supplier<T> = () -> T
+/** Turns a `T` into another `T`: `(T) -> T`. */
+synonym UnaryOperator<T> = (T) -> T
+/** Combines two `T`s into one: `(T, T) -> T`.  What `reduce` takes. */
+synonym BinaryOperator<T> = (T, T) -> T
+/** Orders two values: negative if the first goes first, zero if they tie, positive if the second does. */
+synonym Comparator<T> = (T, T) -> Int
+
+// ── Streams ─────────────────────────────────────────────────────────────────────────────────────
+// A one-slot holder, for state that a stream's closures share.
+type __Cell<V>(value: V? = null)
+
+// Everything a pull function still produces.
+fn __drain<T>(src: () -> T?) -> List<T> {
+    out := List<T>()
+    x := src()
+    while x != null {
+        out.add(x)
+        x = src()
+    }
+    return out
+}
+
+fn __to_array<T>(items: List<T>) -> Array<T> {
+    out := Array<T>(items.size())
+    for i in 0..items.size() { out[i] = items[i] }
+    return out
+}
+
+// The loops behind some stream steps are plain functions: inside a closure, a variable that is assigned
+// (`x = src()`) is never smart-cast, so `while x != null { use(x) … }` only works out here.
+fn __next_chunk<T>(src: () -> T?, size: Int) -> List<T> {
+    chunk := List<T>()
+    x := src()
+    while x != null {
+        chunk.add(x)
+        if chunk.size() == size { break }
+        x = src()
+    }
+    return chunk
+}
+
+fn __fill<T>(window: List<T>, src: () -> T?, size: Int) {
+    x := src()
+    while x != null {
+        window.add(x)
+        if window.size() == size { break }
+        x = src()
+    }
+}
+
+fn __slide<T>(window: List<T>, src: () -> T?, step: Int) -> Bool {
+    n := 0
+    while n < step {
+        x := src()
+        if x == null { return false }
+        window.removeAt(0)
+        window.add(x)
+        n += 1
+    }
+    return true
+}
+
+fn __skip_while<T>(src: () -> T?, drop: Predicate<T>) -> T? {
+    x := src()
+    while x != null && drop(x) { x = src() }
+    return x
+}
+
+// `chunked` and `windowed` are written out here, so that `Stream<T>` need not name `Stream<List<T>>`
+// in its own methods (a type that mentions ever larger versions of itself cannot be built).
+fn __chunked<T>(src: () -> T?, size: Int) -> Stream<List<T>> {
+    if size <= 0 { panic("chunked needs a positive size") }
+    return Stream<List<T>>({
+        chunk := __next_chunk(src, size)
+        if chunk.isEmpty() { null } else { chunk }
+    })
+}
+
+fn __windowed<T>(src: () -> T?, size: Int, step: Int) -> Stream<List<T>> {
+    if size <= 0 || step <= 0 { panic("windowed needs a positive size and step") }
+    window := List<T>()
+    started := false
+    return Stream<List<T>>({
+        full := false
+        if !started {
+            started = true
+            __fill(window, src, size)
+            full = window.size() == size
+        } else if window.size() == size {
+            full = __slide(window, src, step)
+        }
+        if full { window.copy() } else { null }
+    })
+}
+
+/** Count, sum, smallest, largest and mean of a stream of numbers (see `Stream.summaryStatistics`). */
+data type Stats(count: Int, sum: Float, min: Float, max: Float, average: Float)
+
+/**
+ * A lazy sequence of values, as in Java: `list.stream().filter(...).map(...).limit(3).toList()`.
+ * Nothing runs until a *terminal* operation (`toList`, `forEach`, `sum`, `count`, `reduce`, `anyMatch`,
+ * ...) asks for values, and each value travels through the whole chain before the next one starts, so
+ * `limit` and `findFirst` stop early and a stream can be endless (`iterate`, `generate`).
+ * A stream is used once: after a terminal operation it is spent.
+ *
+ *     names := ["ann", "bob", "cy", "dee"]
+ *     names.stream()
+ *          .filter { it.length() == 3 }          // Predicate<String>
+ *          .map { it.upper() }                    // Function<String, String>
+ *          .sorted()
+ *          .joining(", ")                         // "ANN, BOB, DEE"
+ *
+ * Make one with `list.stream()`, `set.stream()`, `map.stream()`, `(1..10).stream()`, `streamOf(1, 2, 3)`,
+ * `iterate(1) { it * 2 }`, `generate { random() }`, `streamRange(0, 5)` or `emptyStream<Int>()`.
+ *
+ * Java's `collect(Collectors.x(...))` is a method here: `toList`, `toSet`, `toMap`, `groupBy`,
+ * `groupCounting`, `partition`, `joining`, `count`, `sum`, `average`, `summaryStatistics`.  A stream
+ * has no `null` elements (`null` marks its end), so a `Stream<Int?>` is not possible.
+ */
+type Stream<T>(pull: () -> T?) {
+    // ── intermediate operations: each gives a new stream ──
+
+    /** The next value, or `null` when the stream is spent. */
+    fn next() -> T? = pull()
+
+    /** The values for which `keep` is true.  (`Stream.filter`) */
+    fn filter(keep: Predicate<T>) -> Stream<T> {
+        src := pull
+        return Stream<T>({
+            found: T? = null
+            done := false
+            while !done {
+                x := src()
+                if x == null {
+                    done = true
+                } else if keep(x) {
+                    found = x
+                    done = true
+                }
+            }
+            found
+        })
+    }
+
+    /** The values for which `drop` is false. */
+    fn filterNot(drop: Predicate<T>) -> Stream<T> = filter { !drop(it) }
+
+    /** Each value turned into `f(value)`.  (`Stream.map`) */
+    fn map<R>(f: Function<T, R>) -> Stream<R> {
+        src := pull
+        return Stream<R>({
+            x := src()
+            if x == null { null } else { f(x) }
+        })
+    }
+
+    /** Like `map`, with the position of the value as well: `f(index, value)`. */
+    fn mapIndexed<R>(f: BiFunction<Int, T, R>) -> Stream<R> {
+        src := pull
+        position := 0
+        return Stream<R>({
+            x := src()
+            if x == null {
+                null
+            } else {
+                i := position
+                position += 1
+                f(i, x)
+            }
+        })
+    }
+
+    /** `f(value)` for each value, leaving out the `null`s. */
+    fn mapNotNull<R>(f: (T) -> R?) -> Stream<R> {
+        src := pull
+        return Stream<R>({
+            found: R? = null
+            done := false
+            while !done {
+                x := src()
+                if x == null {
+                    done = true
+                } else {
+                    y := f(x)
+                    if y != null {
+                        found = y
+                        done = true
+                    }
+                }
+            }
+            found
+        })
+    }
+
+    /** Each value turned into a stream, and those streams joined end to end.  (`Stream.flatMap`) */
+    fn flatMap<R>(f: Function<T, Stream<R>>) -> Stream<R> {
+        src := pull
+        inner := __Cell<Stream<R>>()
+        return Stream<R>({
+            found: R? = null
+            done := false
+            while !done {
+                current := inner.value
+                if current != null {
+                    y := current.next()
+                    if y != null {
+                        found = y
+                        done = true
+                    } else {
+                        inner.value = null
+                    }
+                } else {
+                    x := src()
+                    if x == null { done = true } else { inner.value = f(x) }
+                }
+            }
+            found
+        })
+    }
+
+    /** Like `flatMap`, for a function that gives a list. */
+    fn flatMapList<R>(f: Function<T, List<R>>) -> Stream<R> = flatMap { f(it).stream() }
+
+    /** The first occurrence of each value (by `equals` and `hashCode`), in order.  (`Stream.distinct`) */
+    fn distinct() -> Stream<T> {
+        seen := Set<T>()
+        return filter { seen.add(it) }
+    }
+
+    /** The first value for each result of `key`. */
+    fn distinctBy<K>(key: Function<T, K>) -> Stream<T> {
+        seen := Set<K>()
+        return filter { seen.add(key(it)) }
+    }
+
+    /** Runs `look` on each value as it goes by, e.g. to print it, and passes it on.  (`Stream.peek`) */
+    fn peek(look: Consumer<T>) -> Stream<T> {
+        src := pull
+        return Stream<T>({
+            x := src()
+            if x != null { look(x) }
+            x
+        })
+    }
+
+    /** At most the first `n` values.  (`Stream.limit`) */
+    fn limit(n: Int) -> Stream<T> {
+        src := pull
+        left := n
+        return Stream<T>({
+            if left <= 0 {
+                null
+            } else {
+                left -= 1
+                src()
+            }
+        })
+    }
+
+    /** Everything after the first `n` values.  (`Stream.skip`) */
+    fn skip(n: Int) -> Stream<T> {
+        src := pull
+        left := n
+        return Stream<T>({
+            while left > 0 {
+                left -= 1
+                src()
+            }
+            src()
+        })
+    }
+
+    /** The values up to, not including, the first one that fails `keep`.  (`Stream.takeWhile`) */
+    fn takeWhile(keep: Predicate<T>) -> Stream<T> {
+        src := pull
+        over := false
+        return Stream<T>({
+            found: T? = null
+            if !over {
+                x := src()
+                if x != null && !keep(x) { over = true } else { found = x }
+            }
+            found
+        })
+    }
+
+    /** The values from the first one that fails `drop` on.  (`Stream.dropWhile`) */
+    fn dropWhile(drop: Predicate<T>) -> Stream<T> {
+        src := pull
+        dropping := true
+        return Stream<T>({
+            if dropping {
+                dropping = false
+                __skip_while(src, drop)
+            } else {
+                src()
+            }
+        })
+    }
+
+    /** This stream followed by `other`.  (`Stream.concat`) */
+    fn concat(other: Stream<T>) -> Stream<T> {
+        first := pull
+        second := other.pull
+        onFirst := true
+        return Stream<T>({
+            found: T? = null
+            if onFirst {
+                found = first()
+                if found == null {
+                    onFirst = false
+                    found = second()
+                }
+            } else {
+                found = second()
+            }
+            found
+        })
+    }
+
+    /** Pairs of values from this stream and `other`, until the shorter one ends. */
+    fn zip<U>(other: Stream<U>) -> Stream<(T, U)> {
+        src := pull
+        theirs := other.pull
+        return Stream<(T, U)>({
+            x := src()
+            y := theirs()
+            if x == null || y == null { null } else { (x, y) }
+        })
+    }
+
+    /** Pairs of `(position, value)`. */
+    fn withIndex() = mapIndexed { i, x -> (i, x) }
+
+    /** Lists of `size` values (the last one may be shorter). */
+    fn chunked(size: Int) = __chunked(pull, size)
+
+    /** Sliding windows of `size` values, moving on by `step`. */
+    fn windowed(size: Int, step: Int = 1) = __windowed(pull, size, step)
+
+    /** The values in order, smallest first (they need `compareTo`).  Reads the whole stream when it starts. */
+    fn sorted() -> Stream<T> = sortedWith { a, b -> a.compareTo(b) }
+
+    /** The values in order, largest first. */
+    fn sortedDescending() -> Stream<T> = sortedWith { a, b -> b.compareTo(a) }
+
+    /** The values ordered by `key(value)`. */
+    fn sortedBy<K: Comparable<K>>(key: Function<T, K>) -> Stream<T> = sortedWith { a, b -> key(a).compareTo(key(b)) }
+
+    /** The values ordered by `compare`.  (`Stream.sorted(Comparator)`) */
+    fn sortedWith(compare: Comparator<T>) -> Stream<T> {
+        src := pull
+        loaded := List<T>()
+        ready := false
+        position := 0
+        return Stream<T>({
+            if !ready {
+                ready = true
+                loaded.addAll(__drain(src).sortedWith(compare))
+            }
+            if position < loaded.size() {
+                position += 1
+                loaded.get(position - 1)
+            } else {
+                null
+            }
+        })
+    }
+
+    /** The values in the opposite order.  Reads the whole stream when it starts. */
+    fn reversed() -> Stream<T> {
+        src := pull
+        loaded := List<T>()
+        ready := false
+        position := 0
+        return Stream<T>({
+            if !ready {
+                ready = true
+                loaded.addAll(__drain(src).reversed())
+            }
+            if position < loaded.size() {
+                position += 1
+                loaded.get(position - 1)
+            } else {
+                null
+            }
+        })
+    }
+
+    // ── terminal operations: each reads the stream ──
+
+    /** Runs `action` on every value.  (`Stream.forEach`, `forEachOrdered`) */
+    fn forEach(action: Consumer<T>) {
+        x := pull()
+        while x != null {
+            action(x)
+            x = pull()
+        }
+    }
+
+    /** Like `forEach`, with the position as well: `action(index, value)`. */
+    fn forEachIndexed(action: (Int, T) -> Unit) {
+        i := 0
+        x := pull()
+        while x != null {
+            action(i, x)
+            i += 1
+            x = pull()
+        }
+    }
+
+    /** All the values, in a list.  (`Stream.toList()`, `Collectors.toList()`) */
+    fn toList() -> List<T> = __drain(pull)
+
+    /** All the values, without duplicates.  (`Collectors.toSet()`) */
+    fn toSet() = setOf(toList())
+
+    /** A map from `key(value)` to `value(value)`; a repeated key keeps the last.  (`Collectors.toMap`) */
+    fn toMap<K, V>(key: Function<T, K>, value: Function<T, V>) -> Map<K, V> {
+        out := Map<K, V>()
+        forEach { out[key(it)] = value(it) }
+        return out
+    }
+
+    /** Like `toMap`, combining the values of a repeated key with `merge(old, new)`. */
+    fn toMapMerging<K, V>(key: Function<T, K>, value: Function<T, V>, merge: BinaryOperator<V>) -> Map<K, V> {
+        out := Map<K, V>()
+        forEach {
+            k := key(it)
+            v := value(it)
+            old := out.getOrNull(k)
+            out[k] = if old == null { v } else { merge(old, v) }
+        }
+        return out
+    }
+
+    /** Lists of the values that share a `key(value)`.  (`Collectors.groupingBy`) */
+    fn groupBy<K>(key: Function<T, K>) -> Map<K, List<T>> {
+        out := Map<K, List<T>>()
+        forEach {
+            k := key(it)
+            group := out.getOrNull(k)
+            if group == null {
+                fresh := List<T>()
+                fresh.add(it)
+                out[k] = fresh
+            } else {
+                group.add(it)
+            }
+        }
+        return out
+    }
+
+    /** How many values share each `key(value)`.  (`Collectors.groupingBy(f, Collectors.counting())`) */
+    fn groupCounting<K>(key: Function<T, K>) -> Map<K, Int> {
+        out := Map<K, Int>()
+        forEach {
+            k := key(it)
+            out[k] = out.getOr(k, 0) + 1
+        }
+        return out
+    }
+
+    /** Two lists: the values for which `test` is true, and the rest.  (`Collectors.partitioningBy`) */
+    fn partition(test: Predicate<T>) -> (List<T>, List<T>) {
+        yes := List<T>()
+        no := List<T>()
+        forEach { if test(it) { yes.add(it) } else { no.add(it) } }
+        return (yes, no)
+    }
+
+    /** The values as text, between `prefix` and `suffix`, separated by `separator`.  (`Collectors.joining`) */
+    fn joining(separator: String = ", ", prefix: String = "", suffix: String = "") -> String =
+        prefix + toList().join(separator) + suffix
+
+    /** Builds a result by hand: `supplier()` makes the container, `accumulate(container, value)` adds to it. */
+    fn collect<A>(supplier: Supplier<A>, accumulate: (A, T) -> Unit) -> A {
+        container := supplier()
+        forEach { accumulate(container, it) }
+        return container
+    }
+
+    /** How many values there are.  (`Stream.count`) */
+    fn count() -> Int {
+        n := 0
+        forEach { n += 1 }
+        return n
+    }
+
+    /** The sum of the values (0 for none); they must be numbers.  (`IntStream.sum`) */
+    fn sum() -> T {
+        total: T = 0
+        forEach { total = total + it }
+        return total
+    }
+
+    /** The mean of the values as a `Float`, or `null` for none.  (`IntStream.average`) */
+    fn average() -> Float? {
+        n := 0
+        total := 0.0
+        forEach {
+            n += 1
+            total += it as Float
+        }
+        return if n == 0 { null } else { total / (n as Float) }
+    }
+
+    /** Count, sum, smallest, largest and mean of the values, which must be numbers. */
+    fn summaryStatistics() -> Stats {
+        n := 0
+        total := 0.0
+        low := 0.0
+        high := 0.0
+        forEach {
+            x := it as Float
+            if n == 0 || x < low { low = x }
+            if n == 0 || x > high { high = x }
+            n += 1
+            total += x
+        }
+        return Stats(n, total, low, high, if n == 0 { 0.0 } else { total / (n as Float) })
+    }
+
+    /** The smallest value, or `null` for none.  (`Stream.min`) */
+    fn min() -> T? = toList().minOrNull()
+
+    /** The largest value, or `null` for none.  (`Stream.max`) */
+    fn max() -> T? = toList().maxOrNull()
+
+    /** The value with the smallest `key(value)`, or `null` for none. */
+    fn minBy<K: Comparable<K>>(key: Function<T, K>) -> T? = minWith { a, b -> key(a).compareTo(key(b)) }
+
+    /** The value with the largest `key(value)`, or `null` for none. */
+    fn maxBy<K: Comparable<K>>(key: Function<T, K>) -> T? = minWith { a, b -> key(b).compareTo(key(a)) }
+
+    /** The value that `compare` puts first, or `null` for none.  The earliest wins a tie.  (`Stream.min(Comparator)`) */
+    fn minWith(compare: Comparator<T>) -> T? {
+        best: T? = null
+        forEach {
+            current := best
+            if current == null || compare(it, current) < 0 { best = it }
+        }
+        return best
+    }
+
+    /** The value that `compare` puts last, or `null` for none.  (`Stream.max(Comparator)`) */
+    fn maxWith(compare: Comparator<T>) -> T? = minWith { a, b -> compare(b, a) }
+
+    /** The values combined with `combine`, or `null` for none.  (`Stream.reduce(BinaryOperator)`) */
+    fn reduce(combine: BinaryOperator<T>) -> T? {
+        total: T? = null
+        forEach {
+            current := total
+            total = if current == null { it } else { combine(current, it) }
+        }
+        return total
+    }
+
+    /** The values combined with `combine`, starting from `initial`.  (`Stream.reduce(identity, accumulator)`) */
+    fn fold<R>(initial: R, combine: (R, T) -> R) -> R {
+        total := initial
+        forEach { total = combine(total, it) }
+        return total
+    }
+
+    /** Is `test` true for at least one value?  Stops at the first.  (`Stream.anyMatch`) */
+    fn anyMatch(test: Predicate<T>) -> Bool = filter(test).next() != null
+
+    /** Is `test` true for every value?  Stops at the first failure.  (`Stream.allMatch`) */
+    fn allMatch(test: Predicate<T>) -> Bool = filterNot(test).next() == null
+
+    /** Is `test` true for no value?  (`Stream.noneMatch`) */
+    fn noneMatch(test: Predicate<T>) -> Bool = filter(test).next() == null
+
+    /** The first value, or `null` for none.  (`Stream.findFirst`, `findAny`) */
+    fn findFirst() -> T? = pull()
+
+    /** The first value for which `test` is true, or `null`. */
+    fn find(test: Predicate<T>) -> T? = filter(test).next()
+
+    /** Same as `forEach`: a stream here always runs in order.  (`Stream.forEachOrdered`) */
+    fn forEachOrdered(action: Consumer<T>) = forEach(action)
+
+    /** Same as `findFirst`.  (`Stream.findAny`) */
+    fn findAny() -> T? = pull()
+
+    /** The sum of `f(value)`.  (`Collectors.summingInt`) */
+    fn sumOf<R>(f: Function<T, R>) -> R = map(f).sum()
+
+    /** The mean of `f(value)`, or `null` for none.  (`Collectors.averagingInt`) */
+    fn averageOf<R>(f: Function<T, R>) -> Float? = map(f).average()
+
+    /** Is `value` one of the values?  Stops when it finds it. */
+    fn contains(value: T) -> Bool = anyMatch { it == value }
+
+    /** The values in an `Array`.  (`Stream.toArray`) */
+    fn toArray() = __to_array(toList())
+
+    /** The last value, or `null` for none. */
+    fn last() -> T? {
+        found: T? = null
+        forEach { found = it }
+        return found
+    }
+
+    /** The values, so that `for x in stream` works (read all at once: `limit` an endless stream first). */
+    fn iter() = toList()
+
+    fn toString() = "Stream"
+}
+
+/** A stream of the given values.  (`Stream.of`) */
+fn streamOf<T>(vararg items: T) -> Stream<T> = items.stream()
+
+/** A stream with no values.  (`Stream.empty`) */
+fn emptyStream<T>() -> Stream<T> = Stream<T>({ null })
+
+/** `seed`, `next(seed)`, `next(next(seed))`, ... without end; cut it with `limit`.  (`Stream.iterate`) */
+fn iterate<T>(seed: T, next: UnaryOperator<T>) -> Stream<T> {
+    current := seed
+    started := false
+    return Stream<T>({
+        if started { current = next(current) } else { started = true }
+        current
+    })
+}
+
+/** Like `iterate`, but stops before the first value for which `hasNext` is false.  (3-argument `Stream.iterate`) */
+fn iterateWhile<T>(seed: T, hasNext: Predicate<T>, next: UnaryOperator<T>) -> Stream<T> =
+    iterate(seed, next).takeWhile(hasNext)
+
+/** `supplier()` again and again, without end; cut it with `limit`.  (`Stream.generate`) */
+fn generate<T>(supplier: Supplier<T>) -> Stream<T> = Stream<T>({ supplier() })
+
+/** The Ints from `from` up to, not including, `to`.  (`IntStream.range`) */
+fn streamRange(from: Int, to: Int) -> Stream<Int> {
+    current := from
+    return Stream<Int>({
+        if current >= to {
+            null
+        } else {
+            current += 1
+            current - 1
+        }
+    })
+}
+
+/** The Ints from `from` up to and including `to`.  (`IntStream.rangeClosed`) */
+fn streamRangeClosed(from: Int, to: Int) -> Stream<Int> = streamRange(from, to + 1)
+
+/** `value` repeated `times` times.  (`Collections.nCopies`) */
+fn streamRepeat<T>(value: T, times: Int) -> Stream<T> = generate { value }.limit(times)
+
+/** A stream of the elements, in order.  (`Collection.stream`) */
+fn List<T>.stream() -> Stream<T> {
+    position := 0
+    return Stream<T>({
+        if position < size() {
+            position += 1
+            get(position - 1)
+        } else {
+            null
+        }
+    })
+}
+
+/** A stream of the members, in the order they were added. */
+fn Set<T>.stream() -> Stream<T> = toList().stream()
+
+/** A stream of the `(key, value)` entries. */
+fn Map<K, V>.stream() -> Stream<Entry<K, V>> = entries().stream()
+
+/** A stream of the numbers in the range. */
+fn Range.stream() -> Stream<Int> {
+    position := 0
+    return Stream<Int>({
+        if position < size() {
+            position += 1
+            get(position - 1)
+        } else {
+            null
+        }
+    })
+}
+
+// ── Stream steps on a List ──────────────────────────────────────────────────────────────────────
+// A list answers the common stream questions without `.stream()` first; each is the stream step of the
+// same name run over the list (see `Stream`).
+
+/** The elements for which `drop` is false. */
+fn List<T>.filterNot(drop: Predicate<T>) -> List<T> = stream().filterNot(drop).toList()
+/** `f(index, element)` for each element. */
+fn List<T>.mapIndexed<R>(f: BiFunction<Int, T, R>) -> List<R> = stream().mapIndexed(f).toList()
+/** `f(element)` for each element, leaving out the `null`s. */
+fn List<T>.mapNotNull<R>(f: (T) -> R?) -> List<R> = stream().mapNotNull(f).toList()
+/** The lists `f` gives for each element, joined end to end. */
+fn List<T>.flatMap<R>(f: Function<T, List<R>>) -> List<R> = stream().flatMapList(f).toList()
+/** The first occurrence of each element. */
+fn List<T>.distinct() -> List<T> = stream().distinct().toList()
+/** The first element for each result of `key`. */
+fn List<T>.distinctBy<K>(key: Function<T, K>) -> List<T> = stream().distinctBy(key).toList()
+/** The elements before the first one that fails `keep`. */
+fn List<T>.takeWhile(keep: Predicate<T>) -> List<T> = stream().takeWhile(keep).toList()
+/** The elements from the first one that fails `drop` on. */
+fn List<T>.dropWhile(drop: Predicate<T>) -> List<T> = stream().dropWhile(drop).toList()
+/** Is `test` false for every element? */
+fn List<T>.none(test: Predicate<T>) -> Bool = !any(test)
+/** `action(index, element)` for each element. */
+fn List<T>.forEachIndexed(action: (Int, T) -> Unit) { stream().forEachIndexed(action) }
+/** Lists of `size` elements (the last may be shorter). */
+fn List<T>.chunked(size: Int) = stream().chunked(size).toList()
+/** Sliding windows of `size` elements. */
+fn List<T>.windowed(size: Int, step: Int = 1) = stream().windowed(size, step).toList()
+/** `(index, element)` pairs. */
+fn List<T>.withIndex() = stream().withIndex().toList()
+/** Lists of the elements that share a `key(element)`. */
+fn List<T>.groupBy<K>(key: Function<T, K>) -> Map<K, List<T>> = stream().groupBy(key)
+/** How many elements share each `key(element)`. */
+fn List<T>.groupCounting<K>(key: Function<T, K>) -> Map<K, Int> = stream().groupCounting(key)
+/** Two lists: the elements for which `test` is true, and the rest. */
+fn List<T>.partition(test: Predicate<T>) -> (List<T>, List<T>) = stream().partition(test)
+/** A map from `key(element)` to `value(element)`. */
+fn List<T>.toMap<K, V>(key: Function<T, K>, value: Function<T, V>) -> Map<K, V> = stream().toMap(key, value)
+/** The elements without duplicates. */
+fn List<T>.toSet() = setOf(this)
+/** The sum of the elements (0 for none); they must be numbers. */
+fn List<T>.sum() -> T = stream().sum()
+/** The sum of `f(element)`. */
+fn List<T>.sumOf<R>(f: Function<T, R>) -> R = stream().sumOf(f)
+/** The mean of the elements as a `Float`, or `null` for none. */
+fn List<T>.average() -> Float? = stream().average()
+/** The smallest element, or `null` for none. */
+fn List<T>.min() -> T? = minOrNull()
+/** The largest element, or `null` for none. */
+fn List<T>.max() -> T? = maxOrNull()
+/** The element with the smallest `key(element)`, or `null` for none. */
+fn List<T>.minBy<K: Comparable<K>>(key: Function<T, K>) -> T? = stream().minBy(key)
+/** The element with the largest `key(element)`, or `null` for none. */
+fn List<T>.maxBy<K: Comparable<K>>(key: Function<T, K>) -> T? = stream().maxBy(key)
+/** The elements combined with `combine`, starting from `initial` (`fold` with the arguments the other way round is `reduce`). */
+fn List<T>.reduceOrNull(combine: BinaryOperator<T>) -> T? = stream().reduce(combine)

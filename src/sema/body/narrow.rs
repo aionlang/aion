@@ -192,7 +192,7 @@ impl Cx<'_, '_> {
             }
             super::Named::Global(g) => {
                 let Some(Ty::Opt(o)) = self.ck.t.globals[g].ty.get() else { return None };
-                if self.ck.unstable_globals.contains(name) || self.narrowing(Key::Global(g)).is_some() {
+                if self.ck.is_unstable_global(g, name) || self.narrowing(Key::Global(g)).is_some() {
                     return None;
                 }
                 Some(Narrow { key: Key::Global(g), name: name.to_string(), plain: self.ck.t.opt_inner(o) })
@@ -213,7 +213,7 @@ impl Cx<'_, '_> {
             super::Named::Local(id) if !self.lambda_assigned.contains(name) => {
                 (Key::Var(self.locals[id].var), self.locals[id].ty)
             }
-            super::Named::Global(g) if !self.ck.unstable_globals.contains(name) => {
+            super::Named::Global(g) if !self.ck.is_unstable_global(g, name) => {
                 (Key::Global(g), self.ck.t.globals[g].ty.get()?)
             }
             _ => return None,

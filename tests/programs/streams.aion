@@ -1,0 +1,70 @@
+/**
+ * Streams: `list.stream()` starts a lazy pipeline of `filter`, `map`, `limit` ... steps; a terminal
+ * step (`toList`, `sum`, `joining`, `reduce` ...) runs it.  Function parameters have documented names:
+ * `Predicate<T>` is `(T) -> Bool`, `Function<T, R>` is `(T) -> R`, `Consumer<T>` is `(T) -> Unit`,
+ * `Supplier<T>` is `() -> T`, `BinaryOperator<T>` is `(T, T) -> T`, `Comparator<T>` is `(T, T) -> Int`.
+ */
+type Person(name: String, age: Int, city: String)
+
+fn main() {
+    nums := [5, 3, 8, 1, 9, 2, 8]
+    println(nums.stream().filter { it > 2 }.map { it * 10 }.toList())
+    println(nums.stream().sorted().distinct().toList())
+    println(nums.stream().sum(), nums.stream().count(), nums.stream().average())
+    println(nums.stream().min(), nums.stream().max(), nums.stream().reduce { a, b -> a + b })
+    println(nums.stream().skip(2).limit(3).toList())
+    println(nums.stream().takeWhile { it != 1 }.toList(), nums.stream().dropWhile { it != 1 }.toList())
+    println(nums.stream().anyMatch { it > 8 }, nums.stream().allMatch { it > 0 }, nums.stream().noneMatch { it > 100 })
+    println(nums.stream().findFirst(), nums.stream().find { it > 5 }, nums.stream().last())
+    println(nums.stream().sortedDescending().toList(), nums.stream().reversed().toList())
+
+    names := ["ann", "bob", "cy", "dee"]
+    println(names.stream().filter { it.length() == 3 }.map { it.upper() }.sorted().joining(", "))
+    println(names.stream().joining("-", "<", ">"))
+
+    people := [Person("Ann", 31, "Oslo"), Person("Bob", 25, "Rome"), Person("Cy", 40, "Oslo"), Person("Di", 25, "Rome")]
+    byCity := people.stream().groupBy { it.city }
+    println(byCity["Oslo"].stream().map { it.name }.toList(), byCity["Rome"].size())
+    println(people.stream().groupCounting { it.age })
+    adults, young := people.stream().partition { it.age >= 30 }
+    println(adults.size(), young.size())
+    ages := people.stream().toMap({ it.name }, { it.age })
+    println(ages["Cy"], ages.size())
+    cityAges := people.stream().toMapMerging({ it.city }, { it.age }, { a, b -> a + b })
+    println(cityAges["Oslo"], cityAges["Rome"])
+    println(people.stream().maxBy { it.age }?.name, people.stream().minBy { it.age }?.name)
+    println(people.stream().sortedBy { it.name }.map { it.name }.toList())
+    println(people.stream().map { it.age }.toSet().size())
+    println(nums.sumOf { it * 2 }, nums.average(), nums.stream().contains(9), nums.stream().sumOf { it * 3 }, nums.stream().toArray().size())
+    println(people.stream().map { it.age }.summaryStatistics().count)
+
+    // lazy and endless
+    println(iterate(1) { it * 2 }.limit(8).toList())
+    println(iterateWhile(1, { it < 50 }, { it * 3 }).toList())
+    println(streamRange(0, 5).toList(), streamRangeClosed(1, 4).toList(), streamOf("a", "b").toList())
+    n := 0
+    println(generate { n += 1; n * n }.limit(5).toList())
+    println(streamRepeat("x", 3).joining(""), emptyStream<Int>().count())
+
+    // steps run one value at a time, and only as far as needed
+    println(nums.stream().peek { print("[$it]") }.filter { it > 7 }.findFirst())
+
+    // flatMap, zip, chunked, windowed, concat, indices
+    println(streamOf(1, 2, 3).flatMap { streamRange(0, it) }.toList())
+    println(names.stream().flatMapList { it.chars() }.limit(4).toList())
+    println(names.stream().zip(streamRange(1, 100)).toList())
+    println(streamRange(0, 7).chunked(3).toList(), streamRange(0, 7).chunked(3).map { it.stream().sum() }.toList())
+    println(streamRange(0, 5).windowed(3).toList(), streamRange(0, 6).windowed(2, 3).toList())
+    println(streamOf(1, 2).concat(streamOf(3)).toList(), names.stream().withIndex().toList())
+    println(nums.stream().mapIndexed { i, x -> i * x }.toList(), names.stream().mapNotNull { if it.length() > 2 { it.length() } else { null } }.toList())
+
+    // collect by hand, fold, sets, ranges, maps, for-in
+    println(nums.stream().collect({ StringBuilder() }, { sb, x -> sb.append("$x;") }).toString())
+    println(nums.stream().fold(0.5) { acc, x -> acc + x })
+    println((1..=5).stream().map { it * it }.toList(), ages.stream().count())
+    for x in streamRange(0, 3).map({ it + 1 }) { print("$x ") }
+    println()
+    stats := streamOf(2, 4, 9).summaryStatistics()
+    println(stats.min, stats.max, stats.average)
+    println(streamOf(1.5, 2.5).sum(), streamOf(1, 2, 3).sum())
+}

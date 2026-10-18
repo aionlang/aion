@@ -18,9 +18,15 @@ fn test_cache() -> PathBuf {
     Path::new(env!("CARGO_TARGET_TMPDIR")).join("aion-cache")
 }
 
+/// The optimisation level the test programs are built at.  Tests check what programs do, not how fast they run,
+/// and `-O0` builds take a fraction of the time; `AION_TEST_OPT=2 cargo test` checks the optimised build.
+fn test_opt() -> String {
+    std::env::var("AION_TEST_OPT").unwrap_or_else(|_| "0".into())
+}
+
 fn aion(args: &[&str], file: &Path, stress: bool) -> Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_aion"));
-    cmd.args(args).arg(file).env("AION_CACHE", test_cache());
+    cmd.args(args).arg(file).env("AION_CACHE", test_cache()).env("AION_OPT", test_opt());
     if stress {
         cmd.env("AION_GC_STRESS", "1");
     }
@@ -38,6 +44,29 @@ fn sources(dir: &str) -> Vec<PathBuf> {
     files
 }
 
+/// Run `job` for every item on all the cores, and gather the failure messages the jobs return, sorted.
+/// (Each test program is compiled and run on its own, so they can go side by side.)
+fn in_parallel<T: Sync>(items: &[T], job: impl Fn(&T) -> Vec<String> + Sync) -> Vec<String> {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let next = AtomicUsize::new(0);
+    let failures = Mutex::new(Vec::new());
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            scope.spawn(|| {
+                while let Some(item) = items.get(next.fetch_add(1, Ordering::SeqCst)) {
+                    let found = job(item);
+                    failures.lock().unwrap().extend(found);
+                }
+            });
+        }
+    });
+    let mut all = failures.into_inner().unwrap();
+    all.sort();
+    all
+}
+
 /// Value of a `// key: value` header line.
 fn header(source: &str, key: &str) -> Option<String> {
     source.lines().find_map(|l| l.strip_prefix(&format!("// {key}:")).map(|v| v.trim().to_string()))
@@ -45,8 +74,9 @@ fn header(source: &str, key: &str) -> Option<String> {
 
 #[test]
 fn programs_produce_expected_output() {
-    let mut failures = Vec::new();
-    for file in sources("programs") {
+    let failures = in_parallel(&sources("programs"), |file| {
+        let mut failures = Vec::new();
+        let file = file.clone();
         let name = file.file_stem().unwrap().to_string_lossy().into_owned();
         let source = std::fs::read_to_string(&file).unwrap();
         let expected_code: i32 = header(&source, "exit").map_or(0, |v| v.parse().unwrap());
@@ -72,7 +102,8 @@ fn programs_produce_expected_output() {
                 failures.push(format!("{name} [{mode}]: stderr lacks `{want}`:\n{stderr}"));
             }
         }
-    }
+        failures
+    });
     assert!(failures.is_empty(), "\n{}", failures.join("\n\n"));
 }
 
@@ -876,7 +907,7 @@ fn check_example(path: &Path, entry: &Path, project: bool) -> Result<(), String>
     if !project {
         cmd.arg(entry);
     }
-    cmd.args(&args).current_dir(dir).env("AION_CACHE", test_cache());
+    cmd.args(&args).current_dir(dir).env("AION_CACHE", test_cache()).env("AION_OPT", test_opt());
     let input = directive(&source, "stdin").map(|s| s + "\n").unwrap_or_default();
     let out = {
         use std::io::Write;
@@ -910,14 +941,8 @@ fn check_example(path: &Path, entry: &Path, project: bool) -> Result<(), String>
 #[test]
 fn examples_print_what_they_promise() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
-    let mut failures = Vec::new();
-    let mut checked = 0;
-    for file in sources_in(&root) {
-        checked += 1;
-        if let Err(e) = check_example(&file, &file, false) {
-            failures.push(e);
-        }
-    }
+    // (what to point the compiler at, the program, is it a project?)
+    let mut jobs: Vec<(PathBuf, PathBuf, bool)> = sources_in(&root).into_iter().map(|f| (f.clone(), f, false)).collect();
     let mut folders: Vec<PathBuf> = std::fs::read_dir(root.join("projects"))
         .unwrap()
         .map(|e| e.unwrap().path())
@@ -925,20 +950,18 @@ fn examples_print_what_they_promise() {
         .collect();
     folders.sort();
     for folder in folders {
-        checked += 1;
         let project = folder.join("aion.project").is_file();
         let main = folder.join("main.aion");
-        let result = if main.is_file() {
-            check_example(&folder, &main, project)
+        if main.is_file() {
+            jobs.push((folder, main, project));
         } else {
             // a library package has no program of its own, only tests
             let tests = folder.join("tests/check.aion");
-            check_example(&tests, &tests, false)
-        };
-        if let Err(e) = result {
-            failures.push(e);
+            jobs.push((tests.clone(), tests, false));
         }
     }
+    let checked = jobs.len();
+    let failures = in_parallel(&jobs, |(target, program, project)| check_example(target, program, *project).err().into_iter().collect());
     assert!(checked >= 10, "expected to find examples, found {checked}");
     assert!(failures.is_empty(), "{} of {checked} examples failed:\n\n{}", failures.len(), failures.join("\n\n"));
 }

@@ -1,0 +1,22 @@
+/**
+ * The stream steps are also on `List`, so a short pipeline needs no `.stream()`:
+ * `filterNot mapIndexed mapNotNull flatMap distinct distinctBy takeWhile dropWhile none forEachIndexed
+ * chunked windowed withIndex groupBy groupCounting partition toMap toSet sum sumOf average min max minBy maxBy`.
+ */
+fn main() {
+    xs := [4, 8, 15, 16, 23, 42, 8]
+    println(xs.filterNot { it % 2 == 0 }, xs.mapIndexed { i, x -> i + x }, xs.distinct())
+    println(xs.flatMap { [it, -it] }.size(), xs.takeWhile { it < 20 }, xs.dropWhile { it < 20 })
+    println(xs.none { it > 100 }, xs.sum(), xs.average(), xs.min(), xs.max())
+    println(xs.chunked(3), xs.windowed(3, 2), xs.withIndex().last())
+    println(xs.groupBy { it % 3 }, xs.groupCounting { it % 2 })
+    evens, odds := xs.partition { it % 2 == 0 }
+    println(evens, odds)
+    words := ["pear", "fig", "apple", "kiwi", "plum"]
+    println(words.toMap({ it }, { it.length() }), words.toSet().size())
+    println(words.minBy { it.length() }, words.maxBy { it.length() }, words.sumOf { it.length() })
+    println(words.mapNotNull { if it.length() == 4 { it.upper() } else { null } }, words.distinctBy { it.length() })
+    words.forEachIndexed { i, w -> print("$i=$w ") }
+    println()
+    println(xs.reduceOrNull { a, b -> a + b }, List<Int>().reduceOrNull { a, b -> a + b })
+}
