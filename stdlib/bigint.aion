@@ -1,0 +1,206 @@
+// import bigint
+//
+//   a := bigint.parse("123456789012345678901234567890")!!
+//   b := bigint.of(2).pow(100)                  // 1267650600228229401496703205376
+//   println(a * b + 1, a / 7, a % 7, -a)        // operators work, with a BigInt or an Int on either side
+//   println(bigint.factorial(30), bigint.fibonacci(100), (a * a).sqrt())
+//   println(bigint.of(7).modPow(bigint.of(128), bigint.of(13)), bigint.of(97).isProbablePrime())
+//
+//   half := bigint.rational(1, 2)               // exact fractions, always in lowest terms
+//   println(half + bigint.rational(1, 3))       // 5/6
+//
+// Integers of any size (the GMP library does the arithmetic, found when first used: install libgmp, for example the
+// libgmp10 package; a program that does not import this needs nothing) and exact fractions made of them.  Values never
+// change.  `/` and `%` round toward zero like those of `Int`; `floorDiv` and `mod` round down.  Dividing by zero stops
+// the program, as it does for `Int`.
+
+extern fn lastError() -> String = "aion_bigint_error"
+extern fn available() -> Bool = "aion_bigint_available"
+extern fn __binary(op: Int, a: Bytes, b: Bytes) -> Bytes? = "aion_bigint_binary"
+extern fn __unary(op: Int, a: Bytes, n: Int) -> Bytes? = "aion_bigint_unary"
+extern fn __sequence(fibonacci: Bool, n: Int) -> Bytes? = "aion_bigint_sequence"
+extern fn __modpow(base: Bytes, exponent: Bytes, modulus: Bytes) -> Bytes? = "aion_bigint_modpow"
+extern fn __invert(a: Bytes, modulus: Bytes) -> Bytes? = "aion_bigint_invert"
+extern fn __compare(a: Bytes, b: Bytes) -> Int = "aion_bigint_compare"
+extern fn __prime(a: Bytes, rounds: Int) -> Int = "aion_bigint_prime"
+extern fn __bits(a: Bytes) -> Int = "aion_bigint_bit_length"
+extern fn __string(a: Bytes, base: Int) -> String = "aion_bigint_to_string"
+extern fn __parse(text: String, base: Int) -> Bytes? = "aion_bigint_from_string"
+extern fn __fromInt(n: Int) -> Bytes? = "aion_bigint_from_int"
+extern fn __fromFloat(x: Float) -> Bytes? = "aion_bigint_from_float"
+extern fn __fits(a: Bytes) -> Bool = "aion_bigint_fits"
+extern fn __toInt(a: Bytes) -> Int = "aion_bigint_to_int"
+extern fn __toFloat(a: Bytes) -> Float = "aion_bigint_to_float"
+
+fn __need() {
+    if !available() { panic(lastError()) }
+}
+
+// The result of an operation that cannot fail except by dividing by zero or a bad argument.
+fn __value(result: Bytes?) -> BigInt {
+    if result == null { panic(lastError()) }
+    return BigInt(result)
+}
+
+// ── Integers ─────────────────────────────────────────────────────
+
+type BigInt(repr: Bytes) {
+    // Arithmetic; each takes a BigInt or an Int.
+    fn plus(o: BigInt) = __value(__binary(0, repr, o.repr))
+    fn plus(n: Int) = plus(of(n))
+    fn minus(o: BigInt) = __value(__binary(1, repr, o.repr))
+    fn minus(n: Int) = minus(of(n))
+    fn times(o: BigInt) = __value(__binary(2, repr, o.repr))
+    fn times(n: Int) = times(of(n))
+    // Division rounds toward zero and the remainder has the sign of the dividend, like `Int`.
+    fn div(o: BigInt) = __value(__binary(3, repr, o.repr))
+    fn div(n: Int) = div(of(n))
+    fn rem(o: BigInt) = __value(__binary(4, repr, o.repr))
+    fn rem(n: Int) = rem(of(n))
+    // Rounding down instead: `-7` floorDiv `2` is `-4` and `-7` mod `2` is `1` (the remainder has the sign of the divisor).
+    fn floorDiv(o: BigInt) = __value(__binary(5, repr, o.repr))
+    fn floorDiv(n: Int) = floorDiv(of(n))
+    fn mod(o: BigInt) = __value(__binary(6, repr, o.repr))
+    fn mod(n: Int) = mod(of(n))
+    fn unaryMinus() = __value(__unary(0, repr, 0))
+    fn abs() = __value(__unary(1, repr, 0))
+
+    fn pow(exponent: Int) = __value(__unary(2, repr, exponent))
+    // The integer square root (rounded down), and the n-th root.
+    fn sqrt() = __value(__unary(3, repr, 0))
+    fn root(n: Int) = __value(__unary(8, repr, n))
+    fn gcd(o: BigInt) = __value(__binary(7, repr, o.repr))
+    fn lcm(o: BigInt) = __value(__binary(8, repr, o.repr))
+    // this ^ exponent mod modulus, without ever making the huge power; a negative exponent uses the inverse.
+    fn modPow(exponent: BigInt, modulus: BigInt) = __value(__modpow(repr, exponent.repr, modulus.repr))
+    // The x with this * x = 1 mod modulus; null if there is none.
+    fn modInverse(modulus: BigInt) -> BigInt? {
+        r := __invert(repr, modulus.repr)
+        return r == null ? null : BigInt(r)
+    }
+    // The number of ways to choose `k` of this many things.
+    fn choose(k: Int) = __value(__unary(9, repr, k))
+
+    // Bit operations, as on two's complement integers of unlimited length.
+    fn and(o: BigInt) = __value(__binary(9, repr, o.repr))
+    fn or(o: BigInt) = __value(__binary(10, repr, o.repr))
+    fn xor(o: BigInt) = __value(__binary(11, repr, o.repr))
+    fn not() = __value(__unary(7, repr, 0))
+    fn shl(n: Int) = __value(__unary(4, repr, n))
+    fn shr(n: Int) = __value(__unary(5, repr, n))
+
+    // Is it prime?  A test that is right with a chance of at most 4 to the power of -rounds of calling a composite
+    // number prime (25 rounds by default); numbers below 2 are not prime.
+    fn isProbablePrime(rounds: Int = 25) -> Bool = signum() > 0 && __prime(repr, rounds) > 0
+    // The smallest prime above this number.
+    fn nextPrime() = __value(__unary(6, repr, 0))
+
+    fn signum() -> Int = __compare(repr, zero.repr)
+    fn isZero() = repr.size() <= 1
+    fn isNegative() = repr[0] == 1
+    fn isEven() = !isZero() && repr[repr.size() - 1].and(1) == 0 || isZero()
+    // How many bits the absolute value needs (0 for zero).
+    fn bitLength() = __bits(repr)
+
+    // The number as an Int, or null if it does not fit in 64 bits.
+    fn toInt() -> Int? = __fits(repr) ? __toInt(repr) : null
+    fn toFloat() -> Float = __toFloat(repr)
+    // Text in a base from 2 to 36 (lower case letters for the digits above 9).
+    fn toRadix(base: Int) = __string(repr, base)
+    fn toString() = __string(repr, 10)
+
+    fn compareTo(o: BigInt) = __compare(repr, o.repr)
+    fn compareTo(n: Int) = compareTo(of(n))
+    fn equals(o: BigInt) = repr == o.repr
+    fn hashCode() = hashOf(repr.toHex())
+}
+
+// Integers on the left of an operator: `5 + big`.
+fn Int.plus(o: BigInt) = of(this).plus(o)
+fn Int.minus(o: BigInt) = of(this).minus(o)
+fn Int.times(o: BigInt) = of(this).times(o)
+fn Int.div(o: BigInt) = of(this).div(o)
+fn Int.rem(o: BigInt) = of(this).rem(o)
+fn Int.compareTo(o: BigInt) = of(this).compareTo(o)
+
+val zero = BigInt(Bytes(1))
+val one = of(1)
+
+// The BigInt with the value of an Int.
+fn of(n: Int) -> BigInt {
+    __need()
+    return __value(__fromInt(n))
+}
+
+// The BigInt for a Float, with the fraction cut off; null for NaN or infinity.
+fn ofFloat(x: Float) -> BigInt? {
+    __need()
+    r := __fromFloat(x)
+    return r == null ? null : BigInt(r)
+}
+
+// A number from text: an optional sign and digits in the base (2 to 36).  Null if it is not a number.
+fn parse(text: String, base: Int = 10) -> BigInt? {
+    __need()
+    t := text.trim()
+    if t.startsWith("+") {
+        t = t.substring(1, t.length())
+        if t.startsWith("-") || t.startsWith("+") { return null }
+    }
+    r := __parse(t, base)
+    return r == null ? null : BigInt(r)
+}
+
+// n!  and the n-th Fibonacci number (0, 1, 1, 2, 3, 5, ...).
+fn factorial(n: Int) = __value(__sequence(false, n))
+fn fibonacci(n: Int) = __value(__sequence(true, n))
+
+fn min(a: BigInt, b: BigInt) = a.compareTo(b) <= 0 ? a : b
+fn max(a: BigInt, b: BigInt) = a.compareTo(b) >= 0 ? a : b
+
+// ── Fractions ────────────────────────────────────────────────────
+
+// An exact fraction in lowest terms with a positive denominator; make one with `rational(numerator, denominator)`.
+type Rational(num: BigInt, den: BigInt) {
+    fn plus(o: Rational) = rational(num * o.den + o.num * den, den * o.den)
+    fn plus(n: Int) = plus(rational(n, 1))
+    fn minus(o: Rational) = rational(num * o.den - o.num * den, den * o.den)
+    fn minus(n: Int) = minus(rational(n, 1))
+    fn times(o: Rational) = rational(num * o.num, den * o.den)
+    fn times(n: Int) = times(rational(n, 1))
+    fn div(o: Rational) = rational(num * o.den, den * o.num)
+    fn div(n: Int) = div(rational(n, 1))
+    fn unaryMinus() = Rational(-num, den)
+    fn abs() = Rational(num.abs(), den)
+    fn inverse() = rational(den, num)
+    fn pow(n: Int) = n >= 0 ? Rational(num.pow(n), den.pow(n)) : rational(den.pow(-n), num.pow(-n))
+
+    fn signum() = num.signum()
+    fn isInteger() = den == one
+    // The nearest integers below and above.
+    fn floor() = num.floorDiv(den)
+    fn ceil() = -((-num).floorDiv(den))
+    fn toFloat() -> Float = num.toFloat() / den.toFloat()
+    fn toString() = den == one ? num.toString() : "${num}/${den}"
+
+    fn compareTo(o: Rational) = (num * o.den).compareTo(o.num * den)
+    fn compareTo(n: Int) = compareTo(rational(n, 1))
+    fn equals(o: Rational) = num == o.num && den == o.den
+    fn hashCode() = hashOf(toString())
+}
+
+// The fraction numerator/denominator in lowest terms; stops the program for a denominator of zero.
+fn rational(numerator: BigInt, denominator: BigInt) -> Rational {
+    if denominator.isZero() { panic("division by zero") }
+    g := numerator.gcd(denominator)
+    n := numerator
+    d := denominator
+    if !g.isZero() && g != one {
+        n = n / g
+        d = d / g
+    }
+    if d.isNegative() { return Rational(-n, -d) }
+    return Rational(n, d)
+}
+
+fn rational(numerator: Int, denominator: Int) = rational(of(numerator), of(denominator))
