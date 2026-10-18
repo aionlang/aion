@@ -1,5 +1,5 @@
 <div align="center">
-<img src="docs/img/aion_banner.png" alt="aion logo" width=300>
+<img src="docs/img/aion_banner.svg" alt="aion logo" width=300>
 </div>
 
 <div align="center">
