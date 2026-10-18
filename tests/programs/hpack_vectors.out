@@ -1,0 +1,42 @@
+C.4.1
+  :method: GET
+  :scheme: http
+  :path: /
+  :authority: www.example.com
+C.4.2
+  :method: GET
+  :scheme: http
+  :path: /
+  :authority: www.example.com
+  cache-control: no-cache
+C.4.3
+  :method: GET
+  :scheme: https
+  :path: /index.html
+  :authority: www.example.com
+  custom-key: custom-value
+table: [custom-key, cache-control, :authority] 164
+C.5.1
+  :status: 302
+  cache-control: private
+  date: Mon, 21 Oct 2013 20:13:21 GMT
+  location: https://www.example.com
+C.5.2
+  :status: 307
+  cache-control: private
+  date: Mon, 21 Oct 2013 20:13:21 GMT
+  location: https://www.example.com
+table: 4 222
+f1e3c2e5f23a6ba0ab90f4ff
+www.example.com
+no-cache custom-key
+null
+true
+true
+true
+true
+true
+true true true
+false true true
+8288
+true true true

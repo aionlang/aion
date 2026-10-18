@@ -1,0 +1,57 @@
+/** std.hpack against the examples of RFC 7541, appendix C: Huffman strings, integers, and header blocks that share a dynamic table. */
+import hpack
+
+fn hex(text: String) = text.fromHex()!!
+
+// C.4: requests with Huffman coded strings, on one decoder so the dynamic table carries over
+fn show(headers: List<hpack.Header>?) {
+    if headers == null { println("invalid"); return }
+    for h in headers { println("  ${h.name}: ${h.value}") }
+}
+
+decoder := hpack.Decoder()
+println("C.4.1")
+show(decoder.decode(hex("828684418cf1e3c2e5f23a6ba0ab90f4ff")))
+println("C.4.2")
+show(decoder.decode(hex("828684be5886a8eb10649cbf")))
+println("C.4.3")
+show(decoder.decode(hex("828785bf408825a849e95ba97d7f8925a849e95bb8e8b4bf")))
+println("table:", decoder.names, decoder.size)
+
+// C.3: the same without Huffman, with a table of 256 bytes so entries are evicted (C.5 and C.6 use responses)
+small := hpack.Decoder(256)
+println("C.5.1")
+show(small.decode(hex("4803333032580770726976617465611d4d6f6e2c203231204f637420323031332032303a31333a323120474d546e1768747470733a2f2f7777772e6578616d706c652e636f6d")))
+println("C.5.2")
+show(small.decode(hex("4803333037c1c0bf")))
+println("table:", small.names.size(), small.size)
+
+// Huffman on its own
+println(hpack.huffmanEncode("www.example.com".toBytes()).toHex())
+println(hpack.huffmanDecode(hex("f1e3c2e5f23a6ba0ab90f4ff"))!!.toText())
+println(hpack.huffmanDecode(hex("a8eb10649cbf"))!!.toText(), hpack.huffmanDecode(hex("25a849e95ba97d7f"))!!.toText())
+println(hpack.huffmanDecode(hex("f1e3c2e5f23a6ba0ab90f4"))) // cut short: the padding is not all ones
+for text in ["", "a", "Hello, World!", "\u{e9}\u{1f600} unicode", "x".repeat(300)] {
+    back := hpack.huffmanDecode(hpack.huffmanEncode(text.toBytes()))
+    println(back != null && back.toText() == text)
+}
+
+// the encoder and the decoder agree, with and without Huffman
+headers := [
+    hpack.Header(":method", "POST"), hpack.Header(":scheme", "https"), hpack.Header(":path", "/upload?x=1"),
+    hpack.Header(":authority", "example.com"), hpack.Header("content-type", "application/json"),
+    hpack.Header("authorization", "Bearer abc"), hpack.Header("x-custom", "value with spaces"),
+]
+for huffman in [true, false] {
+    block := hpack.Encoder(huffman).encode(headers)
+    back := hpack.Decoder().decode(block)!!
+    same := back.size() == headers.size()
+    for i in 0..headers.size() {
+        if back[i].name != headers[i].name || back[i].value != headers[i].value { same = false }
+    }
+    println(huffman, block.size() > 0, same)
+}
+println(hpack.Encoder(false).encode([hpack.Header(":method", "GET"), hpack.Header(":status", "200")]).toHex())
+
+// invalid blocks
+println(hpack.Decoder().decode(hex("ff")) == null, hpack.Decoder().decode(hex("c0")) == null, hpack.Decoder().decode(hex("4005")) == null)
