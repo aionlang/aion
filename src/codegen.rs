@@ -139,6 +139,15 @@ pub fn emit(p: &Program) -> String {
     }
     let _ = writeln!(out, "@aion_roots_len = constant i64 {}\n", roots.len());
 
+    if pool.uses_type_names {
+        // Indexed by the type id kept in an object's header (id + 1; 0 is a null reference).
+        let mut names = vec![pool.operand("null")];
+        for t in &p.types {
+            names.push(pool.operand(&display_type_name(&t.name)));
+        }
+        let slots: Vec<String> = names.iter().map(|n| format!("ptr {n}")).collect();
+        let _ = writeln!(out, "@aion_type_names = internal constant [{} x ptr] [{}]", names.len(), slots.join(", "));
+    }
     out.push_str(&pool.definitions());
     out.push('\n');
     out.push_str(&funcs);
@@ -158,6 +167,14 @@ pub fn emit(p: &Program) -> String {
     }
     out.push_str("}\n");
     out
+}
+
+/// The name `typeOf` gives a type: the box that holds an `Int` inside an `Any` is just `Int`.
+fn display_type_name(name: &str) -> String {
+    match name.strip_prefix("__").and_then(|n| n.strip_suffix("Box")) {
+        Some(basic) if !basic.is_empty() => basic.to_string(),
+        _ => name.to_string(),
+    }
 }
 
 fn ir(ty: Ty) -> &'static str {
@@ -190,6 +207,8 @@ struct Pool {
     items: Vec<String>,
     /// `{ name, file }` records the stack trace points at, one per traced function.
     traces: Vec<String>,
+    /// Some function reads `@aion_type_names`, so the table has to be written.
+    uses_type_names: bool,
 }
 
 impl Pool {
@@ -905,6 +924,24 @@ impl<'a> FnGen<'a> {
             ExprKind::IsInstance { value, target } => {
                 let v = self.expr(value);
                 self.instance_test(&v, *target)
+            }
+
+            ExprKind::TypeName(value) => {
+                let v = self.expr(value);
+                // Like `instance_test`: a null reference reads the type id of a zeroed header, which names "null".
+                let (is_null, payload, at, flags, shifted, id, slot, name) =
+                    (self.tmp(), self.tmp(), self.tmp(), self.tmp(), self.tmp(), self.tmp(), self.tmp(), self.tmp());
+                self.line(format!("{is_null} = icmp eq ptr {v}, null"));
+                self.line(format!("{payload} = select i1 {is_null}, ptr getelementptr inbounds ([32 x i8], ptr @aion_null_object, i64 0, i64 24), ptr {v}"));
+                self.line(format!("{at} = getelementptr inbounds i8, ptr {payload}, i64 -12"));
+                self.line(format!("{flags} = load i32, ptr {at}"));
+                self.line(format!("{shifted} = lshr i32 {flags}, 4"));
+                self.line(format!("{id} = zext i32 {shifted} to i64"));
+                let n = self.p.types.len() + 1;
+                self.line(format!("{slot} = getelementptr inbounds [{n} x ptr], ptr @aion_type_names, i64 0, i64 {id}"));
+                self.line(format!("{name} = load ptr, ptr {slot}"));
+                self.pool.uses_type_names = true;
+                name
             }
 
             ExprKind::CallIface { iface, method, args } => {

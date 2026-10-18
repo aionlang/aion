@@ -230,6 +230,9 @@ pub enum ExprKind {
     New(TypeId),
     /// Is the object (not null) an instance of `target` or of a type that extends it?
     IsInstance { value: Box<Expr>, target: TypeId },
+    /// The name of the type an object really is, as text (`"null"` for a null reference); `typeOf` on a value
+    /// whose type may have subtypes.
+    TypeName(Box<Expr>),
     /// `value as target` (panics if it is not one) or `value as? target` (null if it is not one).
     Downcast { value: Box<Expr>, target: TypeId, safe: bool },
     /// A value of a type that implements an interface, used as that interface

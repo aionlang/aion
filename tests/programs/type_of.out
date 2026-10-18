@@ -1,0 +1,7 @@
+Int Float String Char Bool Bytes
+List<Int> Map<String, Int> Point (Int, String)
+[Int, String, Float, Char, Bool, Point, List<Int>]
+[Animal, Dog]
+Square Square
+null Int Dog null null
+Int (Int) -> Int 1

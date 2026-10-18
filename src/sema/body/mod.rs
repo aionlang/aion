@@ -3026,6 +3026,7 @@ impl<'c, 'a> Cx<'c, 'a> {
                     }
                     None if n == "Array" => self.array_new(type_args, args, span, expected),
                     None if n == "hashOf" => self.hash_of(args, span),
+                    None if n == "typeOf" => self.type_of(args, span),
                     None if n == "print" || n == "println" => self.print(n == "println", args, span),
                     None => Err(Diagnostic::new(format!("undefined function `{n}`"), callee.span)),
                 }
@@ -3657,6 +3658,51 @@ impl<'c, 'a> Cx<'c, 'a> {
         pins.push(hir::Stmt::Let(tmp, Some(e)));
         held.push(tmp);
         self.local_expr(tmp)
+    }
+
+    /// `typeOf(value)`: the name of the value's type, as text.  A value whose type has no subtypes gives the
+    /// name the compiler knows (`Int`, `List<Int>`, `Point`); an `Any`, an interface or an `open type` gives
+    /// the type the object really is; an optional that is null gives `"null"`.
+    fn type_of(&mut self, args: &[ast::Arg], span: Span) -> Result<hir::Expr> {
+        let [arg] = args else {
+            return Err(Diagnostic::new("`typeOf` takes one value", span));
+        };
+        if let Some(n) = &arg.name {
+            return Err(Diagnostic::new("`typeOf` doesn't take named arguments", n.span));
+        }
+        let text = |s: &str| mk(K::Str(s.to_string()), Ty::Str);
+        if matches!(arg.value.kind, A::Null) {
+            return Ok(text("null"));
+        }
+        let v = self.value(&arg.value)?;
+        if v.ty == Ty::Void {
+            return Err(Diagnostic::new("this has no value, so it has no type to ask for", arg.value.span));
+        }
+        let Ty::Opt(id) = v.ty else { return Ok(self.type_name(v)) };
+        let inner = self.ck.t.opt_inner(id);
+        let tmp = self.new_local("$typeof", v.ty);
+        let unwrapped = mk(K::Unwrap(Box::new(self.local_expr(tmp))), inner);
+        let is_null = mk(K::IsNull(Box::new(self.local_expr(tmp))), Ty::Bool);
+        let named = self.type_name(unwrapped);
+        let pick = mk(K::Cond { cond: Box::new(is_null), then: Box::new(text("null")), otherwise: Box::new(named) }, Ty::Str);
+        Ok(mk(K::Block(vec![hir::Stmt::Let(tmp, Some(v))], Box::new(pick)), Ty::Str))
+    }
+
+    /// The type name of a value that is not an optional (see [`Self::type_of`]).
+    fn type_name(&mut self, v: hir::Expr) -> hir::Expr {
+        let dynamic = match v.ty {
+            Ty::Obj(t) => {
+                let info = self.ck.t.ty(t);
+                info.iface.is_some() || info.open
+            }
+            _ => false,
+        };
+        if dynamic {
+            return mk(K::TypeName(Box::new(v)), Ty::Str);
+        }
+        let name = mk(K::Str(self.name(v.ty)), Ty::Str);
+        // the value is still evaluated, for what it does
+        mk(K::Block(vec![hir::Stmt::Expr(v)], Box::new(name)), Ty::Str)
     }
 
     /// The built-in, type-polymorphic `print` / `println`.

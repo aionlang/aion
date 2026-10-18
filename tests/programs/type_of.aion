@@ -1,0 +1,42 @@
+/** `typeOf(value)` names a value's type: what the compiler knows, or for an `Any`, an interface or an `open type`,
+ *  the type the value really is. */
+type Point(x: Int, y: Int)
+open type Animal(name: String)
+type Dog(name: String) : Animal(name)
+interface Shape { fn area() -> Float }
+type Square(s: Float) { fn area() = s * s }
+
+println(typeOf(3), typeOf(2.5), typeOf("a"), typeOf('c'), typeOf(true), typeOf(Bytes(2)))
+println(typeOf([1, 5, 1]), typeOf({"a": 1}), typeOf(Point(1, 2)), typeOf((1, "x")))
+
+things := List<Any>()
+things.add(1)
+things.add("two")
+things.add(3.0)
+things.add('c')
+things.add(false)
+xs := [1]
+things.add(Point(4, 5))
+things.add(xs)
+names := List<String>()
+for t in things { names.add(typeOf(t)) }
+println(names)
+
+pets: List<Animal> = [Animal("generic"), Dog("rex")]
+println(pets.map { typeOf(it) })
+shape: Shape = Square(2.0)
+println(typeOf(shape), typeOf(Square(1.0)))
+
+maybe: Int? = null
+other: Int? = 4
+who: Animal? = Dog("a")
+nobody: Animal? = null
+println(typeOf(maybe), typeOf(other), typeOf(who), typeOf(nobody), typeOf(null))
+
+fn twice(x: Int) = x * 2
+hits := 0
+fn touch() -> Int {
+    hits += 1
+    return hits
+}
+println(typeOf(touch()), typeOf(twice), hits)

@@ -1283,9 +1283,26 @@ import std.math            // …explicitly (aion.math works too)
 | `print(a, b, …)`           | write the values separated by spaces, no newline        |
 | `println(a, b, …)`         | …with a trailing newline; `println()` is just a newline |
 | `panic(message)`           | print `[aion] panic: message` to stderr and exit 1      |
+| `typeOf(value)`            | the name of the value's type, as text                   |
 
 Arguments may be Int, Float, Bool, String or objects.  Floats print with C's
 `%g` (`3.0` prints as `3`).
+
+`typeOf` gives the type the compiler knows (`Int`, `List<Int>`, `Point`, `(Int) -> Int`).  For a value
+whose type can vary at run time (an `Any`, an interface, an `open type`) it gives the type the object
+really is, and a null optional gives `"null"`.  (`type` is a keyword, so it cannot be the name.)
+
+```aion
+type Point(x: Int, y: Int)
+println(typeOf(3), typeOf([1, 5, 1]), typeOf(Point(1, 2)))        // Int List<Int> Point
+
+things := List<Any>()
+things.add(1)
+things.add("two")
+things.add(Point(4, 5))
+for t in things { print(typeOf(t), "") }                           // Int String Point
+println()
+```
 
 ## Input
 
