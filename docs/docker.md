@@ -65,7 +65,7 @@ docker run --rm -it -v "$PWD":/work --entrypoint bash aion
 
 ```powershell
 docker build -f Dockerfile.windows --output dist .
-.\distion.exe --version
+.\dist\aion.exe --version
 ```
 
 The executable runs the compiler's own commands (`check`, `emit-ir`, `fmt`, `new`, `help`).  Compiling and running programs on
