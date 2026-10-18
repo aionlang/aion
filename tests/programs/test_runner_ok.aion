@@ -1,0 +1,6 @@
+/** `defer test.summary()` prints the totals when the file ends; with no failure the program ends normally. */
+import test
+defer test.summary()
+
+test.run("one") { assertEq(1, 1) }
+test.run("two") { assertContains([1, 2], 2) }

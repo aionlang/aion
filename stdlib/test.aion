@@ -1,0 +1,53 @@
+// import test
+//
+//   test.run("addition") { assertEq(1 + 1, 2) }
+//   test.run("division by zero") { assertFails { 1 / 0 } }
+//   test.skip("later")
+//   test.summary()                // prints the totals; the program stops with status 1 if a test failed
+//
+// A small runner for tests written as programs (`aion test` runs each file under tests/ and counts a
+// non-zero exit as a failure).  `run` runs a block, catches the panic a failed assertion makes, and goes on
+// with the next test, so one program can hold many.  With `defer test.summary()` as the first line of the
+// file the totals are printed when the file ends.  The assertions (`assert assertEq assertNe assertFalse
+// assertNull assertNotNull assertClose assertContains assertContainsText assertFails`) need no import.
+
+import os
+
+total := 0
+passed := 0
+skipped := 0
+failures := List<String>()
+
+// Run `body` as the test called `name`: it passes unless it panics.  Prints one line.
+fn run(name: String, body: () -> Unit) {
+    total += 1
+    failure: String? = try { body(); null } catch e { e }
+    if failure == null {
+        passed += 1
+        println("ok    $name")
+    } else {
+        failures.add("$name: $failure")
+        println("FAIL  $name: $failure")
+    }
+}
+
+// A test that is not run now; it shows in the totals.
+fn skip(name: String) {
+    skipped += 1
+    println("skip  $name")
+}
+
+// How many tests failed so far.
+fn failed() -> Int = failures.size()
+
+// Print the totals, and stop the program with status 1 if a test failed.
+fn summary() {
+    line := "$total test${total == 1 ? "" : "s"}: $passed passed, ${failures.size()} failed"
+    if skipped > 0 { line = "$line, $skipped skipped" }
+    println(line)
+    if failures.size() > 0 {
+        println("failed:")
+        for f in failures { println("  $f") }
+        os.exit(1)
+    }
+}

@@ -1,0 +1,10 @@
+ok    passes
+FAIL  fails: sum: expected 3 but got 2
+FAIL  panics: division by zero
+skip  later
+ok    raises
+failed so far: 2
+4 tests: 2 passed, 2 failed, 1 skipped
+failed:
+  fails: sum: expected 3 but got 2
+  panics: division by zero

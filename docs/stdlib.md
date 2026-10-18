@@ -213,6 +213,29 @@ function returning a negative, zero or positive `Int` and is a stable insertion
 sort (fine for script-sized data).  A list prints as `[1, 2]`, a map as
 `{a: 1}`, a set as `{1, 2}`.
 
+#### Assertions
+
+No import needed.  Each stops the program with a message (`aion test` counts that as a failed test) unless it holds:
+`assert(condition, message?)`, `assertEq(actual, expected, message?)`, `assertNe(actual, unexpected, message?)`,
+`assertFalse(condition)`, `assertNull(value)`, `assertNotNull(value)`, `assertClose(actual, expected, tolerance = 1e-9)`,
+`assertContains(list, item)`, `assertContainsText(text, part)`, and `assertFails { … }`, which runs a block that must
+panic and returns the panic's message.
+
+### `std.test`
+
+A small runner for many tests in one program.  `run(name) { … }` runs a block and prints `ok` or `FAIL` (a block
+fails by panicking, which is what a failed assertion does) and goes on; `skip(name)`; `failed() -> Int`; and
+`summary()`, which prints the totals and stops with status 1 if anything failed.
+
+```aion
+import test
+defer test.summary()            // the totals are printed when the file ends
+
+test.run("addition") { assertEq(1 + 1, 2) }
+test.run("division by zero") { assertFails { 1 / 0 } }
+test.skip("later")
+```
+
 ### `std.math`
 
 Constants `pi tau e inf nan`; `sqrt cbrt pow exp log log2 log10 hypot` ·
