@@ -18,11 +18,13 @@ RUN cargo build --release --locked
 # ---- runtime image -----------------------------------------------------------
 FROM debian:trixie-slim
 # clang compiles the generated IR; the -dev packages are what `sqlite` and `zlib`
-# link against; libssl is loaded at run time by `net`/`http` for TLS; git is
+# link against; libssl is loaded at run time by `net`/`http` for TLS, and utf8proc,
+# GMP, libarchive and expat by `unicode`, `bigint`, `archive` and `xml`; git is
 # needed for `// dep:` and `aion add` git dependencies.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
         clang libc6-dev libsqlite3-dev zlib1g-dev libssl3t64 ca-certificates git \
+        libutf8proc3 libgmp10 libarchive13t64 libexpat1 \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /src/target/release/aion /usr/local/bin/aion
