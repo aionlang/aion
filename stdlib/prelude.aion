@@ -2057,3 +2057,453 @@ fn List<T>.minBy<K: Comparable<K>>(key: Function<T, K>) -> T? = stream().minBy(k
 fn List<T>.maxBy<K: Comparable<K>>(key: Function<T, K>) -> T? = stream().maxBy(key)
 /** The elements combined with `combine`, starting from `initial` (`fold` with the arguments the other way round is `reduce`). */
 fn List<T>.reduceOrNull(combine: BinaryOperator<T>) -> T? = stream().reduce(combine)
+
+// ── Everyday conveniences ───────────────────────────────────────────────────────────────────────
+// The small things a program reaches for all the time: `abs(x)`, `repeat(3) { … }`, `"%05.1f".format(x)`,
+// `xs.remove(3)`, `m.getOrPut(k) { … }`, set arithmetic.  Each is documented where it is declared.
+
+/** Stops the program with `message`, in a place that needs a value: `x ?: error("x is missing")`. */
+extern fn error(message: String) = "aion_panic"
+
+/** Stops the program with `message` unless `condition` holds (for the caller's arguments). */
+fn require(condition: Bool, message: String = "requirement failed") {
+    if !condition { panic(message) }
+}
+
+/** Stops the program with `message` unless `condition` holds (for the state of the program). */
+fn check(condition: Bool, message: String = "check failed") {
+    if !condition { panic(message) }
+}
+
+/** Runs `action(0)`, `action(1)`, … `action(times - 1)`.  `repeat(3) { print("*") }` prints `***`. */
+fn repeat(times: Int, action: Consumer<Int>) {
+    for i in 0..times { action(i) }
+}
+
+/** The size of a number without its sign: `abs(-3)` is 3, `abs(-2.5)` is 2.5. */
+fn abs<T>(x: T) -> T = if x < 0 { -x } else { x }
+
+/** The smaller of two values: `min(2, 5)` is 2. */
+fn min<T: Comparable<T>>(a: T, b: T) -> T = if b.compareTo(a) < 0 { b } else { a }
+
+/** The larger of two values: `max(2, 5)` is 5. */
+fn max<T: Comparable<T>>(a: T, b: T) -> T = if b.compareTo(a) > 0 { b } else { a }
+
+/** `x`, kept between `low` and `high`: `clamp(15, 0, 10)` is 10. */
+fn clamp<T: Comparable<T>>(x: T, low: T, high: T) -> T = if x.compareTo(low) < 0 { low } else if x.compareTo(high) > 0 { high } else { x }
+
+/** A new list of the given values: `listOf(1, 2, 3)` is `[1, 2, 3]`. */
+fn listOf<T>(vararg items: T) -> List<T> = items.copy()
+
+/** A list with no values, of the type you name: `emptyList<Int>()`. */
+fn emptyList<T>() -> List<T> = List<T>()
+
+/** A map with no entries, of the types you name: `emptyMap<String, Int>()`. */
+fn emptyMap<K, V>() -> Map<K, V> = Map<K, V>()
+
+// ── numbers and characters ──
+
+/** Is the number even? */
+fn Int.isEven() = this % 2 == 0
+/** Is the number odd? */
+fn Int.isOdd() = this % 2 != 0
+/** The number, but at least `low`: `3.coerceAtLeast(5)` is 5. */
+fn Int.coerceAtLeast(low: Int) = if this < low { low } else { this }
+/** The number, but at most `high`: `9.coerceAtMost(5)` is 5. */
+fn Int.coerceAtMost(high: Int) = if this > high { high } else { this }
+/** The number, kept between `low` and `high`: `15.coerceIn(0, 10)` is 10. */
+fn Int.coerceIn(low: Int, high: Int) = this.clamp(low, high)
+/** The number, but at least `low`. */
+fn Float.coerceAtLeast(low: Float) = if this < low { low } else { this }
+/** The number, but at most `high`. */
+fn Float.coerceAtMost(high: Float) = if this > high { high } else { this }
+/** The number, kept between `low` and `high`. */
+fn Float.coerceIn(low: Float, high: Float) = this.clamp(low, high)
+/** Is the character a letter or a digit? */
+fn Char.isLetterOrDigit() = isLetter() || isDigit()
+
+// ── strings ──
+
+/** Pads on the left to `width` characters with `fill` (a character or text): `"7".padStart(3, '0')` is `"007"`. */
+fn String.padStart(width: Int, fill: Any? = null) = padLeft(width, if fill == null { " " } else { "$fill" })
+/** Pads on the right to `width` characters with `fill`: `"ab".padEnd(4, '.')` is `"ab.."`. */
+fn String.padEnd(width: Int, fill: Any? = null) = padRight(width, if fill == null { " " } else { "$fill" })
+/** Is there at least one character? */
+fn String.isNotEmpty() = length() > 0
+/** Is there a character that is not white space? */
+fn String.isNotBlank() = !isBlank()
+/** The characters, as a list. */
+fn String.toList() = chars()
+/** The first character; stops the program for an empty text. */
+fn String.first() -> Char = chars().first()
+/** The last character; stops the program for an empty text. */
+fn String.last() -> Char = chars().last()
+/** The text backwards. */
+fn String.reversed() -> String {
+    out := StringBuilder()
+    cs := chars()
+    for i in 0..cs.size() { out.appendChar(cs[cs.size() - 1 - i]) }
+    return out.toString()
+}
+/** The first `n` characters. */
+fn String.take(n: Int) -> String = chars().take(n).join("")
+/** Everything after the first `n` characters. */
+fn String.drop(n: Int) -> String = chars().drop(n).join("")
+/** The last `n` characters. */
+fn String.takeLast(n: Int) -> String {
+    cs := chars()
+    return cs.drop(cs.size() - n).join("")
+}
+/** Everything but the last `n` characters. */
+fn String.dropLast(n: Int) -> String {
+    cs := chars()
+    return cs.take(cs.size() - n).join("")
+}
+/** The characters for which `keep` is true. */
+fn String.filter(keep: Predicate<Char>) -> String = chars().filter(keep).join("")
+/** How many characters satisfy `test`. */
+fn String.count(test: Predicate<Char>) -> Int = chars().count(test)
+/** Is `test` true for at least one character? */
+fn String.any(test: Predicate<Char>) -> Bool = chars().any(test)
+/** Is `test` true for every character? */
+fn String.all(test: Predicate<Char>) -> Bool = chars().all(test)
+/** The text without `prefix`, if it starts with it. */
+fn String.removePrefix(prefix: String) -> String = if startsWith(prefix) { substring(prefix.length(), length()) } else { this }
+/** The text without `suffix`, if it ends with it. */
+fn String.removeSuffix(suffix: String) -> String = if endsWith(suffix) { substring(0, length() - suffix.length()) } else { this }
+/** The text with its first letter in upper case. */
+fn String.capitalize() -> String {
+    cs := chars()
+    if cs.isEmpty() { return this }
+    return cs[0].upper().toString() + cs.drop(1).join("")
+}
+/** The words of the text, split at any run of white space: `" a  b\tc ".words()` is `[a, b, c]`. */
+fn String.words() -> List<String> {
+    return replace("\t", " ").replace("\n", " ").replace("\r", " ").split(" ").filter { it.isNotEmpty() }
+}
+/** The text with the indentation that all its lines share taken off, and a blank first and last line dropped. */
+fn String.trimIndent() -> String {
+    rows := split("\n")
+    if rows.isNotEmpty() && rows.first().isBlank() { rows = rows.drop(1) }
+    if rows.isNotEmpty() && rows.last().isBlank() { rows = rows.take(rows.size() - 1) }
+    indent := -1
+    for row in rows {
+        if row.isBlank() { continue }
+        width := row.length() - row.trimStart().length()
+        if indent < 0 || width < indent { indent = width }
+    }
+    if indent <= 0 { return rows.join("\n") }
+    return rows.map { if it.length() >= indent { it.substring(indent, it.length()) } else { "" } }.join("\n")
+}
+/** The text as an `Int`; stops the program if it is not one (see `toIntOrNull`). */
+fn String.toInt() -> Int = toIntOrNull() ?: error("cannot convert '$this' to Int")
+/** The text as a `Float`; stops the program if it is not one (see `toFloatOrNull`). */
+fn String.toFloat() -> Float = toFloatOrNull() ?: error("cannot convert '$this' to Float")
+/** `true` for "true", `false` for "false"; stops the program for anything else. */
+fn String.toBool() -> Bool {
+    if this == "true" { return true }
+    if this == "false" { return false }
+    panic("cannot convert '$this' to Bool")
+}
+
+// `"%5.2f".format(x)`: a `%` starts a field, `%%` is a percent sign.  After the `%` come flags (`-` left,
+// `0` zeros, `+` always a sign), a width, a `.precision`, and the kind: `d` integer, `f` float, `s` text,
+// `c` character, `x` hex, `b` binary, `o` octal.
+fn __format_field(kind: Char, arg: Any, precision: Int, plus: Bool) -> String {
+    text := ""
+    negative := false
+    if kind == 'd' || kind == 'x' || kind == 'b' || kind == 'o' {
+        n := if arg is Int { arg } else if arg is Char { arg.code() } else { error("%$kind needs an integer, not $arg") }
+        negative = n < 0
+        magnitude := abs(n)
+        text = when kind {
+            'x' -> magnitude.toRadix(16)
+            'b' -> magnitude.toRadix(2)
+            'o' -> magnitude.toRadix(8)
+            else -> magnitude.toString()
+        }
+    } else if kind == 'f' {
+        x := if arg is Float { arg } else if arg is Int { arg.toFloat() } else { error("%f needs a number, not $arg") }
+        negative = x < 0.0
+        text = abs(x).format(if precision < 0 { 6 } else { precision })
+    } else if kind == 's' {
+        text = "$arg"
+        if precision >= 0 { text = text.take(precision) }
+        return text
+    } else if kind == 'c' {
+        return if arg is Char { arg.toString() } else if arg is Int { arg.toChar().toString() } else { "$arg" }
+    } else {
+        error("unknown format %$kind")
+    }
+    if negative { return "-" + text }
+    return if plus { "+" + text } else { text }
+}
+
+/** Fills the `%` fields of the text with `args`: `"%d items cost %.2f".format(3, 4.5)` is `"3 items cost 4.50"`. */
+fn String.format(vararg args: Any) -> String {
+    out := StringBuilder()
+    cs := chars()
+    n := cs.size()
+    i := 0
+    next := 0
+    while i < n {
+        c := cs[i]
+        i += 1
+        if c != '%' {
+            out.appendChar(c)
+            continue
+        }
+        if i >= n { error("format: the text ends in a lone %") }
+        if cs[i] == '%' {
+            out.appendChar('%')
+            i += 1
+            continue
+        }
+        left := false
+        zeros := false
+        plus := false
+        while i < n && (cs[i] == '-' || cs[i] == '0' || cs[i] == '+') {
+            if cs[i] == '-' { left = true } else if cs[i] == '0' { zeros = true } else { plus = true }
+            i += 1
+        }
+        width := 0
+        while i < n && cs[i].isDigit() {
+            width = width * 10 + cs[i].digitValue()!!
+            i += 1
+        }
+        precision := -1
+        if i < n && cs[i] == '.' {
+            i += 1
+            precision = 0
+            while i < n && cs[i].isDigit() {
+                precision = precision * 10 + cs[i].digitValue()!!
+                i += 1
+            }
+        }
+        if i >= n { error("format: the text ends inside a field") }
+        kind := cs[i]
+        i += 1
+        if next >= args.size() { error("format: too few arguments for '$this'") }
+        field := __format_field(kind, args[next], precision, plus)
+        next += 1
+        if field.length() < width {
+            if left {
+                field = field.padRight(width)
+            } else if zeros && kind != 's' && kind != 'c' {
+                sign := if field.startsWith("-") || field.startsWith("+") { field.take(1) } else { "" }
+                field = sign + field.drop(sign.length()).padLeft(width - sign.length(), "0")
+            } else {
+                field = field.padLeft(width)
+            }
+        }
+        out.append(field)
+    }
+    return out.toString()
+}
+
+// ── lists ──
+
+/** Sorts the list itself, smallest first (`sorted()` gives a new list). */
+fn List<T>.sort() {
+    s := sorted()
+    for i in 0..size() { set(i, s[i]) }
+}
+/** Sorts the list itself, largest first. */
+fn List<T>.sortDescending() {
+    s := sortedDescending()
+    for i in 0..size() { set(i, s[i]) }
+}
+/** Sorts the list itself by `key(element)`. */
+fn List<T>.sortBy<K: Comparable<K>>(key: Function<T, K>) {
+    s := sortedBy(key)
+    for i in 0..size() { set(i, s[i]) }
+}
+/** Sorts the list itself by `compare`. */
+fn List<T>.sortWith(compare: Comparator<T>) {
+    s := sortedWith(compare)
+    for i in 0..size() { set(i, s[i]) }
+}
+/** Turns the list itself around. */
+fn List<T>.reverse() {
+    for i in 0..size() / 2 {
+        other := size() - 1 - i
+        held := get(i)
+        set(i, get(other))
+        set(other, held)
+    }
+}
+/** Swaps two elements. */
+fn List<T>.swap(a: Int, b: Int) {
+    held := get(a)
+    set(a, get(b))
+    set(b, held)
+}
+/** Takes out the first element equal to `value`; false if there was none. */
+fn List<T>.remove(value: T) -> Bool {
+    at := indexOf(value)
+    if at < 0 { return false }
+    removeAt(at)
+    return true
+}
+/** Puts `value` in at `index`, moving the elements from there on up by one. */
+fn List<T>.insert(index: Int, value: T) {
+    if index < 0 || index > size() { panic("insert position $index is outside 0..${size()}") }
+    add(value)
+    i := size() - 1
+    while i > index {
+        set(i, get(i - 1))
+        i -= 1
+    }
+    set(index, value)
+}
+/** Takes out every element for which `test` is true. */
+fn List<T>.removeIf(test: Predicate<T>) {
+    kept := filterNot(test)
+    clear()
+    addAll(kept)
+}
+/** Takes out every element that is in `other`. */
+fn List<T>.removeAll(other: List<T>) {
+    kept := filterNot { other.contains(it) }
+    clear()
+    addAll(kept)
+}
+/** Is there at least one element? */
+fn List<T>.isNotEmpty() = size() > 0
+/** The positions of the elements: `0..size()`. */
+fn List<T>.indices() = Range(0, size())
+/** The position of the last element (-1 for an empty list). */
+fn List<T>.lastIndex() = size() - 1
+/** The position of the first element for which `test` is true, or -1. */
+fn List<T>.indexOfFirst(test: Predicate<T>) -> Int {
+    for i in 0..size() {
+        if test(get(i)) { return i }
+    }
+    return -1
+}
+/** The position of the last element for which `test` is true, or -1. */
+fn List<T>.indexOfLast(test: Predicate<T>) -> Int {
+    i := size() - 1
+    while i >= 0 {
+        if test(get(i)) { return i }
+        i -= 1
+    }
+    return -1
+}
+/** The element at `index`, or `fallback()` when there is none. */
+fn List<T>.getOrElse(index: Int, fallback: Supplier<T>) -> T = getOrNull(index) ?: fallback()
+/** The last `n` elements. */
+fn List<T>.takeLast(n: Int) -> List<T> = drop(size() - n)
+/** Everything but the last `n` elements. */
+fn List<T>.dropLast(n: Int) -> List<T> = take(size() - n)
+/** The elements joined end to end: `[[1], [2, 3]].flatten()` is `[1, 2, 3]`. */
+fn List<T>.flatten() = flatMap { it }
+/** A list of the first parts and a list of the second parts of a list of pairs. */
+fn List<T>.unzip() = (map { it.first }, map { it.second })
+/** The elements that are not `null`. */
+fn List<T>.filterNotNull() = mapNotNull { it }
+/** The elements as text, between `prefix` and `suffix`, separated by `separator`. */
+fn List<T>.joinToString(separator: String = ", ", prefix: String = "", suffix: String = "") -> String =
+    prefix + join(separator) + suffix
+/** The largest `f(element)`, or `null` for an empty list. */
+fn List<T>.maxOf<R: Comparable<R>>(f: Function<T, R>) = stream().map(f).max()
+/** The smallest `f(element)`, or `null` for an empty list. */
+fn List<T>.minOf<R: Comparable<R>>(f: Function<T, R>) = stream().map(f).min()
+/** A map from `key(element)` to the element; a repeated key keeps the last. */
+fn List<T>.associateBy<K>(key: Function<T, K>) -> Map<K, T> = stream().toMap(key, { it })
+/** Do both lists hold equal elements in the same order? */
+fn List<T>.contentEquals(other: List<T>) -> Bool {
+    if size() != other.size() { return false }
+    for i in 0..size() {
+        if get(i) != other.get(i) { return false }
+    }
+    return true
+}
+/** Sorted largest `key(element)` first. */
+fn List<T>.sortedByDescending<K: Comparable<K>>(key: Function<T, K>) -> List<T> = sortedWith { a, b -> key(b).compareTo(key(a)) }
+
+// ── maps ──
+
+/** The value for `key`; when there is none, stores and returns `make()`. */
+fn Map<K, V>.getOrPut(key: K, make: Supplier<V>) -> V {
+    found := getOrNull(key)
+    if found != null { return found }
+    made := make()
+    set(key, made)
+    return made
+}
+/** Stores `value` under `key`; when `key` already has a value, stores `combine(old, value)` instead. */
+fn Map<K, V>.merge(key: K, value: V, combine: BinaryOperator<V>) {
+    old := getOrNull(key)
+    set(key, if old == null { value } else { combine(old, value) })
+}
+/** Adds every entry of `other`. */
+fn Map<K, V>.putAll(other: Map<K, V>) {
+    other.forEach { k, v -> set(k, v) }
+}
+/** A new map with the same keys and `f(value)` as values. */
+fn Map<K, V>.mapValues<R>(f: Function<V, R>) -> Map<K, R> {
+    out := Map<K, R>()
+    forEach { k, v -> out.set(k, f(v)) }
+    return out
+}
+/** A new map with the entries for which `keep(key, value)` is true. */
+fn Map<K, V>.filter(keep: BiPredicate<K, V>) -> Map<K, V> {
+    out := Map<K, V>()
+    forEach { k, v -> if keep(k, v) { out.set(k, v) } }
+    return out
+}
+/** Is there at least one entry? */
+fn Map<K, V>.isNotEmpty() = size() > 0
+/** Do any entries satisfy `test(key, value)`? */
+fn Map<K, V>.any(test: BiPredicate<K, V>) -> Bool = entries().any { test(it.key, it.value) }
+/** Do all entries satisfy `test(key, value)`? */
+fn Map<K, V>.all(test: BiPredicate<K, V>) -> Bool = entries().all { test(it.key, it.value) }
+/** How many entries satisfy `test(key, value)`. */
+fn Map<K, V>.count(test: BiPredicate<K, V>) -> Int = entries().count { test(it.key, it.value) }
+
+// ── sets ──
+
+/** Adds every element of `items`. */
+fn Set<T>.addAll(items: List<T>) {
+    for item in items { add(item) }
+}
+/** Takes out every element of `items`. */
+fn Set<T>.removeAll(items: List<T>) {
+    for item in items { remove(item) }
+}
+/** The elements that are in either set. */
+fn Set<T>.union(other: Set<T>) -> Set<T> {
+    out := Set<T>()
+    out.addAll(toList())
+    out.addAll(other.toList())
+    return out
+}
+/** The elements that are in both sets. */
+fn Set<T>.intersect(other: Set<T>) -> Set<T> {
+    out := Set<T>()
+    for item in toList() {
+        if other.contains(item) { out.add(item) }
+    }
+    return out
+}
+/** The elements of this set that are not in `other`. */
+fn Set<T>.subtract(other: Set<T>) -> Set<T> {
+    out := Set<T>()
+    for item in toList() {
+        if !other.contains(item) { out.add(item) }
+    }
+    return out
+}
+/** Are all the elements of this set in `other`? */
+fn Set<T>.isSubsetOf(other: Set<T>) -> Bool = toList().all { other.contains(it) }
+/** The elements for which `keep` is true. */
+fn Set<T>.filter(keep: Predicate<T>) -> Set<T> {
+    out := Set<T>()
+    for item in toList() {
+        if keep(item) { out.add(item) }
+    }
+    return out
+}
+/** Is there at least one element? */
+fn Set<T>.isNotEmpty() = size() > 0
