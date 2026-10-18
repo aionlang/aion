@@ -1049,15 +1049,22 @@ fn args() -> List<String> {
 
 // ── Tasks ───────────────────────────────────────────────────────
 //
-// Tasks are cooperative: they run one at a time and switch only when a task waits
-// (join, await, a channel, sleep) or calls yield(), so no locks are needed.  A panic in a
+// Tasks are cooperative: the tasks of one thread run one at a time and switch only when a task waits
+// (join, await, a channel, sleep) or calls yield(), so they need no locks.  A panic in a
 // task that does not `try` it ends the program.  The program ends when the main code
 // does, even if tasks are still going; use waitAll() to let them finish.
+//
+// Threads (below) run side by side.  The library types that threads share (jobs, channels, mutexes) check
+// and change their state while holding the monitor lock, __lock() … __unlock(), which nests; a task that waits
+// with __park() lets go of it meanwhile and takes it back when it runs again.
 
 extern fn __spawn(body: () -> Unit) = "aion_spawn"
 extern fn __park() = "aion_park"
 extern fn __notify() = "aion_notify"
 extern fn __taskCount() -> Int = "aion_task_count"
+extern fn __lock() = "aion_sync_lock"
+extern fn __unlock() = "aion_sync_unlock"
+extern fn __threadStart(body: () -> Unit) = "aion_thread_start"
 extern fn __parkFor(ms: Int) = "aion_park_for"
 extern fn __clock() -> Int = "aion_clock_ms"
 
@@ -1072,7 +1079,9 @@ type Job {
     fn isDone() = done
     // Wait for it to finish.
     fn join() {
+        __lock()
         while !done { __park() }
+        __unlock()
     }
 }
 
@@ -1081,8 +1090,10 @@ fn launch(body: () -> Unit) -> Job {
     job := Job()
     __spawn({
         body()
+        __lock()
         job.done = true
         __notify()
+        __unlock()
     })
     return job
 }
@@ -1094,7 +1105,9 @@ type Task<T> {
     fn isDone() = done
     // Wait for the result.
     fn await() -> T {
+        __lock()
         while !done { __park() }
+        __unlock()
         return slot[0]
     }
 }
@@ -1104,15 +1117,19 @@ fn async<T>(body: () -> T) -> Task<T> {
     task := Task<T>()
     __spawn({
         task.slot[0] = body()
+        __lock()
         task.done = true
         __notify()
+        __unlock()
     })
     return task
 }
 
 // Wait until every task has finished.
 fn waitAll() {
+    __lock()
     while __taskCount() > 1 { __park() }
+    __unlock()
 }
 
 // A queue for passing values from one task to another.
@@ -1133,9 +1150,13 @@ type Channel<T>(capacity: Int = 0) {
     fn isClosed() = closed
 
     fn send(value: T) {
+        __lock()
         limit := if capacity > 0 { capacity } else { 1 }
         while !closed && queue.size() >= limit { __park() }
-        if closed { panic("send on a closed channel") }
+        if closed {
+            __unlock()
+            panic("send on a closed channel")
+        }
         queue.add(value)
         sent += 1
         ticket := sent
@@ -1143,35 +1164,48 @@ type Channel<T>(capacity: Int = 0) {
         if capacity == 0 {
             while !closed && taken < ticket { __park() }
         }
+        __unlock()
     }
 
     fn receive() -> T? {
+        __lock()
         if queue.isEmpty() && !closed {
             waiting += 1
             if senders > 0 { __notify() }
             while queue.isEmpty() && !closed { __park() }
             waiting -= 1
         }
-        if queue.isEmpty() { return null }
+        if queue.isEmpty() {
+            __unlock()
+            return null
+        }
         value := queue.removeAt(0)
         taken += 1
         __notify()
+        __unlock()
         return value
     }
 
     // The next value if there is one right now, else null (it never waits).
     fn tryReceive() -> T? {
-        if queue.isEmpty() { return null }
+        __lock()
+        if queue.isEmpty() {
+            __unlock()
+            return null
+        }
         value := queue.removeAt(0)
         taken += 1
         __notify()
+        __unlock()
         return value
     }
 
     // No more values will be sent; receivers get what is left, then null.
     fn close() {
+        __lock()
         closed = true
         __notify()
+        __unlock()
     }
 
     // Handle each value until the channel is closed and empty.
@@ -1228,7 +1262,9 @@ type Channel<T>(capacity: Int = 0) {
             },
             {
                 if capacity == 0 {
+                    __lock()
                     while !closed && taken < ticket { __park() }
+                    __unlock()
                 }
                 handler()
             },
@@ -1266,8 +1302,12 @@ fn onDefault(handler: () -> Unit) -> SelectCase =
 
 // Wait for the first case that can happen and say which it is.
 fn __selectWait(cases: List<SelectCase>) -> Int {
+    __lock()
     for c in cases { c.enter() }
-    defer { for c in cases { c.leave() } }
+    defer {
+        for c in cases { c.leave() }
+        __unlock()
+    }
     chosen := -1
     while chosen < 0 {
         fallback := -1
@@ -1316,6 +1356,136 @@ fn select(vararg cases: SelectCase) -> Int {
     i := __selectWait(cases)
     cases[i].finish()
     return i
+}
+
+// ── Threads ─────────────────────────────────────────────────────────────────────────────────────
+/**
+ * Threads run Aion code side by side, on several processors.  Each thread has its own tasks (`launch`, `async`), its
+ * own stack and its own `try` and `defer`; what they share is the heap, so objects, lists and variables are
+ * visible to all of them.  Shared data that is changed needs a `Mutex` (or an `AtomicInt`, or a `Channel`, which are
+ * safe between threads): two threads changing a `List` at the same time can corrupt it.  The standard library
+ * modules are not made for several threads at once unless their documentation says so.
+ */
+
+// A thread that was started with thread { … }.
+type Thread {
+    done: Bool = false
+    fn isDone() = done
+    // Wait for it to finish.
+    fn join() {
+        __lock()
+        while !done { __park() }
+        __unlock()
+    }
+}
+
+// Run `body` on a new thread, concurrently with the code that follows.  A panic in a thread that does
+// not `try` it ends the program, and so does the end of the main code.
+fn thread(body: () -> Unit) -> Thread {
+    t := Thread()
+    __threadStart({
+        body()
+        __lock()
+        t.done = true
+        __notify()
+        __unlock()
+    })
+    return t
+}
+
+// Run `body` on a new thread and get its result later with await().
+fn compute<T>(body: () -> T) -> Task<T> {
+    task := Task<T>()
+    __threadStart({
+        task.slot[0] = body()
+        __lock()
+        task.done = true
+        __notify()
+        __unlock()
+    })
+    return task
+}
+
+// The number of processors the threads can use.
+extern fn cpuCount() -> Int = "aion_cpu_count"
+// A number that tells the running thread from the others: 0 for the main one.
+extern fn threadId() -> Int = "aion_thread_id"
+
+// Lets one task (of any thread) at a time into a piece of code.
+//
+//     lock := Mutex()
+//     lock.withLock { total += 1 }
+type Mutex {
+    locked: Bool = false
+
+    // Wait until the mutex is free, then take it.
+    fn lock() {
+        __lock()
+        while locked { __park() }
+        locked = true
+        __unlock()
+    }
+
+    // Take the mutex if it is free; says whether it did.
+    fn tryLock() -> Bool {
+        __lock()
+        free := !locked
+        if free { locked = true }
+        __unlock()
+        return free
+    }
+
+    fn unlock() {
+        __lock()
+        if !locked {
+            __unlock()
+            panic("unlock of a mutex that is not locked")
+        }
+        locked = false
+        __notify()
+        __unlock()
+    }
+
+    // Run `action` while holding the mutex.
+    fn withLock(action: () -> Unit) {
+        lock()
+        defer unlock()
+        action()
+    }
+}
+
+// An Int that threads can change without a Mutex.
+type AtomicInt(value: Int = 0) {
+    fn get() -> Int {
+        __lock()
+        v := value
+        __unlock()
+        return v
+    }
+
+    fn set(v: Int) {
+        __lock()
+        value = v
+        __unlock()
+    }
+
+    // Add `n` and give the new value.
+    fn add(n: Int) -> Int {
+        __lock()
+        value += n
+        v := value
+        __unlock()
+        return v
+    }
+
+    // Set the value to `updated` if it is `expected` now; says whether it did.
+    fn compareAndSet(expected: Int, updated: Int) -> Bool {
+        __lock()
+        same := value == expected
+        if same { value = updated }
+        __unlock()
+        return same
+    }
 }
 
 // ── Result ──────────────────────────────────────────────────────────────────────────────────────

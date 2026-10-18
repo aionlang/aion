@@ -1,0 +1,59 @@
+// stress: 40
+// Threads that allocate a lot while the collector runs, tasks and select inside and between threads.
+// heavy allocation on several threads while the collector runs
+fn work(seed: Int) -> Int {
+    m := Map<String, List<Int>>()
+    for i in 0..3000 {
+        key := "k${i % 50}"
+        if m.getOrNull(key) == null { m[key] = List<Int>() }
+        m[key].add(i * seed)
+    }
+    total := 0
+    for e in m.entries() { total += e.value.size() + e.key.length() }
+    return total
+}
+
+tasks := List<Task<Int>>()
+for s in 1..=6 { tasks.add(compute { work(s) }) }
+sum := 0
+for t in tasks { sum += t.await() }
+println("sum", sum)
+
+// tasks inside a thread, and a thread that waits for another through a channel
+done := Channel<String>()
+thread {
+    ping := Channel<Int>()
+    j := launch { for i in 1..=3 { ping.send(i) }; ping.close() }
+    got := 0
+    ping.forEach { got += it }
+    j.join()
+    done.send("inner tasks gave $got")
+}
+println(done.receive())
+
+// select across threads
+a := Channel<Int>()
+b := Channel<Int>()
+quit := Channel<Int>()
+thread { for i in 1..=3 { a.send(i); sleep(2) } }
+thread { for i in 10..=12 { b.send(i); sleep(3) } }
+thread { sleep(100); quit.close() }
+total := 0
+running := true
+while running {
+    select(a.onReceive { total += it }, b.onReceive { total += it }, quit.onClose { running = false })
+}
+println("select total", total)
+
+// a panic caught inside a thread releases what it held
+r := Channel<String>(1)
+thread {
+    m := Mutex()
+    msg := try {
+        m.withLock { panic("boom") }
+        "no"
+    } catch e { "caught $e" }
+    r.send(msg)
+}
+println(r.receive())
+println("end")

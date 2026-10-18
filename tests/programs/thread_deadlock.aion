@@ -1,0 +1,8 @@
+// exit: 1
+// stderr: deadlock: every task is waiting
+// A thread that waits for something nobody will do is reported, not hung
+ch := Channel<Int>()
+t := thread { ch.receive() }
+println("main joins")
+t.join()
+println("not reached")

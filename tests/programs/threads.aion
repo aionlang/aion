@@ -1,0 +1,39 @@
+// stress: 40
+// Threads: a Mutex and an AtomicInt shared by four of them, a channel between threads, and a computed result.
+counter := AtomicInt()
+plain := 0
+lock := Mutex()
+threads := List<Thread>()
+for w in 0..4 {
+    threads.add(thread {
+        for i in 0..2000 {
+            counter.add(1)
+            lock.withLock { plain += 1 }
+        }
+    })
+}
+for t in threads { t.join() }
+println(counter.get(), plain)
+
+// results through a channel and a computed value
+ch := Channel<Int>(8)
+workers := List<Thread>()
+for w in 1..=3 {
+    workers.add(thread {
+        total := 0
+        for i in 1..=1000 { total += i * w }
+        ch.send(total)
+    })
+}
+sum := 0
+for i in 0..3 { sum += ch.receive()!! }
+println(sum)
+for w in workers { w.join() }
+
+t := compute {
+    xs := List<String>()
+    for i in 0..20000 { xs.add("item $i") }
+    xs.size()
+}
+println(t.await())
+println(threadId(), cpuCount() > 0)
