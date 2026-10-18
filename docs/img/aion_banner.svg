@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="73 15 2411 850" width="2411" height="850" role="img" aria-label="Aion">
+  <title>Aion</title>
+  <path fill="#4377df" fill-rule="evenodd" d="M73 15H817L598 344H292ZM292 445H598L817 865H649L622 814H267L241 865H73ZM405 550L323 707H566L484 550Z"/>
+  <g fill="#81a3e8">
+    <rect x="863" y="435" width="167" height="420"/>
+    <path fill-rule="evenodd" d="M1208 435H1685A85 85 0 0 1 1770 520V770A85 85 0 0 1 1685 855H1208A85 85 0 0 1 1123 770V520A85 85 0 0 1 1208 435ZM1332 540A42 42 0 0 0 1290 582V708A42 42 0 0 0 1332 750H1561A42 42 0 0 0 1603 708V582A42 42 0 0 0 1561 540Z"/>
+    <path d="M1862 435H2055L2316 690V435H2484V855H2292L2030 598V855H1862Z"/>
+  </g>
+</svg>
