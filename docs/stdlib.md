@@ -270,7 +270,7 @@ Clocks: `millis()` (wall clock, ms since 1970), `nanos()` and `monotonic()` (for
 hour() minute() second() weekday() dayOfYear() weekdayName() monthName()`, `format(pattern)`
 (strftime: `%Y-%m-%d %H:%M:%S %A %b %j %z`), `iso()`, `plus(ms) plusSeconds plusMinutes
 plusHours plusDays plusMonths plusYears`, `since(other)`, `toUtc() toLocal()`; it compares
-and works as a `Map` key.  `moment + ms` is a `DateTime` (`plus`) and `later - earlier` is the
+and works as a `Map` key.  `moment + ms` and `moment - ms` are a `DateTime` (`plus`), and `later - earlier` is the
 milliseconds between them (`since`).  `now()`, `nowLocal()`, `of(year, month, day, hour = 0, …)`
 (out-of-range fields carry over), `parse(text, pattern = "%Y-%m-%d %H:%M:%S") -> DateTime?`,
 and the unit constants `second minute hour day` (ms).

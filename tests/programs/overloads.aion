@@ -1,0 +1,44 @@
+/** Functions and methods of the same name, told apart by their parameters. */
+fn describe(x: Int) = "int $x"
+fn describe(x: Float) = "float $x"
+fn describe(x: String) = "text $x"
+fn describe(x: Int, y: Int) = "two ints ${x + y}"
+fn describe(x: Bool = true, label: String = "flag") = "$label $x"
+
+fn area(side: Int) = side * side
+fn area(w: Int, h: Int) = w * h
+
+type Money(cents: Int) {
+    fn plus(o: Money) = Money(cents + o.cents)
+    fn plus(extra: Int) = Money(cents + extra)
+    fn times(k: Int) = Money(cents * k)
+    fn toString() = "$cents"
+    fn show() = "money"
+    fn show(prefix: String) = "$prefix $cents"
+}
+
+fn String.wrap(left: String) = left + this
+fn String.wrap(left: String, right: String) = left + this + right
+fn Int.pad(width: Int) = toString().padLeft(width)
+fn Int.pad(width: Int, fill: String) = toString().padLeft(width, fill)
+
+println(describe(1), describe(2.5), describe("hi"), describe(3, 4))
+println(describe(), describe(false), describe(label: "x"))
+println(area(3), area(2, 5), area(w: 2, h: 6))
+a := Money(100)
+println(a + Money(5), a + 7, a * 2, a.show(), a.show(">"))
+println("x".wrap("<"), "x".wrap("<", ">"), 7.pad(3), 7.pad(3, "0"))
+println(describe(1) + describe(1.0))
+
+// an interface finds the version whose parameters it names, wherever it was declared
+interface Sized { fn size(k: Int) -> Int }
+type Box(n: Int) {
+    fn size(k: Int) = n * k
+    fn size(s: String) = n
+}
+type Crate(n: Int) {
+    fn size(s: String) = n
+    fn size(k: Int) = n + k
+}
+fn total(x: Sized) = x.size(2)
+println(total(Box(5)), total(Crate(5)))

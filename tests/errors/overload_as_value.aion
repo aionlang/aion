@@ -1,0 +1,4 @@
+// error: `f` has several versions, so it cannot be used as a value
+fn f(x: Int) = x
+fn f(x: String) = x
+g := f

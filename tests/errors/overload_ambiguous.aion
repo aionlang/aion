@@ -1,0 +1,4 @@
+// error: the call to `f` (Int, Int) fits more than one version
+fn f(x: Int, y: Float) {}
+fn f(x: Float, y: Int) {}
+f(1, 1)

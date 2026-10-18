@@ -1,0 +1,5 @@
+// error: `A` already has a method `m`
+open type A(x: Int) {
+    open fn m() = 1
+    fn m(k: Int) = k
+}

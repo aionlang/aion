@@ -286,6 +286,8 @@ pub struct Checker<'a> {
     depth: Cell<u32>,
     /// Methods added to the built-in types: `fn String.shout() = …`.
     ext_methods: RefCell<HashMap<(u8, String), FnId>>,
+    /// Functions and methods that share a name: the first one declared maps to all of them, in order.
+    overloads: RefCell<HashMap<FnId, Vec<FnId>>>,
     /// Names of module variables that functions, lambdas or other modules assign:
     /// these are never narrowed by null checks.
     unstable_globals: HashSet<(usize, String)>,
@@ -523,6 +525,7 @@ impl<'a> Checker<'a> {
             empty: Rc::new(HashMap::new()),
             depth: Cell::new(0),
             ext_methods: RefCell::new(HashMap::new()),
+            overloads: RefCell::new(HashMap::new()),
             unstable_globals: unstable_globals(loaded),
             overrides: RefCell::new(Vec::new()),
             is_targets: RefCell::new(BTreeSet::new()),
@@ -683,10 +686,27 @@ impl<'a> Checker<'a> {
         for item in &module.ast.items {
             match item {
                 Item::Fn(decl) if decl.type_params.is_empty() => {
-                    let info =
+                    let mut info =
                         self.signature(mi, decl, FuncKind::Free, None, symbol_for(&module.name, None, decl), &empty)?;
+                    // A second function of the same name is another version of it when the parameters differ.
+                    let first = match self.t.scopes[mi].items.get(&decl.name.name) {
+                        Some(&Sym::Fn(first))
+                            if !self.is_extern_fn(first) && !matches!(decl.body, ast::FnBody::Extern { .. }) =>
+                        {
+                            Some(first)
+                        }
+                        _ => None,
+                    };
+                    if let Some(first) = first {
+                        let duplicate = format!("`{}` is already defined in this module", decl.name.name);
+                        let suffix = self.overload_suffix(first, &info, decl.name.span, duplicate)?;
+                        info.symbol.push_str(&suffix);
+                    }
                     let id = self.declare_fn(info, Work::Fn { decl, subst: empty.clone(), owner: None });
-                    self.t.define(mi, &decl.name, Sym::Fn(id))?;
+                    match first {
+                        Some(first) => self.add_overload(first, id),
+                        None => self.t.define(mi, &decl.name, Sym::Fn(id))?,
+                    }
                 }
                 Item::Method { owner, owner_params, decl } if builtin_type(&owner.name).is_some() => {
                     if let Some(p) = owner_params.first() {
@@ -1008,7 +1028,19 @@ impl<'a> Checker<'a> {
         if decl.modifier != ast::Modifier::None && !decl.type_params.is_empty() {
             return Err(Diagnostic::new("a generic method cannot be `open`", decl.name.span));
         }
+        // A second method of the same name is another version of it, unless a subtype could replace the method.
+        let first = existing.methods.get(name).copied().filter(|_| {
+            !inherited
+                && decl.modifier == ast::Modifier::None
+                && decl.type_params.is_empty()
+                && !existing.open
+                && existing.parent.is_none()
+                && !existing.virtuals.contains_key(name)
+                && !existing.generic_methods.contains_key(name)
+                && !existing.statics.contains_key(name)
+        });
         if !inherited
+            && first.is_none()
             && (existing.methods.contains_key(name)
                 || existing.generic_methods.contains_key(name)
                 || existing.statics.contains_key(name))
@@ -1034,8 +1066,16 @@ impl<'a> Checker<'a> {
             return Ok(());
         }
         let symbol = method_symbol(module_name, &owner, ty, &decl.name.name);
-        let info = self.signature(mi, decl, FuncKind::Method, Some(Ty::Obj(ty)), symbol, subst)?;
+        let mut info = self.signature(mi, decl, FuncKind::Method, Some(Ty::Obj(ty)), symbol, subst)?;
+        if let Some(first) = first {
+            let duplicate = format!("`{owner}` already has a method `{}`", decl.name.name);
+            info.symbol.push_str(&self.overload_suffix(first, &info, decl.name.span, duplicate)?);
+        }
         let id = self.declare_fn(info, Work::Method { decl, subst: subst.clone() });
+        if let Some(first) = first {
+            self.add_overload(first, id);
+            return Ok(());
+        }
         let replaced = self.t.ty(ty).methods.get(name).copied();
         self.t.update_type(ty, |ti| {
             ti.methods.insert(name.clone(), id);
@@ -1124,12 +1164,8 @@ impl<'a> Checker<'a> {
     /// `fn String.shout() = …` / `extern fn String.length() -> Int`: a method on a built-in type.
     fn declare_builtin_method(&self, module_name: &str, mi: usize, ty: Ty, decl: &'a ast::FnDecl) -> Result<()> {
         let key = (builtin_key(ty), decl.name.name.clone());
-        if self.ext_methods.borrow().contains_key(&key) {
-            return Err(Diagnostic::new(
-                format!("`{}` already has a method `{}`", self.t.ty_name(ty), decl.name.name),
-                decl.name.span,
-            ));
-        }
+        let first = self.ext_methods.borrow().get(&key).copied();
+        let duplicate = format!("`{}` already has a method `{}`", self.t.ty_name(ty), decl.name.name);
         if decl.is_static {
             return Err(Diagnostic::new("`static fn` is not supported on built-in types", decl.name.span)
                 .hint("write a top-level function instead"));
@@ -1138,10 +1174,59 @@ impl<'a> Checker<'a> {
             return Err(Diagnostic::new("methods on built-in types cannot be generic", decl.name.span));
         }
         let symbol = symbol_for(module_name, Some(&self.t.ty_name(ty)), decl);
-        let info = self.signature(mi, decl, FuncKind::Method, Some(ty), symbol, &self.empty)?;
+        let mut info = self.signature(mi, decl, FuncKind::Method, Some(ty), symbol, &self.empty)?;
+        if let Some(first) = first {
+            info.symbol.push_str(&self.overload_suffix(first, &info, decl.name.span, duplicate)?);
+        }
         let id = self.declare_fn(info, Work::Method { decl, subst: self.empty.clone() });
-        self.ext_methods.borrow_mut().insert(key, id);
+        match first {
+            Some(first) => self.add_overload(first, id),
+            None => {
+                self.ext_methods.borrow_mut().insert(key, id);
+            }
+        }
         Ok(())
+    }
+
+    /// Every version of an overloaded function or method (the first declared, which is what a lookup by
+    /// name finds, comes first); `None` when `id` is the only one of its name.
+    pub fn overloads_of(&self, id: FnId) -> Option<Vec<FnId>> {
+        self.overloads.borrow().get(&id).cloned()
+    }
+
+    /// `info` is another version of `first`.  Gives the text that keeps its symbol apart from the others,
+    /// or `duplicate` as the error when an existing version already takes the same parameter types.
+    fn overload_suffix(&self, first: FnId, info: &FnInfo, span: Span, duplicate: String) -> Result<String> {
+        let versions = self.overloads_of(first).unwrap_or_else(|| vec![first]);
+        for &v in &versions {
+            let other = self.func(v);
+            if other.params.len() == info.params.len() && other.params.iter().zip(&info.params).all(|(a, b)| a.ty == b.ty) {
+                return Err(Diagnostic::new(duplicate, span));
+            }
+        }
+        Ok(format!("__v{}", versions.len()))
+    }
+
+    /// Of the versions of the method `first`, the one whose parameters (without the receiver) are `params`;
+    /// `first` itself when none is, or when it has no other versions.
+    fn version_with(&self, first: FnId, params: &[Ty]) -> FnId {
+        let Some(versions) = self.overloads_of(first) else { return first };
+        versions
+            .into_iter()
+            .find(|&v| self.func(v).params[1..].iter().map(|p| p.ty).eq(params.iter().copied()))
+            .unwrap_or(first)
+    }
+
+    fn add_overload(&self, first: FnId, id: FnId) {
+        self.overloads.borrow_mut().entry(first).or_insert_with(|| vec![first]).push(id);
+    }
+
+    /// Does `id` have its body in C?  Such functions keep their C name, so they cannot be overloaded.
+    fn is_extern_fn(&self, id: FnId) -> bool {
+        matches!(
+            &self.fns.borrow()[id].work,
+            Some(Work::Fn { decl, .. } | Work::Method { decl, .. }) if matches!(decl.body, ast::FnBody::Extern { .. })
+        )
     }
 
     /// The method `name` that was added to built-in type `ty`, if any.
@@ -1334,11 +1419,11 @@ impl<'a> Checker<'a> {
                     .and_then(|ms| ms.iter().find(|x| x.name == m.name))
                     .map(|x| (x.params.clone(), x.ret)),
                 Ty::Obj(t) => match self.t.ty(t).methods.get(&m.name) {
-                    Some(&f) => Some(self.signature_of(f)?),
+                    Some(&f) => Some(self.signature_of(self.version_with(f, &m.params))?),
                     None => None,
                 },
                 other => match self.ext_method(other, &m.name) {
-                    Some(f) => Some(self.signature_of(f)?),
+                    Some(f) => Some(self.signature_of(self.version_with(f, &m.params))?),
                     None => None,
                 },
             };
@@ -1467,7 +1552,7 @@ impl<'a> Checker<'a> {
                 let entries = ups
                     .iter()
                     .filter(|&&(_, i)| i == iface)
-                    .map(|&(t, _)| (t, self.t.ty(t).methods[&m.name]))
+                    .map(|&(t, _)| (t, self.version_with(self.t.ty(t).methods[&m.name], &m.params)))
                     .collect();
                 tables.push(hir::Dispatch { iface, method: index, entries });
             }

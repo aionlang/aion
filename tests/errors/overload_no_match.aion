@@ -1,0 +1,4 @@
+// error: no version of `f` accepts (Bool)
+fn f(x: Int) {}
+fn f(x: String) {}
+f(true)

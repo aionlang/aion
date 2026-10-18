@@ -79,8 +79,9 @@ type DateTime(millis: Int, utc: Bool = true) {
     fn plusYears(n: Int) = plusMonths(n * 12)
     // Milliseconds from `other` to this moment.
     fn since(other: DateTime) = millis - other.millis
-    // `later - earlier` is the milliseconds between two moments; `moment + ms` is `plus(ms)`.
+    // `later - earlier` is the milliseconds between two moments; `moment - ms` is `plus(-ms)`; `moment + ms` is `plus(ms)`.
     fn minus(other: DateTime) = since(other)
+    fn minus(ms: Int) = plus(-ms)
     // The same moment viewed in another zone.
     fn toUtc() = DateTime(millis, true)
     fn toLocal() = DateTime(millis, false)

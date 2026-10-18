@@ -8,3 +8,4 @@ println(a + time.day, a + 0 == a, a - b)
 c := a + 2 * time.hour
 c += time.hour
 println(c, c.since(a) == c - a)
+println(b - 30 * time.minute, b - time.hour == a + 30 * time.minute)

@@ -296,6 +296,40 @@ println(c())                                              // 2
   parameters.  A variable with a function type can call itself too:
   `fib: (Int) -> Int = { n -> n < 2 ? n : fib(n - 1) + fib(n - 2) }`.
 
+### Overloading
+
+Functions, methods and methods added to built-in types can share a name when their parameters differ:
+
+```aion
+fn describe(x: Int) = "int $x"
+fn describe(x: Float) = "float $x"
+fn describe(x: Int, y: Int) = "two ints ${x + y}"
+
+type Money(cents: Int) {
+    fn plus(o: Money) = Money(cents + o.cents)
+    fn plus(extra: Int) = Money(cents + extra)       // so `m + 7` works as well as `m + n`
+    fn toString() = "$cents"
+}
+
+fn String.wrap(left: String) = left + this
+fn String.wrap(left: String, right: String) = left + this + right
+
+println(describe(1), describe(2.5), describe(3, 4))   // int 1 float 2.5 two ints 7
+println(Money(100) + Money(5), Money(100) + 7)        // 105 107
+println("x".wrap("<"), "x".wrap("<", ">"))            // <x <x>
+```
+
+A call picks the version that takes that many arguments (with defaults and names counted), then the one
+whose parameter types accept the arguments, an exact type before a conversion (`describe(1)` is the `Int`
+version, though an `Int` would also convert to `Float`).  A call that fits none, or two equally well,
+is an error that lists the versions.  A lambda is not looked at until a version is chosen, so versions
+that differ only in the function they take are ambiguous.
+
+Limits: two versions cannot have the same parameter types, `extern fn`s and generic functions cannot be
+overloaded, the methods of an `open` type or a subtype cannot (a subtype could replace one version but
+not another), and an overloaded function
+cannot be used as a value (`f := describe`); wrap it in a lambda.
+
 ## Strings
 
 ```aion

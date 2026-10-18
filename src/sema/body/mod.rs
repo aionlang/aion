@@ -5,7 +5,7 @@ use std::mem::{replace, take};
 use std::rc::Rc;
 
 use super::hir::{self, ExprKind as K, FnId, GlobalId, LocalId, Ty, TypeId};
-use super::{Checker, Const, ParamDefault, Subst, Sym, Work};
+use super::{Checker, Const, ParamDefault, ParamInfo, Subst, Sym, Work};
 use crate::diag::{Diagnostic, Result, Span};
 use crate::syntax::ast::{self, AssignOp, ExprKind as A, FnBody, InterpPart, StmtKind};
 
@@ -2674,6 +2674,7 @@ impl<'c, 'a> Cx<'c, 'a> {
 
         // Operators on your own types call methods: `a + b` is `a.plus(b)`, `a < b` is `a.compareTo(b) < 0`.
         if let Some((method, name, compare)) = self.operator_method(op, l.ty, r.ty) {
+            let method = self.version_for_operand(method, r.ty);
             let ty = l.ty;
             let call = self.call_values(method, Some(l), vec![(r, span)], span)?;
             let call = self.virtual_on(call, ty, name);
@@ -3393,6 +3394,10 @@ impl<'c, 'a> Cx<'c, 'a> {
     /// A declared function (or constructor) used as a value.
     fn fn_value(&mut self, id: FnId, span: Span) -> Result<hir::Expr> {
         let ck = self.ck;
+        if ck.overloads_of(id).is_some() {
+            return Err(Diagnostic::new(format!("`{}` has several versions, so it cannot be used as a value", ck.func(id).name), span)
+                .hint("call it, or wrap the call in a lambda"));
+        }
         let ret = ck.ret_of(id, span)?;
         let params: Vec<Ty> = ck.func(id).params.iter().map(|p| p.ty).collect();
         let thunk = ck.thunk_for(id, ret);
@@ -3443,7 +3448,117 @@ impl<'c, 'a> Cx<'c, 'a> {
     /// Call `id`, matching arguments to parameters by position and name and
     /// filling in defaults.
     fn call_fn(&mut self, id: FnId, recv: Option<hir::Expr>, args: &[ast::Arg], span: Span) -> Result<hir::Expr> {
+        if let Some(versions) = self.ck.overloads_of(id) {
+            let (chosen, pre) = self.pick_version(&versions, recv.as_ref().map(|r| r.ty), args, span)?;
+            return self.call_fn_pre(chosen, recv, args, span, pre);
+        }
         self.call_fn_pre(id, recv, args, span, Vec::new())
+    }
+
+    /// Which version of an overloaded function a call means: the ones that take this many arguments, then
+    /// the ones whose parameter types accept the arguments, preferring exact matches.  The arguments that
+    /// had to be evaluated to learn their types come back too, so that they are not evaluated twice.
+    fn pick_version(
+        &mut self,
+        versions: &[FnId],
+        recv: Option<Ty>,
+        args: &[ast::Arg],
+        span: Span,
+    ) -> Result<(FnId, Vec<Option<hir::Expr>>)> {
+        let skip = usize::from(recv.is_some());
+        let name = self.ck.func(versions[0]).name.clone();
+        let shaped: Vec<FnId> =
+            versions.iter().copied().filter(|&v| shape_fits(&self.ck.func(v).params[skip..], args)).collect();
+        if let [only] = shaped[..] {
+            return Ok((only, Vec::new()));
+        }
+        // Arguments that need their context (a lambda, an empty list) stay unevaluated and fit any version.
+        let pre: Vec<Option<hir::Expr>> = args
+            .iter()
+            .map(|a| if matches!(a.value.kind, A::Lambda { .. }) { None } else { self.value(&a.value).ok() })
+            .collect();
+        let given: Vec<String> = pre.iter().map(|p| p.as_ref().map_or("…".to_string(), |e| self.name(e.ty))).collect();
+        let mut scored: Vec<(usize, FnId)> = Vec::new();
+        for &v in &shaped {
+            let info = self.ck.func(v);
+            let params = &info.params[skip..];
+            let pairs: Vec<(Ty, Ty)> = args
+                .iter()
+                .zip(&pre)
+                .enumerate()
+                .filter_map(|(i, (a, p))| {
+                    let param = match &a.name {
+                        Some(n) => params.iter().find(|q| q.name == n.name),
+                        None => params.get(i),
+                    }?;
+                    (!param.vararg).then_some((param.ty, p.as_ref()?.ty))
+                })
+                .collect();
+            if let Some(score) = self.fit_score(&pairs) {
+                scored.push((score, v));
+            }
+        }
+        let best = scored.iter().map(|&(s, _)| s).max();
+        let top: Vec<FnId> = scored.iter().filter(|&&(s, _)| Some(s) == best).map(|&(_, v)| v).collect();
+        match top[..] {
+            [chosen] => Ok((chosen, pre)),
+            [] => Err(Diagnostic::new(format!("no version of `{name}` accepts ({})", given.join(", ")), span)
+                .hint(format!("it can be called as {}", self.versions_text(&name, versions, skip)))),
+            _ => Err(Diagnostic::new(format!("the call to `{name}` ({}) fits more than one version", given.join(", ")), span)
+                .hint(format!("these fit: {}", self.versions_text(&name, &top, skip)))),
+        }
+    }
+
+    /// `f(Int), f(String, Int)`
+    fn versions_text(&self, name: &str, versions: &[FnId], skip: usize) -> String {
+        let one = |v: &FnId| {
+            let params: Vec<String> = self.ck.func(*v).params[skip..].iter().map(|p| self.name(p.ty)).collect();
+            format!("{name}({})", params.join(", "))
+        };
+        versions.iter().map(one).collect::<Vec<_>>().join(", ")
+    }
+
+    /// How well arguments of the second types fit parameters of the first: 2 for each exact match and 1 for
+    /// each that is converted (`Int` to `Float`, a subtype to its parent, a value to an optional); `None` if
+    /// one does not fit at all.
+    fn fit_score(&self, pairs: &[(Ty, Ty)]) -> Option<usize> {
+        let mut score = 0;
+        for &(param, arg) in pairs {
+            if param == arg {
+                score += 2;
+            } else if self.coerce(mk(K::Int(0), arg), param, Span::default()).is_ok() {
+                score += 1;
+            } else {
+                return None;
+            }
+        }
+        Some(score)
+    }
+
+    /// For an operator, whose right-hand operand has already been evaluated: the version of `method` (the
+    /// method found by name) that takes that operand.
+    fn version_for_operand(&self, method: FnId, operand: Ty) -> FnId {
+        let Some(versions) = self.ck.overloads_of(method) else { return method };
+        let mut best: Option<(usize, FnId)> = None;
+        let mut tie = false;
+        for v in versions {
+            let info = self.ck.func(v);
+            let [_, param] = &info.params[..] else { continue };
+            if let Some(score) = self.fit_score(&[(param.ty, operand)]) {
+                match best {
+                    Some((b, _)) if b == score => tie = true,
+                    Some((b, _)) if b > score => {}
+                    _ => {
+                        best = Some((score, v));
+                        tie = false;
+                    }
+                }
+            }
+        }
+        match best {
+            Some((_, v)) if !tie => v,
+            _ => method,
+        }
     }
 
     /// [`Self::call_fn`], where some arguments (by position in `args`) were
@@ -3564,6 +3679,23 @@ impl<'c, 'a> Cx<'c, 'a> {
         }
         Ok(mk(K::Print { newline, args: out }, Ty::Void))
     }
+}
+
+/// Could a call with `args` fill `params`: not too many arguments, only names that exist, and every
+/// parameter without a default given?  (The call itself reports the precise problem.)
+fn shape_fits(params: &[ParamInfo], args: &[ast::Arg]) -> bool {
+    let vararg = params.last().is_some_and(|p| p.vararg);
+    let fixed = if vararg { params.len() - 1 } else { params.len() };
+    if args.iter().any(|a| a.name.as_ref().is_some_and(|n| !params.iter().any(|p| p.name == n.name))) {
+        return false;
+    }
+    let named = args.iter().filter(|a| a.name.is_some()).count();
+    let positional = args.len() - named;
+    if positional > fixed && !vararg {
+        return false;
+    }
+    let required = params.iter().filter(|p| p.default.is_none() && !p.vararg).count();
+    positional.min(fixed) + named >= required
 }
 
 /// Where the arguments of a `vararg` parameter (at index `k`) start: from there on, all are unnamed.
