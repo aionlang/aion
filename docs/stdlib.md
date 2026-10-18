@@ -721,6 +721,32 @@ print(csv.format([["a", "b,c"], ["say \"hi\"", "1"]]))
 `\r\n`; empty lines are skipped; null with `lastError()` for a bad quote), `parseRecords` (rows as maps keyed by the
 first line), `format(rows, delimiter)`, `quote(field)`, `readFile(path)`, `writeFile(path, rows)`.
 
+### `std.archive`
+
+Reading and writing archives with the [libarchive](https://www.libarchive.org/) library, found when first used (install
+`libarchive`, for example the `libarchive13t64` package; a program that does not import `archive` needs nothing).  It reads
+zip, tar, 7z, rar, cpio, iso and more, with or without gzip, bzip2, xz or zstd compression, and finds the format itself.
+
+```aion
+import archive
+
+archive.create("out.zip", {"hello.txt": "hi".toBytes(), "data/": Bytes(0)})      // a name ending in / is a folder
+for e in archive.list("out.zip")!! { println(e.kind, e.name, e.size) }
+println(archive.readText("out.zip", "hello.txt"))                                 // hi, without unpacking the rest
+println(archive.extract("out.zip", "unpacked"))                                   // 1: the number of files written
+archive.pack("site.tar.gz", "unpacked")                                           // a folder's contents, read from disk
+```
+
+* `list(path) -> List<Entry>?` (`Entry`: `name`, `size`, `modified` in seconds since 1970, `mode`, `kind` of `"file"`,
+  `"folder"`, `"link"` or `"other"`, `isFile()`, `isFolder()`), `read(path, name, maxBytes) -> Bytes?`, `readText`.
+* `extract(path, folder, maxBytes = 4 GiB) -> Int?` unpacks into a folder, over files of the same names, and gives the number
+  of files written.  **It is careful**: a name that is absolute or climbs out with `..` stops it with an error, links and devices
+  are never created, and more than `maxBytes` of output stops it, so a hostile archive cannot write elsewhere or fill the disk.
+* `create(path, files, modified = now, allowUnsafeNames = false) -> Bool` makes an archive from a map of names to contents;
+  `pack(path, folder) -> Bool` from a folder.  The format comes from the end of the name: `.zip`, `.7z`, `.tar`, `.tar.gz` or
+  `.tgz`, `.tar.bz2`, `.tar.xz`, `.tar.zst`.  `create` refuses names that are absolute or contain `..`.
+* Failures give null or false and `lastError()` says why.
+
 ### `std.cli`
 
 ```aion
