@@ -1,0 +1,48 @@
+/** std.crypto: known answers for PBKDF2 and Ed25519 (RFC 6070, RFC 7914, RFC 8032), and round trips for the rest. */
+import crypto
+
+// PBKDF2: RFC 6070 (HMAC-SHA1) and RFC 7914 (HMAC-SHA256)
+println(crypto.pbkdf2("password", "salt".toBytes(), 1, 20, "sha1")!!.toHex())
+println(crypto.pbkdf2("password", "salt".toBytes(), 2, 20, "sha1")!!.toHex())
+println(crypto.pbkdf2("passwd", "salt".toBytes(), 1, 64, "sha256")!!.toHex())
+println(crypto.pbkdf2("x", "y".toBytes(), 1, 8, "md5"))
+
+// AES-GCM
+key := crypto.newKey()
+sealed := crypto.encrypt(key, "attack at dawn".toBytes())!!
+println(sealed.size(), crypto.decrypt(key, sealed)!!.toText())
+changed := sealed.slice(0, sealed.size())
+changed[20] = changed[20].xor(1)
+println(crypto.decrypt(key, changed) == null, crypto.decrypt(crypto.newKey(), sealed) == null)
+withContext := crypto.encrypt(key, "x".toBytes(), "header".toBytes())!!
+println(crypto.decrypt(key, withContext) == null, crypto.decrypt(key, withContext, "header".toBytes())!!.toText())
+println(crypto.encrypt("short".toBytes(), Bytes(1)) == null, crypto.lastError())
+println(crypto.encrypt(crypto.newKey(), Bytes(0))!!.size(), crypto.decrypt(key, Bytes(5)) == null)
+aes128 := crypto.newKey(16)
+println(crypto.decrypt(aes128, crypto.encrypt(aes128, "small key".toBytes())!!)!!.toText())
+
+// ChaCha20-Poly1305
+chacha := crypto.encryptChaCha(key, "same idea".toBytes())!!
+println(chacha.size(), crypto.decryptChaCha(key, chacha)!!.toText(), crypto.decrypt(key, chacha) == null)
+
+// text
+box := crypto.encryptText(key, "héllo wörld")!!
+println(crypto.decryptText(key, box), crypto.decryptText(key, "not base64!") == null)
+
+// passwords
+stored := crypto.hashPassword("hunter2", 1000)!!
+println(stored.startsWith("pbkdf2-sha256$1000$"), stored.split("$").size())
+println(crypto.verifyPassword("hunter2", stored), crypto.verifyPassword("hunter3", stored), crypto.verifyPassword("hunter2", "junk"))
+println(crypto.equal("abc".toBytes(), "abc".toBytes()), crypto.equal("abc".toBytes(), "abd".toBytes()), crypto.equal("abc".toBytes(), "ab".toBytes()))
+
+// Ed25519: RFC 8032, test 1
+priv := "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60".fromHex()!!
+pub := crypto.publicKey(priv)!!
+println(pub.toHex())
+sig := crypto.sign(priv, Bytes(0))!!
+println(sig.toHex())
+println(crypto.verify(pub, Bytes(0), sig), crypto.verify(pub, "other".toBytes(), sig))
+pair := crypto.newKeyPair()!!
+message := "pay 5 euros".toBytes()
+signature := crypto.sign(pair.privateKey, message)!!
+println(pair.publicKey.size(), signature.size(), crypto.verify(pair.publicKey, message, signature), crypto.verify(pub, message, signature))

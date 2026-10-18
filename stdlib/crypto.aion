@@ -1,0 +1,118 @@
+// import crypto
+//
+//   key := crypto.newKey()                               // 32 random bytes
+//   sealed := crypto.encrypt(key, "secret".toBytes())!!   // AES-256-GCM: nonce, ciphertext and tag in one Bytes
+//   crypto.decrypt(key, sealed)!!.toText()                // "secret"; null if the data or the key is wrong
+//
+//   stored := crypto.hashPassword("hunter2")!!            // "pbkdf2-sha256$210000$<salt>$<hash>", safe to store
+//   crypto.verifyPassword("hunter2", stored)              // true
+//
+//   pair := crypto.newKeyPair()!!                         // Ed25519
+//   sig := crypto.sign(pair.privateKey, message)!!
+//   crypto.verify(pair.publicKey, message, sig)           // true
+//
+// Authenticated encryption, password hashing, signatures and a safe comparison.  The algorithms are
+// OpenSSL's, loaded when first used (install libssl; a program that does not import this needs nothing).
+// Functions that can fail return null; `crypto.lastError()` says why.  Hashes and HMAC are in `hash`,
+// random numbers for secrets in `random.secureBytes`.
+
+import encoding
+import random
+
+extern fn lastError() -> String = "aion_crypto_error"
+extern fn __aead(algorithm: Int, encrypt: Bool, key: Bytes, data: Bytes, aad: Bytes) -> Bytes? = "aion_crypto_aead"
+extern fn __pbkdf2(password: Bytes, salt: Bytes, iterations: Int, length: Int, digest: Int) -> Bytes? = "aion_crypto_pbkdf2"
+extern fn __equal(a: Bytes, b: Bytes) -> Bool = "aion_crypto_equal"
+extern fn __generate() -> Bytes? = "aion_crypto_ed25519_generate"
+extern fn __public(privateKey: Bytes) -> Bytes? = "aion_crypto_ed25519_public"
+extern fn __sign(privateKey: Bytes, message: Bytes) -> Bytes? = "aion_crypto_ed25519_sign"
+extern fn __verify(publicKey: Bytes, message: Bytes, signature: Bytes) -> Bool = "aion_crypto_ed25519_verify"
+
+// ── Encryption ───────────────────────────────────────────────────
+
+// A random key of `size` bytes: 32 for AES-256 or ChaCha20, 16 or 24 for the smaller AES.
+fn newKey(size: Int = 32) -> Bytes = random.secureBytes(size)
+
+// Encrypt with AES-GCM; the key's length (16, 24 or 32 bytes) picks AES-128, 192 or 256.  The result is a
+// fresh random nonce, the ciphertext and a 16-byte tag, so it is 28 bytes longer than `data`.  `context`
+// is extra data that is signed with the message but not hidden or stored; the same must be given to decrypt it.
+fn encrypt(key: Bytes, data: Bytes, context: Bytes = Bytes(0)) -> Bytes? = __aead(0, true, key, data, context)
+
+// Undo `encrypt`.  Null if the key or `context` is wrong or the data was changed.
+fn decrypt(key: Bytes, sealed: Bytes, context: Bytes = Bytes(0)) -> Bytes? = __aead(0, false, key, sealed, context)
+
+// The same with ChaCha20-Poly1305 (a 32-byte key), which is quick without hardware AES.
+fn encryptChaCha(key: Bytes, data: Bytes, context: Bytes = Bytes(0)) -> Bytes? = __aead(1, true, key, data, context)
+fn decryptChaCha(key: Bytes, sealed: Bytes, context: Bytes = Bytes(0)) -> Bytes? = __aead(1, false, key, sealed, context)
+
+// Text in, text out: the result is base64.
+fn encryptText(key: Bytes, text: String) -> String? {
+    sealed := encrypt(key, text.toBytes())
+    return if sealed == null { null } else { encoding.base64Bytes(sealed) }
+}
+
+fn decryptText(key: Bytes, sealed: String) -> String? {
+    raw := encoding.base64DecodeBytes(sealed)
+    if raw == null { return null }
+    return decrypt(key, raw)?.toText()
+}
+
+// ── Passwords and keys from passwords ────────────────────────────
+
+// PBKDF2 key derivation: `length` bytes from a password and a salt, the work repeated `iterations` times.
+// `digest` is "sha1", "sha256" or "sha512".
+fn pbkdf2(password: String, salt: Bytes, iterations: Int = 210000, length: Int = 32, digest: String = "sha256") -> Bytes? {
+    code := when digest {
+        "sha1" -> 1
+        "sha256" -> 2
+        "sha512" -> 3
+        else -> 0
+    }
+    if code == 0 { return null }
+    return __pbkdf2(password.toBytes(), salt, iterations, length, code)
+}
+
+// A line to store for a password: the method, the iteration count, a random salt and the hash.
+fn hashPassword(password: String, iterations: Int = 210000) -> String? {
+    salt := random.secureBytes(16)
+    hash := pbkdf2(password, salt, iterations, 32, "sha256")
+    if hash == null { return null }
+    return "pbkdf2-sha256$$iterations$${encoding.base64Bytes(salt)}$${encoding.base64Bytes(hash)}"
+}
+
+// Does the password match a line made by `hashPassword`?  Takes the same time whatever differs.
+fn verifyPassword(password: String, stored: String) -> Bool {
+    parts := stored.split("$")
+    if parts.size() != 4 || parts[0] != "pbkdf2-sha256" { return false }
+    iterations := parts[1].toIntOrNull()
+    salt := encoding.base64DecodeBytes(parts[2])
+    expected := encoding.base64DecodeBytes(parts[3])
+    if iterations == null || salt == null || expected == null { return false }
+    actual := pbkdf2(password, salt, iterations, expected.size(), "sha256")
+    if actual == null { return false }
+    return __equal(actual, expected)
+}
+
+// Are the two equal?  Unlike `==`, the time taken does not depend on where they differ, so comparing secrets
+// (tokens, MACs) with it gives nothing away.
+fn equal(a: Bytes, b: Bytes) -> Bool = __equal(a, b)
+
+// ── Signatures (Ed25519) ─────────────────────────────────────────
+
+type KeyPair(privateKey: Bytes, publicKey: Bytes)
+
+// A new key pair: the 32-byte private key (keep it secret) and the 32-byte public key (share it).
+fn newKeyPair() -> KeyPair? {
+    both := __generate()
+    if both == null { return null }
+    return KeyPair(both[0..32], both[32..64])
+}
+
+// The public key that goes with a private key.
+fn publicKey(privateKey: Bytes) -> Bytes? = __public(privateKey)
+
+// A 64-byte signature of the message.
+fn sign(privateKey: Bytes, message: Bytes) -> Bytes? = __sign(privateKey, message)
+
+// Was the signature made for this message by the owner of the public key?
+fn verify(publicKey: Bytes, message: Bytes, signature: Bytes) -> Bool = __verify(publicKey, message, signature)
