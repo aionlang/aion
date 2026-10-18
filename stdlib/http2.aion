@@ -1,0 +1,500 @@
+// import http2
+//
+//   r := http2.get("https://example.com/")                    // an http.Response, or null
+//   if r != null { println(r.status, r.header("content-type"), r.text().length()) }
+//
+//   conn := http2.connect("https://example.com")!!            // one connection, many requests at once
+//   a := launch { first = conn.request("GET", "/a") }
+//   b := conn.request("POST", "/b", Bytes(0), {"content-type": "text/plain"})
+//   conn.close()
+//
+// An HTTP/2 client (RFC 9113) over `net`.  https:// addresses negotiate "h2" with TLS (ALPN; needs OpenSSL's
+// libssl, and a server that speaks HTTP/2); http:// addresses speak HTTP/2 without TLS ("prior knowledge"), which
+// only some servers accept.  One connection carries many requests at the same time: call `request` from
+// several tasks.  Flow control, settings, pings and header compression (`hpack`) are handled; server push is
+// refused.  Responses are `http.Response` values with lower-case header names.  `readFrame` and `frameBytes` are
+// the low level, for writing servers or tests.
+
+import hpack
+import http
+import net
+import random
+import time
+
+lastErr := ""
+
+// Why the most recent `connect`, `get` or `request` returned null.
+fn lastError() -> String = lastErr
+
+// ── Frames ───────────────────────────────────────────────────────
+
+val dataFrame = 0
+val headersFrame = 1
+val resetFrame = 3
+val settingsFrame = 4
+val pushPromiseFrame = 5
+val pingFrame = 6
+val goawayFrame = 7
+val windowUpdateFrame = 8
+val continuationFrame = 9
+
+val endStream = 1
+val endHeaders = 4
+val padded = 8
+val hasPriority = 32
+val ack = 1
+
+type Frame(kind: Int, flags: Int, stream: Int, payload: Bytes) {
+    fn has(flag: Int) = flags.and(flag) != 0
+}
+
+// A frame as it goes on the wire: 9 bytes (length, type, flags, stream) and the payload.
+fn frameBytes(kind: Int, flags: Int, stream: Int, payload: Bytes = Bytes(0)) -> Bytes {
+    n := payload.size()
+    head := Bytes(9)
+    head[0] = n.ushr(16).and(255)
+    head[1] = n.ushr(8).and(255)
+    head[2] = n.and(255)
+    head[3] = kind
+    head[4] = flags
+    for i in 0..4 { head[5 + i] = stream.ushr(8 * (3 - i)).and(255) }
+    head[5] = head[5].and(127)
+    return head.concat(payload)
+}
+
+// The next frame from a reader; null at the end of the stream, on an error, or for a frame over `maxSize`.
+fn readFrame(reader: http.Reader, maxSize: Int = 16777215) -> Frame? {
+    head := reader.exactly(9)
+    if head == null { return null }
+    n := head[0] * 65536 + head[1] * 256 + head[2]
+    if n > maxSize { return null }
+    stream := head[5].and(127) * 16777216 + head[6] * 65536 + head[7] * 256 + head[8]
+    payload := n == 0 ? Bytes(0) : reader.exactly(n)
+    if payload == null { return null }
+    return Frame(head[3], head[4], stream, payload)
+}
+
+fn int32(value: Int) -> Bytes {
+    out := Bytes(4)
+    for i in 0..4 { out[i] = value.ushr(8 * (3 - i)).and(255) }
+    return out
+}
+
+fn int16(value: Int) -> Bytes {
+    out := Bytes(2)
+    out[0] = value.ushr(8).and(255)
+    out[1] = value.and(255)
+    return out
+}
+
+fn read32(data: Bytes, at: Int) -> Int = data[at].and(127) * 16777216 + data[at + 1] * 65536 + data[at + 2] * 256 + data[at + 3]
+
+// A SETTINGS frame payload from a flat list of ids and values: [id, value, id, value, ...] (16 and 32 bits each).
+fn settings(pairs: List<Int>) -> Bytes {
+    out := BytesBuilder()
+    i := 0
+    while i + 1 < pairs.size() {
+        out.add(int16(pairs[i])).add(int32(pairs[i + 1]))
+        i += 2
+    }
+    return out.toBytes()
+}
+
+val preface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
+
+// ── Streams and connections ──────────────────────────────────────
+
+// One request and the answer being collected for it.
+type Stream(id: Int, sendWindow: Int) {
+    status: Int = 0
+    headers: Map<String, String> = Map<String, String>()
+    body: BytesBuilder = BytesBuilder()
+    block: BytesBuilder = BytesBuilder()
+    blockEnds: Bool = false
+    inBlock: Bool = false
+    ended: Bool = false
+    done: Bool = false
+    problem: String = ""
+    received: Int = 0
+}
+
+type Connection(conn: net.Conn, reader: http.Reader, scheme: String, authority: String) {
+    encoder: hpack.Encoder = hpack.Encoder()
+    decoder: hpack.Decoder = hpack.Decoder()
+    streams: Map<Int, Stream> = Map<Int, Stream>()
+    nextStream: Int = 1
+    maxFrame: Int = 16384
+    sendWindow: Int = 65535
+    initialWindow: Int = 65535
+    maxStreams: Int = 100
+    receivedSinceUpdate: Int = 0
+    sending: Bool = false
+    closed: Bool = false
+    problem: String = ""
+    // The largest response body accepted, in bytes.
+    maxBody: Int = 67108864
+    timeoutMs: Int = 30000
+    // header blocks of frames for streams we no longer know, and of push promises
+    pending: BytesBuilder = BytesBuilder()
+
+    // Send bytes; frames of different tasks must not mix on the wire.
+    fn write(data: Bytes) -> Bool {
+        if closed { return false }
+        while sending { yield() }
+        sending = true
+        ok := conn.send(data)
+        sending = false
+        if !ok { fail("could not send: ${net.lastError()}") }
+        return ok
+    }
+
+    // The connection is unusable: say why, and let every waiting request know.
+    fn fail(text: String) {
+        if problem.isEmpty() { problem = text }
+        closed = true
+        for e in streams {
+            if !e.value.done {
+                e.value.problem = problem
+                e.value.done = true
+            }
+        }
+        conn.close()
+    }
+
+    // Open the connection: the preface, our settings and a large connection window.  A task then reads frames.
+    fn start() -> Bool {
+        first := preface.toBytes()
+            .concat(frameBytes(settingsFrame, 0, 0, settings([2, 0, 4, 1048576, 3, 100])))
+            .concat(frameBytes(windowUpdateFrame, 0, 0, int32(16777216 - 65535)))
+        if !write(first) { return false }
+        launch { readLoop() }
+        return true
+    }
+
+    fn readLoop() {
+        while !closed {
+            frame := readFrame(reader, 16777215)
+            if frame == null {
+                fail(reader.problem.isEmpty() ? "the server closed the connection" : reader.problem)
+                return
+            }
+            handle(frame)
+        }
+    }
+
+    fn handle(frame: Frame) {
+        kind := frame.kind
+        if kind == settingsFrame {
+            if frame.has(ack) { return }
+            i := 0
+            while i + 6 <= frame.payload.size() {
+                id := frame.payload[i] * 256 + frame.payload[i + 1]
+                value := read32(frame.payload, i + 2)
+                if id == 4 {
+                    delta := value - initialWindow
+                    initialWindow = value
+                    for e in streams { e.value.sendWindow += delta }
+                } else if id == 5 && value >= 16384 && value <= 16777215 {
+                    maxFrame = value
+                } else if id == 3 {
+                    maxStreams = value
+                }
+                i += 6
+            }
+            write(frameBytes(settingsFrame, ack, 0))
+        } else if kind == pingFrame {
+            if !frame.has(ack) { write(frameBytes(pingFrame, ack, 0, frame.payload)) }
+        } else if kind == windowUpdateFrame {
+            if frame.payload.size() == 4 {
+                inc := read32(frame.payload, 0)
+                if frame.stream == 0 {
+                    sendWindow += inc
+                } else {
+                    s := streams.getOrNull(frame.stream)
+                    if s != null { s.sendWindow += inc }
+                }
+            }
+        } else if kind == goawayFrame {
+            last := frame.payload.size() >= 4 ? read32(frame.payload, 0) : 0
+            code := frame.payload.size() >= 8 ? read32(frame.payload, 4) : 0
+            for e in streams {
+                if e.key > last && !e.value.done {
+                    e.value.problem = "the server is closing the connection (error code $code)"
+                    e.value.done = true
+                }
+            }
+            if problem.isEmpty() { problem = "the server is closing the connection (error code $code)" }
+            closed = true
+        } else if kind == resetFrame {
+            s := streams.getOrNull(frame.stream)
+            if s != null && !s.done {
+                s.problem = "the server reset the request (error code ${frame.payload.size() >= 4 ? read32(frame.payload, 0) : 0})"
+                s.done = true
+            }
+        } else if kind == headersFrame || kind == pushPromiseFrame || kind == continuationFrame {
+            headerFragment(frame)
+        } else if kind == dataFrame {
+            data(frame)
+        }
+    }
+
+    // Header blocks may be split over HEADERS and CONTINUATION frames; all of them go through the decoder,
+    // in order, because its table is shared by every stream.
+    fn headerFragment(frame: Frame) {
+        s := streams.getOrNull(frame.stream)
+        payload := frame.payload
+        start := 0
+        stop := payload.size()
+        if frame.kind != continuationFrame {
+            if frame.has(padded) && stop > 0 {
+                stop -= payload[0] + 1
+                start = 1
+            }
+            if frame.kind == headersFrame && frame.has(hasPriority) { start += 5 }
+            if frame.kind == pushPromiseFrame { start += 4 }
+        }
+        if stop < start { stop = start }
+        if frame.kind == pushPromiseFrame {
+            // we turned push off; a server that pushes anyway gets its promise refused
+            promised := read32(payload, frame.has(padded) ? 1 : 0)
+            pending.add(payload.slice(start, stop))
+            if frame.has(endHeaders) {
+                decoder.decode(joinBlock())
+                write(frameBytes(resetFrame, 0, promised, int32(7)))
+            }
+            return
+        }
+        if s == null {
+            // an answer to a request we gave up on: its block still has to be decoded
+            pending.add(payload.slice(start, stop))
+            if frame.has(endHeaders) { decoder.decode(joinBlock()) }
+            return
+        }
+        s.block.add(payload.slice(start, stop))
+        if frame.kind == headersFrame && frame.has(endStream) { s.blockEnds = true }
+        if !frame.has(endHeaders) { return }
+        headers := decoder.decode(s.block.toBytes())
+        s.block.clear()
+        if headers == null {
+            fail("invalid headers from the server: ${decoder.problem}")
+            return
+        }
+        for h in headers {
+            if h.name == ":status" {
+                code := h.value.toIntOr(0)
+                if code >= 200 || s.status == 0 { s.status = code }
+            } else if !h.name.startsWith(":") && s.status >= 200 {
+                previous := s.headers.getOrNull(h.name)
+                s.headers[h.name] = previous == null ? h.value : previous + ", " + h.value
+            }
+        }
+        if s.blockEnds {
+            s.ended = true
+            s.done = true
+        }
+    }
+
+    fn joinBlock() -> Bytes {
+        out := pending.toBytes()
+        pending.clear()
+        return out
+    }
+
+    fn data(frame: Frame) {
+        payload := frame.payload
+        start := 0
+        stop := payload.size()
+        if frame.has(padded) && stop > 0 {
+            stop -= payload[0] + 1
+            start = 1
+        }
+        if stop < start { stop = start }
+        n := payload.size()
+        s := streams.getOrNull(frame.stream)
+        if s != null && !s.done {
+            s.body.add(payload.slice(start, stop))
+            s.received += n
+            if s.body.size() > maxBody {
+                s.problem = "the response is larger than ${maxBody} bytes"
+                s.done = true
+                write(frameBytes(resetFrame, 0, frame.stream, int32(8)))
+            }
+            if s.received >= 524288 && !frame.has(endStream) {
+                write(frameBytes(windowUpdateFrame, 0, frame.stream, int32(s.received)))
+                s.received = 0
+            }
+            if frame.has(endStream) {
+                s.ended = true
+                s.done = true
+            }
+        }
+        receivedSinceUpdate += n
+        if receivedSinceUpdate >= 8388608 {
+            write(frameBytes(windowUpdateFrame, 0, 0, int32(receivedSinceUpdate)))
+            receivedSinceUpdate = 0
+        }
+    }
+
+    // Send a request and wait for the answer.  `headers` are added to the request (names in any case); the
+    // pseudo-headers are made for you.  Null (and `lastError()`) if the request failed.
+    fn request(method: String, path: String, body: Bytes = Bytes(0), headers: Map<String, String> = Map<String, String>()) -> http.Response? {
+        lastErr = ""
+        if closed {
+            lastErr = "the connection is closed" + (problem.isEmpty() ? "" : ": " + problem)
+            return null
+        }
+        if !path.startsWith("/") && path != "*" {
+            lastErr = "the path must start with /"
+            return null
+        }
+        sent := List<hpack.Header>()
+        sent.add(hpack.Header(":method", method.upper()))
+        sent.add(hpack.Header(":scheme", scheme))
+        sent.add(hpack.Header(":path", path))
+        sent.add(hpack.Header(":authority", authority))
+        for e in headers {
+            name := e.key.lower()
+            if name.startsWith(":") || name == "host" || name == "connection" || name == "transfer-encoding" || name == "content-length" {
+                continue
+            }
+            if e.value.contains("\r") || e.value.contains("\n") {
+                lastErr = "a header cannot hold a line break"
+                return null
+            }
+            sent.add(hpack.Header(name, e.value))
+        }
+        if body.size() > 0 || method.upper() == "POST" || method.upper() == "PUT" {
+            sent.add(hpack.Header("content-length", "${body.size()}"))
+        }
+        sent.add(hpack.Header("user-agent", "aion"))
+
+        // the stream id and the header block are taken together: ids must be used in order
+        while sending { yield() }
+        id := nextStream
+        nextStream += 2
+        s := Stream(id, initialWindow)
+        streams[id] = s
+        block := encoder.encode(sent)
+        done := body.size() == 0 ? endStream : 0
+        ok := true
+        if block.size() <= maxFrame {
+            ok = write(frameBytes(headersFrame, endHeaders.or(done), id, block))
+        } else {
+            ok = write(frameBytes(headersFrame, done, id, block.slice(0, maxFrame)))
+            at := maxFrame
+            while ok && at < block.size() {
+                end := (at + maxFrame).min(block.size())
+                ok = write(frameBytes(continuationFrame, end == block.size() ? endHeaders : 0, id, block.slice(at, end)))
+                at = end
+            }
+        }
+        deadline := time.millis() + timeoutMs
+        sentBody := 0
+        while ok && sentBody < body.size() && !s.done {
+            room := sendWindow.min(s.sendWindow).min(maxFrame)
+            if room <= 0 {
+                if time.millis() > deadline { break }
+                sleep(1)
+                continue
+            }
+            n := room.min(body.size() - sentBody)
+            last := sentBody + n == body.size()
+            sendWindow -= n
+            s.sendWindow -= n
+            ok = write(frameBytes(dataFrame, last ? endStream : 0, id, body.slice(sentBody, sentBody + n)))
+            sentBody += n
+        }
+        while ok && !s.done {
+            if time.millis() > deadline {
+                s.problem = "the request timed out"
+                s.done = true
+                write(frameBytes(resetFrame, 0, id, int32(8)))
+                break
+            }
+            sleep(1)
+        }
+        streams.remove(id)
+        if !s.problem.isEmpty() || !s.ended {
+            lastErr = s.problem.isEmpty() ? (problem.isEmpty() ? "no answer" : problem) : s.problem
+            return null
+        }
+        return http.Response(s.status, s.headers, s.body.toBytes())
+    }
+
+    // Tell the server we are done, and close.
+    fn close() {
+        if !closed {
+            write(frameBytes(goawayFrame, 0, 0, int32(0).concat(int32(0))))
+        }
+        closed = true
+        conn.close()
+    }
+}
+
+// ── Connecting ───────────────────────────────────────────────────
+
+// Connect to an https:// address (TLS with ALPN "h2") or an http:// one (HTTP/2 without TLS).  Null if that
+// fails; `lastError()` says why.
+fn connect(url: String, verify: Bool = true, cafile: String = "", timeoutMs: Int = 30000) -> Connection? {
+    lastErr = ""
+    parsed := http.parseUrl(url)
+    if parsed == null {
+        lastErr = "not an http or https address: $url"
+        return null
+    }
+    conn := net.connect(parsed.host, parsed.port, timeoutMs)
+    if conn == null {
+        lastErr = "cannot connect to ${parsed.host}:${parsed.port}: ${net.lastError()}"
+        return null
+    }
+    conn.setTimeout(timeoutMs)
+    if parsed.secure() {
+        if !conn.startTls(parsed.host, verify, cafile, ["h2"]) {
+            lastErr = "TLS failed: ${net.lastError()}"
+            conn.close()
+            return null
+        }
+        if conn.protocol() != "h2" {
+            lastErr = "the server does not speak HTTP/2 (it chose \"${conn.protocol()}\")"
+            conn.close()
+            return null
+        }
+    }
+    // reads wait for the server for as long as the connection is open; each request has its own timeout
+    conn.setTimeout(-1)
+    c := Connection(conn, http.Reader(conn), parsed.secure() ? "https" : "http", parsed.authority())
+    c.timeoutMs = timeoutMs
+    if !c.start() {
+        lastErr = c.problem
+        return null
+    }
+    return c
+}
+
+// The address part of a URL after the host: "/path?query".
+fn __target(url: String) -> String {
+    parsed := http.parseUrl(url)
+    return parsed == null ? "/" : parsed.target
+}
+
+// One request on a connection of its own.
+fn request(method: String, url: String, body: Bytes = Bytes(0), headers: Map<String, String> = Map<String, String>(), verify: Bool = true, timeoutMs: Int = 30000) -> http.Response? {
+    c := connect(url, verify, "", timeoutMs)
+    if c == null { return null }
+    r := c.request(method, __target(url), body, headers)
+    if r == null && lastErr.isEmpty() { lastErr = c.problem }
+    c.close()
+    return r
+}
+
+fn get(url: String, headers: Map<String, String> = Map<String, String>(), verify: Bool = true, timeoutMs: Int = 30000) -> http.Response? =
+    request("GET", url, Bytes(0), headers, verify, timeoutMs)
+
+fn head(url: String, headers: Map<String, String> = Map<String, String>(), verify: Bool = true, timeoutMs: Int = 30000) -> http.Response? =
+    request("HEAD", url, Bytes(0), headers, verify, timeoutMs)
+
+fn post(url: String, body: String, headers: Map<String, String> = Map<String, String>(), verify: Bool = true, timeoutMs: Int = 30000) -> http.Response? =
+    request("POST", url, body.toBytes(), headers, verify, timeoutMs)
+
+fn postBytes(url: String, body: Bytes, headers: Map<String, String> = Map<String, String>(), verify: Bool = true, timeoutMs: Int = 30000) -> http.Response? =
+    request("POST", url, body, headers, verify, timeoutMs)

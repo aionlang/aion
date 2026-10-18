@@ -1,0 +1,130 @@
+/** std.http2 against a small HTTP/2 server written here (frames and header compression from the library):
+ *  single requests, a body each way, a large answer, requests at the same time on one connection, and failures. */
+import hpack
+import http
+import http2
+import net
+
+// ── the server ──
+fn reply(conn: net.Conn, encoder: hpack.Encoder, stream: Int, status: Int, contentType: String, body: Bytes) {
+    block := encoder.encode([hpack.Header(":status", "$status"), hpack.Header("content-type", contentType), hpack.Header("x-served-by", "test")])
+    conn.send(http2.frameBytes(http2.headersFrame, http2.endHeaders, stream, block))
+    at := 0
+    while at < body.size() {
+        end := (at + 16384).min(body.size())
+        conn.send(http2.frameBytes(http2.dataFrame, end == body.size() ? http2.endStream : 0, stream, body.slice(at, end)))
+        at = end
+    }
+    if body.size() == 0 { conn.send(http2.frameBytes(http2.dataFrame, http2.endStream, stream)) }
+}
+
+fn answer(conn: net.Conn, encoder: hpack.Encoder, stream: Int, headers: List<hpack.Header>, body: Bytes) {
+    path := ""
+    method := ""
+    for h in headers {
+        if h.name == ":path" { path = h.value }
+        if h.name == ":method" { method = h.value }
+    }
+    if path.contains("?") { path = path.substring(0, path.indexOf("?")) }
+    if path == "/hello" {
+        reply(conn, encoder, stream, 200, "text/plain", "Hello over HTTP/2".toBytes())
+    } else if path == "/echo" {
+        reply(conn, encoder, stream, 200, "application/octet-stream", body)
+    } else if path == "/headers" {
+        text := StringBuilder()
+        text.append("$method $path\n")
+        for h in headers {
+            if !h.name.startsWith(":") && h.name != "user-agent" { text.append("${h.name}=${h.value}\n") }
+        }
+        reply(conn, encoder, stream, 200, "text/plain", text.toString().toBytes())
+    } else if path == "/big" {
+        big := Bytes(300000)
+        for i in 0..big.size() { big[i] = i % 253 }
+        reply(conn, encoder, stream, 200, "application/octet-stream", big)
+    } else if path == "/reset" {
+        conn.send(http2.frameBytes(http2.resetFrame, 0, stream, http2.int32(2)))
+    } else {
+        reply(conn, encoder, stream, 404, "text/plain", "no such page".toBytes())
+    }
+}
+
+fn serve(conn: net.Conn) {
+    reader := http.Reader(conn)
+    if reader.exactly(24) == null { return }
+    conn.send(http2.frameBytes(http2.settingsFrame, 0, 0, http2.settings([3, 100])))
+    decoder := hpack.Decoder()
+    encoder := hpack.Encoder()
+    seen := Map<Int, List<hpack.Header>>()
+    bodies := Map<Int, BytesBuilder>()
+    while true {
+        f := http2.readFrame(reader)
+        if f == null { break }
+        if f.kind == http2.settingsFrame {
+            if !f.has(http2.ack) { conn.send(http2.frameBytes(http2.settingsFrame, http2.ack, 0)) }
+        } else if f.kind == http2.pingFrame {
+            conn.send(http2.frameBytes(http2.pingFrame, http2.ack, 0, f.payload))
+        } else if f.kind == http2.headersFrame {
+            seen[f.stream] = decoder.decode(f.payload)!!
+            bodies[f.stream] = BytesBuilder()
+            if f.has(http2.endStream) { answer(conn, encoder, f.stream, seen[f.stream], bodies[f.stream].toBytes()) }
+        } else if f.kind == http2.dataFrame {
+            bodies[f.stream].add(f.payload)
+            // a server gives the window back as it reads, or the client cannot send more than 65535 bytes
+            conn.send(http2.frameBytes(http2.windowUpdateFrame, 0, 0, http2.int32(f.payload.size())))
+            conn.send(http2.frameBytes(http2.windowUpdateFrame, 0, f.stream, http2.int32(f.payload.size())))
+            if f.has(http2.endStream) { answer(conn, encoder, f.stream, seen[f.stream], bodies[f.stream].toBytes()) }
+        } else if f.kind == http2.goawayFrame {
+            break
+        }
+    }
+    conn.close()
+}
+
+listener := net.listen(0, "127.0.0.1")!!
+launch {
+    while true {
+        conn := listener.accept()
+        if conn == null { break }
+        launch { serve(conn) }
+    }
+}
+base := "http://127.0.0.1:${listener.port()}"
+
+// ── one request per connection ──
+r := http2.get("$base/hello")!!
+println(r.status, r.text(), r.header("content-type"), r.header("x-served-by"))
+println(http2.get("$base/missing")!!.status)
+payload := Bytes(100000)
+for i in 0..payload.size() { payload[i] = i % 241 }
+echoed := http2.postBytes("$base/echo", payload)!!
+println(echoed.status, echoed.body.size(), echoed.body == payload)
+println(http2.post("$base/echo", "small body", {"Content-Type": "text/plain"})!!.text())
+h := http2.get("$base/headers?x=1", {"X-Token": "abc", "Accept": "text/html"})!!
+print(h.text())
+big := http2.get("$base/big")!!
+println(big.body.size(), big.body[299999], big.body[252], big.body[253])
+
+// ── several requests at the same time on one connection ──
+conn := http2.connect(base)!!
+answers := Map<Int, String>()
+jobs := List<Job>()
+for i in 0..5 {
+    jobs.add(launch {
+        a := i % 2 == 0 ? conn.request("GET", "/hello") : conn.request("POST", "/echo", "request $i".toBytes())
+        answers[i] = a == null ? "failed: " + http2.lastError() : a.text()
+    })
+}
+for j in jobs { j.join() }
+for i in 0..5 { println(i, answers[i]) }
+after := conn.request("GET", "/big")!!
+println(after.body.size())
+reset := conn.request("GET", "/reset")
+println(reset, http2.lastError())
+println(conn.request("GET", "/hello")!!.text())
+println(conn.request("GET", "no slash"), http2.lastError())
+conn.close()
+println(conn.request("GET", "/hello"), http2.lastError())
+
+// ── failures ──
+println(http2.get("http://127.0.0.1:1/x"), http2.lastError().startsWith("cannot connect to 127.0.0.1:1"))
+println(http2.get("ftp://example.com"), http2.lastError())
