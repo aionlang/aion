@@ -1,0 +1,27 @@
+true []
+EHLO localhost
+AUTH PLAIN AGFubgBwdw==
+MAIL FROM:<ann@example.org>
+RCPT TO:<bob@example.org>
+RCPT TO:<carl@example.org>
+RCPT TO:<dee@example.org>
+DATA
+QUIT
+From: Ann <ann@example.org>
+To: bob@example.org, Carl <carl@example.org>
+Cc: dee@example.org
+Subject: =?UTF-8?B?R3LDvMOfZQ==?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: base64
+Hello.
+.dot line
+last
+false true
+false RCPT was refused: 550 no such user here
+null the subject has a line break
+null not an address: bob@example.org RCPT TO:<eve@example.org>
+null `from` is not an address: not an address
+false the message has no recipients
+ann@example.org null null x@y.org
+false the security must be "starttls", "tls" or "none", not "maybe"

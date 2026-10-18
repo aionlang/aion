@@ -1,0 +1,99 @@
+/** std.smtp against a small SMTP server written here: the conversation, the message, and the checks. */
+import encoding
+import http
+import net
+import smtp
+
+commands := List<String>()
+lines := List<String>()
+
+fn handle(conn: net.Conn) {
+    reader := http.Reader(conn)
+    conn.sendText("220 fake ESMTP ready\r\n")
+    inData := false
+    while true {
+        line := reader.line()
+        if line == null { break }
+        if inData {
+            if line == "." {
+                inData = false
+                conn.sendText("250 queued\r\n")
+            } else {
+                lines.add(line)
+            }
+            continue
+        }
+        commands.add(line)
+        cmd := line.upper()
+        if cmd.startsWith("EHLO") {
+            conn.sendText("250-fake greets you\r\n250-SIZE 1000000\r\n250 AUTH PLAIN LOGIN\r\n")
+        } else if cmd.startsWith("AUTH PLAIN") {
+            conn.sendText("235 welcome\r\n")
+        } else if cmd.startsWith("RCPT") && line.contains("blocked@") {
+            conn.sendText("550 no such user here\r\n")
+        } else if cmd.startsWith("MAIL") || cmd.startsWith("RCPT") {
+            conn.sendText("250 ok\r\n")
+        } else if cmd == "DATA" {
+            inData = true
+            conn.sendText("354 go ahead\r\n")
+        } else if cmd == "QUIT" {
+            conn.sendText("221 bye\r\n")
+            break
+        } else {
+            conn.sendText("500 what?\r\n")
+        }
+    }
+    conn.close()
+}
+
+fn serveOnce(listener: net.Listener) {
+    launch {
+        client := listener.accept()
+        if client != null { handle(client) }
+    }
+}
+
+listener := net.listen(0, "127.0.0.1")!!
+serveOnce(listener)
+server := smtp.Server("127.0.0.1", listener.port(), security: "none", username: "ann", password: "pw")
+mail := smtp.Message(
+    from: "Ann <ann@example.org>",
+    to: ["bob@example.org", "Carl <carl@example.org>"],
+    cc: ["dee@example.org"],
+    subject: "Grüße",
+    body: "Hello.\n.dot line\nlast",
+)
+println(smtp.send(server, mail), "[" + smtp.lastError() + "]")
+for c in commands { println(c) }
+
+// the message the server received
+body := StringBuilder()
+afterHeaders := false
+for l in lines {
+    if afterHeaders {
+        body.append(l)
+    } else if l.isEmpty() {
+        afterHeaders = true
+    } else if !l.startsWith("Date:") && !l.startsWith("Message-ID:") {
+        println(l)
+    }
+}
+println(encoding.base64DecodeBytes(body.toString())!!.toText())
+listener.close()
+println(smtp.send(server, mail), smtp.lastError().startsWith("cannot connect to 127.0.0.1:"))
+
+// a recipient the server refuses
+commands.clear()
+lines.clear()
+listener2 := net.listen(0, "127.0.0.1")!!
+serveOnce(listener2)
+refused := smtp.Message(from: "ann@example.org", to: ["blocked@example.org"], subject: "x", body: "y")
+println(smtp.send(smtp.Server("127.0.0.1", listener2.port(), security: "none"), refused), smtp.lastError())
+
+// values that could add headers, or are not addresses, are refused before anything is sent
+println(smtp.render(smtp.Message(from: "ann@example.org", to: ["bob@example.org"], subject: "hi\r\nBcc: eve@example.org", body: "")), smtp.lastError())
+println(smtp.render(smtp.Message(from: "ann@example.org", to: ["bob@example.org\r\nRCPT TO:<eve@example.org>"], subject: "s", body: "")), smtp.lastError())
+println(smtp.render(smtp.Message(from: "not an address", to: ["bob@example.org"], subject: "s", body: "")), smtp.lastError())
+println(smtp.send(server, smtp.Message(from: "ann@example.org", to: [], subject: "s", body: "")), smtp.lastError())
+println(smtp.address("Ann <ann@example.org>"), smtp.address("a@b@c"), smtp.address("plain"), smtp.address("x@y.org"))
+println(smtp.send(smtp.Server("127.0.0.1", 1, security: "maybe"), mail), smtp.lastError())

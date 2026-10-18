@@ -1,0 +1,247 @@
+// import smtp
+//
+//   server := smtp.Server("smtp.example.com", 587, username: "me@example.com", password: "secret")
+//   mail := smtp.Message(from: "me@example.com", to: ["ann@example.org"], subject: "Hello", body: "Hi Ann!\n")
+//   if !smtp.send(server, mail) { println("not sent:", smtp.lastError()) }
+//
+// Send an e-mail through an SMTP server.  `security` is how the connection is protected: "starttls" (the
+// default, for port 587: plain text first, then TLS), "tls" (TLS from the start, port 465) or "none" (port 25,
+// and a local test server).  A password is only sent after TLS unless the security is "none" on purpose.
+// The text is sent as UTF-8; a subject with non-ASCII letters is encoded for you.  TLS needs OpenSSL's libssl
+// (see `net`).  Addresses are checked (no line breaks, `<`, `>` or spaces in the address itself), because a
+// line break would let a value add headers of its own.
+
+import encoding
+import http
+import net
+import random
+import time
+
+type Server(
+    host: String,
+    port: Int = 587,
+    security: String = "starttls",
+    username: String = "",
+    password: String = "",
+    hello: String = "localhost",
+    verify: Bool = true,
+    timeoutMs: Int = 30000
+)
+
+type Message(
+    from: String,
+    to: List<String>,
+    subject: String,
+    body: String,
+    cc: List<String> = List<String>(),
+    bcc: List<String> = List<String>(),
+    html: Bool = false,
+    headers: Map<String, String> = Map<String, String>()
+)
+
+problem := ""
+// What the server said last (its reply to the command that failed, when one did).
+lastReply := ""
+
+// Why the most recent `send` failed.
+fn lastError() -> String = problem
+
+fn __fail(text: String) -> Bool {
+    problem = text
+    return false
+}
+
+// "Ann <ann@example.org>" and "ann@example.org" both give "ann@example.org"; null if it is not an address.
+fn address(text: String) -> String? {
+    inner := text.trim()
+    open := inner.lastIndexOf("<")
+    if open >= 0 && inner.endsWith(">") { inner = inner.substring(open + 1, inner.length() - 1).trim() }
+    at := inner.indexOf("@")
+    if at <= 0 || at == inner.length() - 1 || inner.lastIndexOf("@") != at { return null }
+    for c in inner {
+        if c <= ' ' || c == '<' || c == '>' || c == '"' || c == ',' || c == ';' || c.code() > 126 { return null }
+    }
+    return inner
+}
+
+fn __clean(text: String) -> Bool = !text.contains("\r") && !text.contains("\n")
+
+// A value for an error message, on one line.
+fn __show(text: String) -> String = text.replace("\r", "").replace("\n", " ")
+
+// A header value; text with non-ASCII letters is encoded as =?UTF-8?B?...?= (RFC 2047).
+fn __encodeHeader(text: String) -> String {
+    plain := true
+    for c in text {
+        if c.code() > 126 || c.code() < 32 { plain = false }
+    }
+    return plain ? text : "=?UTF-8?B?${encoding.base64(text)}?="
+}
+
+// The body as base64 in lines of at most 76 characters.
+fn __wrap(text: String) -> String {
+    out := StringBuilder()
+    i := 0
+    while i < text.length() {
+        end := (i + 76).min(text.length())
+        out.append(text.substring(i, end)).append("\r\n")
+        i = end
+    }
+    return out.toString()
+}
+
+// The message as it goes over the wire (headers, an empty line and the base64 body), or null (and
+// `lastError()` says why) if a value is not allowed.  `domain` is used in the Message-ID.
+fn render(message: Message, domain: String = "localhost") -> String? {
+    problem = ""
+    if address(message.from) == null || !__clean(message.from) {
+        __fail("`from` is not an address: ${__show(message.from)}")
+        return null
+    }
+    for list in [message.to, message.cc] {
+        for r in list {
+            if address(r) == null || !__clean(r) {
+                __fail("not an address: ${__show(r)}")
+                return null
+            }
+        }
+    }
+    if !__clean(message.subject) {
+        __fail("the subject has a line break")
+        return null
+    }
+    out := StringBuilder()
+    out.append("Date: ${time.now().format("%a, %d %b %Y %H:%M:%S +0000")}\r\n")
+    out.append("From: ${message.from}\r\n")
+    out.append("To: ${message.to.join(", ")}\r\n")
+    if !message.cc.isEmpty() { out.append("Cc: ${message.cc.join(", ")}\r\n") }
+    out.append("Subject: ${__encodeHeader(message.subject)}\r\n")
+    out.append("Message-ID: <${random.token(8)}@$domain>\r\n")
+    out.append("MIME-Version: 1.0\r\n")
+    out.append("Content-Type: text/${message.html ? "html" : "plain"}; charset=utf-8\r\n")
+    out.append("Content-Transfer-Encoding: base64\r\n")
+    for e in message.headers {
+        if e.key.isEmpty() || !__clean(e.key) || !__clean(e.value) || e.key.contains(":") || e.key.contains(" ") {
+            __fail("the header \"${e.key}\" is not allowed (no line breaks, colons or spaces in a name)")
+            return null
+        }
+        out.append("${e.key}: ${__encodeHeader(e.value)}\r\n")
+    }
+    out.append("\r\n")
+    out.append(__wrap(encoding.base64(message.body)))
+    return out.toString()
+}
+
+// One reply from the server: its code, with the text of its lines in `lastReply` ("250-..." goes on,
+// "250 ..." ends it).  0 if the connection ended.
+fn __reply(reader: http.Reader) -> Int {
+    code := 0
+    text := StringBuilder()
+    while true {
+        line := reader.line()
+        if line == null || line.length() < 3 {
+            lastReply = ""
+            return 0
+        }
+        code = line.substring(0, 3).toIntOr(0)
+        text.append(line.length() > 4 ? line.substring(4, line.length()) : "").append("\n")
+        if line.length() == 3 || line.substring(3, 4) != "-" { break }
+    }
+    lastReply = text.toString().trim()
+    return code
+}
+
+fn __expect(reader: http.Reader, expect: Int, what: String) -> Bool {
+    code := __reply(reader)
+    if code == 0 { return __fail("the server closed the connection after $what") }
+    if code / 100 != expect / 100 { return __fail("$what was refused: $code $lastReply") }
+    return true
+}
+
+// Send a command and check that the reply starts with the expected digit.
+fn __command(conn: net.Conn, reader: http.Reader, text: String, expect: Int) -> Bool {
+    if !conn.sendText(text + "\r\n") { return __fail("could not send to the server: ${net.lastError()}") }
+    return __expect(reader, expect, text.split(" ")[0])
+}
+
+fn __greet(conn: net.Conn, reader: http.Reader, hello: String) -> Bool = __command(conn, reader, "EHLO $hello", 250)
+
+// The words an EHLO reply lists, in capitals: "STARTTLS", "AUTH", "PLAIN", "LOGIN", ...
+fn __offered(reply: String) -> List<String> {
+    words := List<String>()
+    for line in reply.split("\n") {
+        for w in line.upper().replace("=", " ").split(" ") {
+            if !w.isEmpty() { words.add(w) }
+        }
+    }
+    return words
+}
+
+fn __authenticate(conn: net.Conn, reader: http.Reader, server: Server, offered: List<String>) -> Bool {
+    if offered.contains("PLAIN") {
+        nul := Bytes(1)
+        login := nul.concat(server.username.toBytes()).concat(nul).concat(server.password.toBytes())
+        return __command(conn, reader, "AUTH PLAIN ${encoding.base64Bytes(login)}", 235)
+    }
+    if offered.contains("LOGIN") {
+        return __command(conn, reader, "AUTH LOGIN", 334)
+            && __command(conn, reader, encoding.base64(server.username), 334)
+            && __command(conn, reader, encoding.base64(server.password), 235)
+    }
+    return __fail("the server offers no way to log in that this library knows (PLAIN or LOGIN)")
+}
+
+fn __session(conn: net.Conn, server: Server, sender: String, recipients: List<String>, text: String) -> Bool {
+    if server.security == "tls" && !conn.startTls(server.host, server.verify) {
+        return __fail("TLS failed: ${net.lastError()}")
+    }
+    reader := http.Reader(conn)
+    if !__expect(reader, 220, "the connection") { return false }
+    if !__greet(conn, reader, server.hello) { return false }
+    if server.security == "starttls" {
+        if !__offered(lastReply).contains("STARTTLS") { return __fail("the server does not offer STARTTLS") }
+        if !__command(conn, reader, "STARTTLS", 220) { return false }
+        if !conn.startTls(server.host, server.verify) { return __fail("TLS failed: ${net.lastError()}") }
+        reader = http.Reader(conn)
+        if !__greet(conn, reader, server.hello) { return false }
+    }
+    if !server.username.isEmpty() && !__authenticate(conn, reader, server, __offered(lastReply)) { return false }
+    if !__command(conn, reader, "MAIL FROM:<$sender>", 250) { return false }
+    for r in recipients {
+        if !__command(conn, reader, "RCPT TO:<$r>", 250) { return false }
+    }
+    if !__command(conn, reader, "DATA", 354) { return false }
+    // a line that starts with a dot gets another one: a line with just a dot ends the data
+    stuffed := text.startsWith(".") ? "." + text : text
+    stuffed = stuffed.replace("\r\n.", "\r\n..")
+    if !conn.sendText(stuffed + ".\r\n") { return __fail("could not send the message: ${net.lastError()}") }
+    if !__expect(reader, 250, "the message") { return false }
+    // say goodbye and wait for the answer, so the server has seen everything before the connection is closed
+    if conn.sendText("QUIT\r\n") { __reply(reader) }
+    return true
+}
+
+// Send the message.  False if anything went wrong; `smtp.lastError()` says what.
+fn send(server: Server, message: Message) -> Bool {
+    text := render(message, server.hello)
+    if text == null { return false }
+    sender := address(message.from)!!
+    recipients := List<String>()
+    for list in [message.to, message.cc, message.bcc] {
+        for r in list {
+            a := address(r)
+            if a == null || !__clean(r) { return __fail("not an address: ${__show(r)}") }
+            recipients.add(a)
+        }
+    }
+    if recipients.isEmpty() { return __fail("the message has no recipients") }
+    if !(server.security == "starttls" || server.security == "tls" || server.security == "none") {
+        return __fail("the security must be \"starttls\", \"tls\" or \"none\", not \"${server.security}\"")
+    }
+    conn := net.connect(server.host, server.port, server.timeoutMs)
+    if conn == null { return __fail("cannot connect to ${server.host}:${server.port}: ${net.lastError()}") }
+    conn.setTimeout(server.timeoutMs)
+    ok := __session(conn, server, sender, recipients, text)
+    conn.close()
+    return ok
+}
