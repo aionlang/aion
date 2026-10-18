@@ -1,0 +1,32 @@
+library City & County true null true
+[book, book, empty, ns:item]
+1 en Dune | Frank Herbert
+2 fr L'Étranger | Albert Camus
+USD 9.99 null
+[Dune, L'Étranger] 10
+1 < 2 & 3 > 2
+tail x 0
+true true
+0 3
+<empty/>
+<title>Dune</title>
+<a href="/x?a=1&amp;b=2" title="say &quot;hi&quot;">1 &lt; 2 &amp; more</a>
+true
+<book id="1" lang="en">
+  <title>Dune</title>
+  <author>Frank Herbert</author>
+  <price currency="USD">9.99</price>
+</book>
+true
+<ul id="menu"><li>Home</li><li>About</li><li>&lt;Contact&gt;</li></ul>
+2 <ul id="menu"><li>Home</li><li>&lt;Contact&gt;</li></ul>
+null mismatched tag at line 1, column 9
+null no element found at line 1, column 4
+null no element found at line 1, column 1
+null syntax error at line 1, column 1
+null not well-formed (invalid token) at line 1, column 6
+null junk after document element at line 1, column 5
+null undefined entity at line 1, column 4
+true
+null the elements are nested too deeply
+1000

@@ -1,0 +1,68 @@
+/** std.xml: XML read with expat, and the tree it makes. */
+import xml
+
+source := """<?xml version="1.0" encoding="UTF-8"?>
+<!-- a library -->
+<library name="City &amp; County" open="true">
+    <book id="1" lang="en">
+        <title>Dune</title>
+        <author>Frank Herbert</author>
+        <price currency="USD">9.99</price>
+    </book>
+    <book id="2" lang="fr">
+        <title>L'&#201;tranger</title>
+        <author>Albert Camus</author>
+        <note><![CDATA[1 < 2 & 3 > 2]]></note>
+    </book>
+    <empty/>
+    <ns:item xmlns:ns="urn:example" ns:kind="x">tail</ns:item>
+</library>
+"""
+doc := xml.parse(source)!!
+println(doc.name, doc.attr("name"), doc.attr("open"), doc.attr("missing"), doc.hasAttr("open"))
+println(doc.elements().map { it.name })
+for b in doc.childrenNamed("book") {
+    println(b.attr("id"), b.attr("lang"), b.child("title")!!.text(), "|", b.child("author")!!.text())
+}
+println(doc.find("price")!!.attr("currency"), doc.find("price")!!.text(), doc.find("nothing"))
+println(doc.findAll("title").map { it.text() }, doc.findAll("*").size())
+println(doc.find("note")!!.text())
+println(doc.child("ns:item")!!.text(), doc.child("ns:item")!!.attr("ns:kind"), doc.child("empty")!!.children.size())
+println(doc.child("book")!!.parent == doc, doc.parent == null)
+println(doc.children.filter { it.isComment() }.size(), doc.child("book")!!.children.size())
+
+// writing it again
+println(doc.child("empty"))
+println(doc.child("book")!!.child("title"))
+println(xml.element("a", {"href": "/x?a=1&b=2", "title": "say \"hi\""}, [xml.text("1 < 2 & more")]))
+println(xml.parse(doc.toXml())!!.toXml() == doc.toXml())
+println(doc.child("book")!!.pretty())
+println(xml.parse(source, keepWhitespace: true)!!.children.size() > doc.children.size())
+
+// building
+page := xml.element("ul", {"id": "menu"})
+for name in ["Home", "About", "<Contact>"] {
+    item := page.append(xml.element("li"))
+    item.append(xml.text(name))
+}
+println(page)
+page.children[1].detach()
+println(page.children.size(), page.toXml())
+
+// not well formed, or dangerous
+for broken in ["<a><b></a>", "<a>", "", "not xml", "<a x=1/>", "<a/><b/>", "<a>&nope;</a>"] {
+    println(xml.parse(broken), xml.lastError())
+}
+bomb := """<?xml version="1.0"?>
+<!DOCTYPE lolz [
+ <!ENTITY a "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">
+ <!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;">
+ <!ENTITY c "&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;&b;">
+ <!ENTITY d "&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;&c;">
+ <!ENTITY e "&d;&d;&d;&d;&d;&d;&d;&d;&d;&d;&d;&d;&d;&d;&d;&d;&d;&d;&d;&d;&d;&d;&d;&d;&d;&d;&d;&d;&d;&d;&d;&d;">
+]>
+<lolz>&e;</lolz>"""
+println(xml.parse(bomb) == null)
+deep := "<a>".repeat(600) + "</a>".repeat(600)
+println(xml.parse(deep), xml.lastError())
+println(xml.parse("<a>" + "<b/>".repeat(1000) + "</a>")!!.children.size())

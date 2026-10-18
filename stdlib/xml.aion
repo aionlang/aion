@@ -1,0 +1,847 @@
+// import xml
+//
+//   doc := xml.parse("<books><book id=\"1\"><title>Dune</title></book><book id=\"2\"><title>Emma</title></book></books>")!!
+//   for b in doc.childrenNamed("book") { println(b.attr("id"), b.child("title")!!.text()) }     // 1 Dune / 2 Emma
+//   println(doc.select("book[id=2] > title")[0].text())                                    // Emma
+//   println(doc)                                                                           // the document again, as text
+//
+//   page := xml.parseHtml("<ul class=menu><li><a href=/a>One<li><a href=/b>Two</ul>")      // forgiving: never fails
+//   for a in page.select("ul.menu li a") { println(a.attr("href"), a.text()) }             // /a One / /b Two
+//
+// XML and HTML as a tree of `Node`s, with CSS selectors to pick parts out.  `parse` reads XML with the expat library,
+// found when first used (install libexpat, for example the libexpat1 package; a program that does not import this
+// needs nothing) and gives null for a document that is not well formed (`lastError()` says where); it does not load
+// external entities and refuses documents whose entities expand far beyond their size.  `parseHtml` is written in Aion:
+// it copes with unquoted attributes, tags that are never closed (<li>, <p>, <td> ...), void tags (<br>, <img> ...),
+// script and style text, comments and the usual character references.
+
+extern fn __error() -> String = "aion_xml_error"
+extern fn available() -> Bool = "aion_xml_available"
+extern fn __parse(text: Bytes) -> Bytes? = "aion_xml_parse"
+
+problemText := ""
+
+// Why the most recent `parse` returned null.
+fn lastError() -> String = problemText.isEmpty() ? __error() : problemText
+
+// ── Nodes ────────────────────────────────────────────────────────
+
+// A part of a document.  An element has a `name` ("div"), `attributes` and `children`; text is a node called "#text"
+// with its characters in `content`, a comment is "#comment", and an HTML page is a "#document" holding its top-level nodes.
+type Node(name: String) {
+    attributes: Map<String, String> = Map<String, String>()
+    children: List<Node> = List<Node>()
+    content: String = ""
+    parent: Node? = null
+
+    fn isElement() = !name.startsWith("#")
+    fn isText() = name == "#text"
+    fn isComment() = name == "#comment"
+
+    // An attribute's value, or null.
+    fn attr(key: String) -> String? = attributes.getOrNull(key)
+    fn hasAttr(key: String) = attributes.containsKey(key)
+
+    // Add a child (taken out of its old parent first); returns the child.
+    fn append(child: Node) -> Node {
+        child.detach()
+        child.parent = this
+        children.add(child)
+        return child
+    }
+
+    // Take this node out of the tree it is in.
+    fn detach() {
+        p := parent
+        if p != null {
+            i := 0
+            while i < p.children.size() {
+                if p.children[i] == this {
+                    p.children.removeAt(i)
+                    break
+                }
+                i += 1
+            }
+        }
+        parent = null
+    }
+
+    // The children that are elements.
+    fn elements() -> List<Node> = children.filter { it.isElement() }
+
+    // The child elements with this name; `child` is the first of them.
+    fn childrenNamed(tag: String) -> List<Node> = children.filter { it.isElement() && it.name == tag }
+    fn child(tag: String) -> Node? = children.find { it.isElement() && it.name == tag }
+
+    // The elements anywhere below this node, in document order, with this name (any name for "*"); `find` is the first.
+    fn findAll(tag: String) -> List<Node> {
+        out := List<Node>()
+        collect(tag, out)
+        return out
+    }
+
+    fn find(tag: String) -> Node? {
+        found := findAll(tag)
+        return found.isEmpty() ? null : found[0]
+    }
+
+    fn collect(tag: String, out: List<Node>) {
+        for c in children {
+            if c.isElement() {
+                if tag == "*" || c.name == tag { out.add(c) }
+                c.collect(tag, out)
+            }
+        }
+    }
+
+    // All the text below this node, joined.
+    fn text() -> String {
+        if isText() { return content }
+        out := StringBuilder()
+        gather(out)
+        return out.toString()
+    }
+
+    fn gather(out: StringBuilder) {
+        for c in children {
+            if c.isText() { out.append(c.content) } else if c.isElement() { c.gather(out) }
+        }
+    }
+
+    // The elements below this node that a CSS selector picks, in document order.  A selector that cannot be read stops
+    // the program, like any other mistake in the code (`validSelector` checks one that comes from outside).
+    fn select(selector: String) -> List<Node> {
+        groups := parseSelector(selector)
+        if groups == null { panic("not a valid selector: $selector") }
+        out := List<Node>()
+        for e in findAll("*") {
+            for chain in groups {
+                if matchChain(e, chain, chain.size() - 1) {
+                    out.add(e)
+                    break
+                }
+            }
+        }
+        return out
+    }
+
+    // The first element a selector picks, or null.
+    fn selectFirst(selector: String) -> Node? {
+        found := select(selector)
+        return found.isEmpty() ? null : found[0]
+    }
+
+    // Does this element match the selector (checked against its ancestors and siblings as well)?
+    fn matches(selector: String) -> Bool {
+        groups := parseSelector(selector)
+        if groups == null { panic("not a valid selector: $selector") }
+        for chain in groups {
+            if matchChain(this, chain, chain.size() - 1) { return true }
+        }
+        return false
+    }
+
+    // The siblings and the position of this node among its parent's child elements (1 for the first).
+    fn siblings() -> List<Node> {
+        p := parent
+        return p == null ? List<Node>() : p.elements()
+    }
+
+    fn position() -> Int {
+        sibs := siblings()
+        for i in 0..sibs.size() {
+            if sibs[i] == this { return i + 1 }
+        }
+        return 1
+    }
+
+    // The document as XML text (compact), as an indented tree, or as HTML.
+    fn toXml() -> String {
+        out := StringBuilder()
+        writeXml(out, -1, 0)
+        return out.toString()
+    }
+
+    fn pretty(indent: Int = 2) -> String {
+        out := StringBuilder()
+        writeXml(out, indent, 0)
+        return out.toString()
+    }
+
+    fn toHtml() -> String {
+        out := StringBuilder()
+        writeHtml(out)
+        return out.toString()
+    }
+
+    fn toString() = toXml()
+
+    fn writeXml(out: StringBuilder, indent: Int, depth: Int) {
+        if isText() {
+            out.append(escape(content))
+            return
+        }
+        if isComment() {
+            out.append("<!--").append(content).append("-->")
+            return
+        }
+        if name == "#document" {
+            for c in children { c.writeXml(out, indent, depth) }
+            return
+        }
+        out.append("<").append(name)
+        for a in attributes { out.append(" ").append(a.key).append("=\"").append(escapeAttribute(a.value)).append("\"") }
+        if children.isEmpty() {
+            out.append("/>")
+            return
+        }
+        out.append(">")
+        onlyText := children.all { it.isText() }
+        for c in children {
+            if indent >= 0 && !onlyText {
+                out.append("\n").append(" ".repeat((depth + 1) * indent))
+            }
+            c.writeXml(out, indent, depth + 1)
+        }
+        if indent >= 0 && !onlyText { out.append("\n").append(" ".repeat(depth * indent)) }
+        out.append("</").append(name).append(">")
+    }
+
+    fn writeHtml(out: StringBuilder) {
+        if isText() {
+            parentName := parent == null ? "" : parent!!.name
+            out.append(parentName == "script" || parentName == "style" ? content : escape(content))
+            return
+        }
+        if isComment() {
+            out.append("<!--").append(content).append("-->")
+            return
+        }
+        if name == "#document" {
+            for c in children { c.writeHtml(out) }
+            return
+        }
+        out.append("<").append(name)
+        for a in attributes { out.append(" ").append(a.key).append("=\"").append(escapeAttribute(a.value)).append("\"") }
+        out.append(">")
+        if voidElements.contains(name) { return }
+        for c in children { c.writeHtml(out) }
+        out.append("</").append(name).append(">")
+    }
+}
+
+// Characters that mean something in XML and HTML, written as references: & < > in text, and also " in attributes.
+fn escape(text: String) -> String {
+    if !(text.contains("&") || text.contains("<") || text.contains(">")) { return text }
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+}
+
+fn escapeAttribute(text: String) -> String {
+    return escape(text).replace("\"", "&quot;").replace("\n", "&#10;").replace("\t", "&#9;").replace("\r", "&#13;")
+}
+
+// Make nodes by hand: `xml.element("a", {"href": "/x"}, [xml.text("link")])`.
+fn element(name: String, attributes: Map<String, String> = Map<String, String>(), children: List<Node> = List<Node>()) -> Node {
+    n := Node(name)
+    for a in attributes { n.attributes[a.key] = a.value }
+    for c in children { n.append(c) }
+    return n
+}
+
+fn text(content: String) -> Node {
+    n := Node("#text")
+    n.content = content
+    return n
+}
+
+fn comment(content: String) -> Node {
+    n := Node("#comment")
+    n.content = content
+    return n
+}
+
+// ── Reading XML ──────────────────────────────────────────────────
+
+fn __need() {
+    problemText = ""
+    if !available() { panic(__error()) }
+}
+
+fn __u32(data: Bytes, at: Int) -> Int = data[at] * 16777216 + data[at + 1] * 65536 + data[at + 2] * 256 + data[at + 3]
+
+fn __isBlank(s: String) -> Bool {
+    for c in s {
+        if c != ' ' && c != '\n' && c != '\t' && c != '\r' { return false }
+    }
+    return true
+}
+
+// Read an XML document and give its root element; null if it is not well formed (the position is in `lastError()`).
+// Text made only of white space is dropped unless `keepWhitespace` is set.
+fn parse(source: String, keepWhitespace: Bool = false) -> Node? {
+    __need()
+    data := __parse(source.toBytes())
+    if data == null { return null }
+    root: Node? = null
+    stack := List<Node>()
+    pos := 0
+    while pos < data.size() {
+        kind := data[pos]
+        pos += 1
+        if kind == 1 {
+            n := __u32(data, pos)
+            node := Node(data.slice(pos + 4, pos + 4 + n).toText())
+            pos += 4 + n
+            count := data[pos] * 256 + data[pos + 1]
+            pos += 2
+            for k in 0..count {
+                kl := __u32(data, pos)
+                key := data.slice(pos + 4, pos + 4 + kl).toText()
+                pos += 4 + kl
+                vl := __u32(data, pos)
+                node.attributes[key] = data.slice(pos + 4, pos + 4 + vl).toText()
+                pos += 4 + vl
+            }
+            if stack.isEmpty() { root = node } else { stack[stack.size() - 1].append(node) }
+            stack.add(node)
+        } else if kind == 2 {
+            stack.removeAt(stack.size() - 1)
+        } else {
+            n := __u32(data, pos)
+            content := data.slice(pos + 4, pos + 4 + n).toText()
+            pos += 4 + n
+            if stack.isEmpty() { continue }
+            top := stack[stack.size() - 1]
+            if kind == 4 {
+                top.append(comment(content))
+            } else if !keepWhitespace && __isBlank(content) {
+                // dropped: indentation between elements
+                continue
+            } else if !top.children.isEmpty() && top.children[top.children.size() - 1].isText() {
+                last := top.children[top.children.size() - 1]
+                last.content = last.content + content
+            } else {
+                top.append(text(content))
+            }
+        }
+    }
+    return root
+}
+
+// ── Reading HTML ─────────────────────────────────────────────────
+
+val voidElements = ["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"]
+val rawTextElements = ["script", "style", "textarea", "title"]
+val blockElements = ["address", "article", "aside", "blockquote", "details", "div", "dl", "fieldset", "figcaption", "figure",
+    "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "main", "menu", "nav", "ol", "p", "pre", "section",
+    "table", "ul"]
+
+val phrasingElements = ["a", "abbr", "b", "big", "cite", "code", "em", "font", "i", "kbd", "label", "mark", "q", "s", "small", "span",
+    "strong", "sub", "sup", "u"]
+
+val namedEntities = {
+    "amp": "&", "lt": "<", "gt": ">", "quot": "\"", "apos": "'", "nbsp": "\u{a0}", "copy": "\u{a9}", "reg": "\u{ae}",
+    "trade": "\u{2122}", "hellip": "\u{2026}", "mdash": "\u{2014}", "ndash": "\u{2013}", "lsquo": "\u{2018}",
+    "rsquo": "\u{2019}", "ldquo": "\u{201c}", "rdquo": "\u{201d}", "laquo": "\u{ab}", "raquo": "\u{bb}", "euro": "\u{20ac}",
+    "pound": "\u{a3}", "yen": "\u{a5}", "cent": "\u{a2}", "sect": "\u{a7}", "deg": "\u{b0}", "plusmn": "\u{b1}",
+    "times": "\u{d7}", "divide": "\u{f7}", "middot": "\u{b7}", "bull": "\u{2022}", "larr": "\u{2190}", "rarr": "\u{2192}",
+    "uarr": "\u{2191}", "darr": "\u{2193}", "eacute": "\u{e9}", "egrave": "\u{e8}", "agrave": "\u{e0}", "aacute": "\u{e1}",
+    "uuml": "\u{fc}", "ouml": "\u{f6}", "auml": "\u{e4}", "szlig": "\u{df}", "ntilde": "\u{f1}", "ccedil": "\u{e7}"
+}
+
+// Replace character references (&amp; &#169; &#xA9; ...) by the characters; unknown ones stay as written.
+fn decodeEntities(s: String) -> String {
+    if !s.contains("&") { return s }
+    out := StringBuilder()
+    i := 0
+    while i < s.length() {
+        amp := s.indexOf("&", i)
+        if amp < 0 {
+            out.append(s.substring(i, s.length()))
+            break
+        }
+        out.append(s.substring(i, amp))
+        semi := s.indexOf(";", amp)
+        if semi < 0 || semi - amp > 10 {
+            out.append("&")
+            i = amp + 1
+            continue
+        }
+        name := s.substring(amp + 1, semi)
+        replacement: String? = null
+        if name.startsWith("#x") || name.startsWith("#X") {
+            code := name.substring(2, name.length()).parseInt(16)
+            if code != null && code > 0 && code < 1114112 { replacement = code.toChar().toString() }
+        } else if name.startsWith("#") {
+            code := name.substring(1, name.length()).toIntOrNull()
+            if code != null && code > 0 && code < 1114112 { replacement = code.toChar().toString() }
+        } else {
+            replacement = namedEntities.getOrNull(name)
+        }
+        if replacement == null {
+            out.append("&")
+            i = amp + 1
+        } else {
+            out.append(replacement)
+            i = semi + 1
+        }
+    }
+    return out.toString()
+}
+
+// Does `s` have `word` at position `i`?
+fn __at(s: String, i: Int, word: String) -> Bool = i + word.length() <= s.length() && s.substring(i, i + word.length()) == word
+
+fn __isNameChar(c: Char) -> Bool = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == ':' || c == '.'
+fn __isSpace(c: Char) -> Bool = c == ' ' || c == '\n' || c == '\t' || c == '\r' || c == '\u{c}'
+
+// The open element a new tag may close first: <li> closes an open <li>, <p> is closed by a block, and so on.
+fn __closeFor(stack: List<Node>, tag: String) {
+    top := stack.size() - 1
+    if top < 1 { return }
+    // pop up to and including the nearest open element of one of these names, stopping at a boundary element
+    closes := List<String>()
+    stops := List<String>()
+    if tag == "li" {
+        closes = ["li"]
+        stops = ["ul", "ol", "menu"]
+    } else if tag == "dt" || tag == "dd" {
+        closes = ["dt", "dd"]
+        stops = ["dl"]
+    } else if tag == "tr" {
+        closes = ["tr"]
+        stops = ["table", "thead", "tbody", "tfoot"]
+    } else if tag == "td" || tag == "th" {
+        closes = ["td", "th"]
+        stops = ["tr", "table"]
+    } else if tag == "thead" || tag == "tbody" || tag == "tfoot" {
+        closes = ["thead", "tbody", "tfoot"]
+        stops = ["table"]
+    } else if tag == "option" {
+        closes = ["option"]
+        stops = ["select", "datalist", "optgroup"]
+    } else if tag == "optgroup" {
+        closes = ["optgroup", "option"]
+        stops = ["select"]
+    } else if blockElements.contains(tag) {
+        // a block ends an open paragraph, if only text-level elements (<b>, <a>, ...) were opened inside it
+        k := top
+        while k >= 1 && phrasingElements.contains(stack[k].name) { k -= 1 }
+        if k >= 1 && stack[k].name == "p" {
+            while stack.size() > k { stack.removeAt(stack.size() - 1) }
+        }
+        return
+    } else {
+        return
+    }
+    i := top
+    while i >= 1 {
+        n := stack[i].name
+        if stops.contains(n) { return }
+        if closes.contains(n) {
+            while stack.size() > i { stack.removeAt(stack.size() - 1) }
+            return
+        }
+        i -= 1
+    }
+}
+
+// Read HTML, however untidy.  The result is a "#document" node holding the page's top-level nodes; there is no
+// failure.  Tag and attribute names are made lower case, and attributes without a value get the value "".
+fn parseHtml(source: String) -> Node {
+    doc := Node("#document")
+    stack := List<Node>()
+    stack.add(doc)
+    n := source.length()
+    i := 0
+    while i < n {
+        lt := source.indexOf("<", i)
+        if lt < 0 {
+            __addText(stack, source.substring(i, n))
+            break
+        }
+        if lt > i { __addText(stack, source.substring(i, lt)) }
+        i = lt
+        if __at(source, i, "<!--") {
+            end := source.indexOf("-->", i + 4)
+            stop := end < 0 ? n : end
+            stack[stack.size() - 1].append(comment(source.substring(i + 4, stop)))
+            i = end < 0 ? n : end + 3
+            continue
+        }
+        if i + 1 < n && source.substring(i + 1, i + 2) == "!" {
+            end := source.indexOf(">", i)
+            i = end < 0 ? n : end + 1
+            continue
+        }
+        if i + 1 < n && source.substring(i + 1, i + 2) == "?" {
+            end := source.indexOf(">", i)
+            i = end < 0 ? n : end + 1
+            continue
+        }
+        if i + 1 < n && source.substring(i + 1, i + 2) == "/" {
+            end := source.indexOf(">", i)
+            stop := end < 0 ? n : end
+            tag := source.substring(i + 2, stop).trim().lower()
+            k := stack.size() - 1
+            while k >= 1 && stack[k].name != tag { k -= 1 }
+            if k >= 1 {
+                while stack.size() > k { stack.removeAt(stack.size() - 1) }
+            }
+            i = end < 0 ? n : end + 1
+            continue
+        }
+        if i + 1 < n && __isNameChar(source.charAt(i + 1)) {
+            i = __startTag(source, i, stack)
+            continue
+        }
+        __addText(stack, "<")
+        i += 1
+    }
+    return doc
+}
+
+fn __addText(stack: List<Node>, raw: String) {
+    top := stack[stack.size() - 1]
+    decoded := raw
+    parentName := top.name
+    if parentName != "script" && parentName != "style" { decoded = decodeEntities(raw) }
+    if !top.children.isEmpty() && top.children[top.children.size() - 1].isText() {
+        last := top.children[top.children.size() - 1]
+        last.content = last.content + decoded
+    } else {
+        top.append(text(decoded))
+    }
+}
+
+// Read a start tag at `i` and open its element; gives the position after it (and after the text of a script or style).
+fn __startTag(source: String, start: Int, stack: List<Node>) -> Int {
+    n := source.length()
+    i := start + 1
+    nameStart := i
+    while i < n && __isNameChar(source.charAt(i)) { i += 1 }
+    tag := source.substring(nameStart, i).lower()
+    attrs := Map<String, String>()
+    selfClosing := false
+    while i < n {
+        while i < n && __isSpace(source.charAt(i)) { i += 1 }
+        if i >= n { break }
+        c := source.charAt(i)
+        if c == '>' {
+            i += 1
+            break
+        }
+        if c == '/' {
+            if i + 1 < n && source.charAt(i + 1) == '>' {
+                selfClosing = true
+                i += 2
+                break
+            }
+            i += 1
+            continue
+        }
+        keyStart := i
+        while i < n && !__isSpace(source.charAt(i)) && source.charAt(i) != '=' && source.charAt(i) != '>' && source.charAt(i) != '/' { i += 1 }
+        if i == keyStart {
+            i += 1
+            continue
+        }
+        key := source.substring(keyStart, i).lower()
+        while i < n && __isSpace(source.charAt(i)) { i += 1 }
+        value := ""
+        if i < n && source.charAt(i) == '=' {
+            i += 1
+            while i < n && __isSpace(source.charAt(i)) { i += 1 }
+            if i < n && (source.charAt(i) == '"' || source.charAt(i) == '\'') {
+                quote := source.substring(i, i + 1)
+                close := source.indexOf(quote, i + 1)
+                stop := close < 0 ? n : close
+                value = source.substring(i + 1, stop)
+                i = close < 0 ? n : close + 1
+            } else {
+                valueStart := i
+                while i < n && !__isSpace(source.charAt(i)) && source.charAt(i) != '>' { i += 1 }
+                value = source.substring(valueStart, i)
+            }
+        }
+        if !attrs.containsKey(key) { attrs[key] = decodeEntities(value) }
+    }
+    __closeFor(stack, tag)
+    node := Node(tag)
+    for a in attrs { node.attributes[a.key] = a.value }
+    stack[stack.size() - 1].append(node)
+    if selfClosing || voidElements.contains(tag) { return i }
+    if rawTextElements.contains(tag) {
+        // the text runs to the matching end tag
+        at := i
+        while true {
+            close := source.indexOf("</", at)
+            if close < 0 {
+                if i < n { node.append(text(tag == "script" || tag == "style" ? source.substring(i, n) : decodeEntities(source.substring(i, n)))) }
+                return n
+            }
+            if source.substring(close + 2, (close + 2 + tag.length()).min(n)).lower() == tag {
+                if close > i {
+                    body := source.substring(i, close)
+                    node.append(text(tag == "script" || tag == "style" ? body : decodeEntities(body)))
+                }
+                end := source.indexOf(">", close)
+                return end < 0 ? n : end + 1
+            }
+            at = close + 2
+        }
+    }
+    stack.add(node)
+    return i
+}
+
+// ── CSS selectors ────────────────────────────────────────────────
+
+// A test on an attribute: [name], [name=value], and the operators ^= $= *= ~= |=.
+type AttrTest(name: String, op: String, value: String)
+
+// One compound selector, such as `a.nav[href^=http]:first-child`.
+type Simple(tag: String) {
+    id: String = ""
+    classes: List<String> = List<String>()
+    attrs: List<AttrTest> = List<AttrTest>()
+    pseudos: List<String> = List<String>()
+    nots: List<Simple> = List<Simple>()
+}
+
+// A compound selector and how it relates to the one before it: "" for the first, " " descendant, ">" child, "+" next
+// sibling, "~" later sibling.
+type Step(combinator: String, simple: Simple)
+
+fn __isIdent(c: Char) -> Bool = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '\\'
+
+// Can this text be read as a CSS selector?
+fn validSelector(selector: String) -> Bool = parseSelector(selector) != null
+
+// The selector as alternatives (separated by commas), each a chain of steps; null if it cannot be read.
+fn parseSelector(selector: String) -> List<List<Step>>? {
+    groups := List<List<Step>>()
+    chain := List<Step>()
+    s := selector.trim()
+    n := s.length()
+    if n == 0 { return null }
+    i := 0
+    combinator := ""
+    while i < n {
+        c := s.charAt(i)
+        if __isSpace(c) {
+            while i < n && __isSpace(s.charAt(i)) { i += 1 }
+            if i < n && combinator == "" && !chain.isEmpty() && s.charAt(i) != '>' && s.charAt(i) != '+' && s.charAt(i) != '~' && s.charAt(i) != ',' {
+                combinator = " "
+            }
+            continue
+        }
+        if c == ',' {
+            if chain.isEmpty() || combinator != "" && combinator != " " { return null }
+            groups.add(chain)
+            chain = List<Step>()
+            combinator = ""
+            i += 1
+            continue
+        }
+        if c == '>' || c == '+' || c == '~' {
+            if chain.isEmpty() || (combinator != "" && combinator != " ") { return null }
+            combinator = s.substring(i, i + 1)
+            i += 1
+            continue
+        }
+        simple := Simple("")
+        read := __readSimple(s, i, simple)
+        if read < 0 { return null }
+        i = read
+        chain.add(Step(chain.isEmpty() ? "" : (combinator == "" ? " " : combinator), simple))
+        combinator = ""
+    }
+    if chain.isEmpty() || (combinator != "" && combinator != " ") { return null }
+    groups.add(chain)
+    return groups
+}
+
+// Read a compound selector at `i` into `simple`; gives the position after it, or -1.
+fn __readSimple(s: String, start: Int, simple: Simple) -> Int {
+    n := s.length()
+    i := start
+    // a tag name or *
+    if i < n && s.charAt(i) == '*' {
+        simple.tag = "*"
+        i += 1
+    } else {
+        j := i
+        while j < n && __isIdent(s.charAt(j)) { j += 1 }
+        if j > i {
+            simple.tag = s.substring(i, j).lower()
+            i = j
+        }
+    }
+    while i < n {
+        c := s.charAt(i)
+        if c == '#' || c == '.' {
+            j := i + 1
+            while j < n && __isIdent(s.charAt(j)) { j += 1 }
+            if j == i + 1 { return -1 }
+            word := s.substring(i + 1, j)
+            if c == '#' { simple.id = word } else { simple.classes.add(word) }
+            i = j
+        } else if c == '[' {
+            close := s.indexOf("]", i)
+            if close < 0 { return -1 }
+            test := __readAttrTest(s.substring(i + 1, close))
+            if test == null { return -1 }
+            simple.attrs.add(test)
+            i = close + 1
+        } else if c == ':' {
+            j := i + 1
+            while j < n && (__isIdent(s.charAt(j))) { j += 1 }
+            if j == i + 1 { return -1 }
+            word := s.substring(i + 1, j).lower()
+            if j < n && s.charAt(j) == '(' {
+                depth := 1
+                k := j + 1
+                while k < n && depth > 0 {
+                    if s.charAt(k) == '(' { depth += 1 }
+                    if s.charAt(k) == ')' { depth -= 1 }
+                    k += 1
+                }
+                if depth != 0 { return -1 }
+                argument := s.substring(j + 1, k - 1).trim()
+                if word == "not" {
+                    inner := Simple("")
+                    if __readSimple(argument, 0, inner) != argument.length() { return -1 }
+                    simple.nots.add(inner)
+                } else {
+                    simple.pseudos.add("$word($argument)")
+                }
+                i = k
+            } else {
+                simple.pseudos.add(word)
+                i = j
+            }
+        } else {
+            break
+        }
+    }
+    return i == start ? -1 : i
+}
+
+fn __readAttrTest(body: String) -> AttrTest? {
+    ops := ["^=", "$=", "*=", "~=", "|=", "="]
+    for op in ops {
+        at := body.indexOf(op)
+        if at > 0 {
+            value := body.substring(at + op.length(), body.length()).trim()
+            if value.length() >= 2 && (value.startsWith("\"") && value.endsWith("\"") || value.startsWith("'") && value.endsWith("'")) {
+                value = value.substring(1, value.length() - 1)
+            }
+            return AttrTest(body.substring(0, at).trim().lower(), op, value)
+        }
+    }
+    name := body.trim().lower()
+    return name.isEmpty() ? null : AttrTest(name, "", "")
+}
+
+fn __matchesAttr(node: Node, test: AttrTest) -> Bool {
+    value := node.attributes.getOrNull(test.name)
+    if value == null { return false }
+    if test.op == "" { return true }
+    if test.op == "=" { return value == test.value }
+    if test.op == "^=" { return !test.value.isEmpty() && value.startsWith(test.value) }
+    if test.op == "$=" { return !test.value.isEmpty() && value.endsWith(test.value) }
+    if test.op == "*=" { return !test.value.isEmpty() && value.contains(test.value) }
+    if test.op == "~=" { return value.split(" ").contains(test.value) }
+    if test.op == "|=" { return value == test.value || value.startsWith(test.value + "-") }
+    return false
+}
+
+// :nth-child(...) with odd, even, a number, or an+b.
+fn __nth(argument: String, position: Int) -> Bool {
+    a := argument.replace(" ", "").lower()
+    if a == "odd" { return position % 2 == 1 }
+    if a == "even" { return position % 2 == 0 }
+    n := a.indexOf("n")
+    if n < 0 {
+        v := a.toIntOrNull()
+        return v != null && v == position
+    }
+    step := n == 0 ? 1 : (a.substring(0, n) == "-" ? -1 : (a.substring(0, n) == "+" ? 1 : (a.substring(0, n).toIntOrNull() ?: 0)))
+    offset := n + 1 < a.length() ? (a.substring(n + 1, a.length()).replace("+", "").toIntOrNull() ?: 0) : 0
+    if step == 0 { return position == offset }
+    k := (position - offset)
+    return k % step == 0 && k / step >= 0
+}
+
+fn __matchesSimple(node: Node, s: Simple) -> Bool {
+    if !node.isElement() { return false }
+    if s.tag != "" && s.tag != "*" && node.name != s.tag { return false }
+    if !s.id.isEmpty() && node.attributes.getOrNull("id") != s.id { return false }
+    if !s.classes.isEmpty() {
+        have := (node.attributes.getOrNull("class") ?: "").split(" ")
+        for c in s.classes {
+            if !have.contains(c) { return false }
+        }
+    }
+    for a in s.attrs {
+        if !__matchesAttr(node, a) { return false }
+    }
+    for p in s.pseudos {
+        sibs := node.siblings()
+        pos := node.position()
+        if p == "first-child" {
+            if pos != 1 { return false }
+        } else if p == "last-child" {
+            if pos != sibs.size() { return false }
+        } else if p == "only-child" {
+            if sibs.size() != 1 { return false }
+        } else if p == "empty" {
+            if !node.children.isEmpty() { return false }
+        } else if p == "root" {
+            parentNode := node.parent
+            if parentNode != null && parentNode.isElement() { return false }
+        } else if p.startsWith("nth-child(") {
+            if !__nth(p.substring(10, p.length() - 1), pos) { return false }
+        } else if p.startsWith("nth-last-child(") {
+            if !__nth(p.substring(15, p.length() - 1), sibs.size() - pos + 1) { return false }
+        } else if p.startsWith("contains(") {
+            word := p.substring(9, p.length() - 1).trim()
+            if word.length() >= 2 && (word.startsWith("\"") || word.startsWith("'")) { word = word.substring(1, word.length() - 1) }
+            if !node.text().contains(word) { return false }
+        } else {
+            return false
+        }
+    }
+    for x in s.nots {
+        if __matchesSimple(node, x) { return false }
+    }
+    return true
+}
+
+// Does `node` match step `index` of the chain, with the steps before it matching its ancestors or siblings?
+fn matchChain(node: Node, chain: List<Step>, index: Int) -> Bool {
+    step := chain[index]
+    if !__matchesSimple(node, step.simple) { return false }
+    if index == 0 { return true }
+    c := step.combinator
+    if c == ">" {
+        p := node.parent
+        return p != null && matchChain(p, chain, index - 1)
+    }
+    if c == " " {
+        p := node.parent
+        while p != null {
+            if p.isElement() && matchChain(p, chain, index - 1) { return true }
+            p = p.parent
+        }
+        return false
+    }
+    sibs := node.siblings()
+    at := node.position() - 1
+    if c == "+" { return at > 0 && matchChain(sibs[at - 1], chain, index - 1) }
+    for k in 0..at {
+        if matchChain(sibs[k], chain, index - 1) { return true }
+    }
+    return false
+}

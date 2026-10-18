@@ -1,0 +1,96 @@
+/** std.xml: forgiving HTML parsing, and CSS selectors on HTML and XML. */
+import xml
+
+page := xml.parseHtml("""<!DOCTYPE html>
+<HTML lang=en>
+<head><title>Shop &amp; more</title><meta charset=utf-8>
+<style>p > a { color: red }</style>
+<script>if (1 < 2 && x) { document.write("<b>hi</b>") }</script>
+</head>
+<body class="home page" id=top>
+<!-- navigation -->
+<ul class=menu>
+  <li class="first active"><a href=/ title='Home page'>Home
+  <li><a href="/shop?x=1&amp;y=2">Shop</a>
+  <li class=last><a href=/about data-id=7 hidden>About &copy; &#8364;5 &#x41;</a>
+</ul>
+<p>First paragraph with <b>bold</b> and a<br>line break.
+<p>Second paragraph, <i>unclosed
+<div id=box><span>one</span><span class=n>two</span><span class="n x">three</span></div>
+<table><tr><td>1<td>2<tr><td>3<td>4</table>
+<img src=a.png alt="">
+<select><option>A<option selected>B</select>
+</body></HTML>
+""")
+
+println(page.name, page.children.map { it.name })
+html := page.find("html")!!
+println(html.attr("lang"), html.elements().map { it.name })
+println(page.find("title")!!.text(), page.find("meta")!!.attr("charset"))
+println(page.find("style")!!.text(), "|", page.find("script")!!.text())
+println(page.find("body")!!.attr("class"), page.find("body")!!.attr("id"))
+
+// tags that are never closed
+println(page.findAll("li").size(), page.select("ul.menu > li").size(), page.select("li a").map { it.text().trim() })
+println(page.findAll("p").map { it.text().trim() })
+println(page.select("tr").map { it.elements().map { c -> c.text() } })
+println(page.select("option").map { it.text() }, page.select("option[selected]").size())
+println(page.find("br")!!.children.size(), page.find("img")!!.attr("alt") == "", page.find("a")!!.attr("title"))
+println(page.select("a")[1].attr("href"), page.select("a")[2].attr("data-id"), page.select("a")[2].attr("hidden") == "", page.select("a")[2].text().trim())
+
+// selectors
+fn show(selector: String) {
+    if !xml.validSelector(selector) {
+        println(selector, "-> invalid")
+        return
+    }
+    println(selector, "->", page.select(selector).map { it.name + (it.attr("id") != null ? "#" + it.attr("id")!! : "") + ":" + it.text().trim().replace("\n", " ") })
+}
+show("li")
+show("li.first")
+show("li.first.active")
+show(".active a")
+show("ul > li > a")
+show("ul a[href]")
+show("a[href^='/s']")
+show("a[href$=about]")
+show("a[href*=shop]")
+show("a[href='/']")
+show("a[title~=page]")
+show("#top")
+show("body#top.home")
+show("#box > span")
+show("span.n")
+show("span.n.x")
+show("span:first-child")
+show("span:last-child")
+show("span:nth-child(2)")
+show("span:nth-child(odd)")
+show("span:nth-child(2n+1)")
+show("li + li")
+show("li ~ li.last")
+show("li:not(.first)")
+show("li:not(.first):not(.last)")
+show("td:contains(3)")
+show("div, ul.menu")
+show("*:empty")
+show("  p   >   b ")
+show("")
+show("a[")
+show("li >")
+show("> li")
+show("li,")
+show(".")
+println(page.selectFirst("a")!!.matches("li.first > a"), page.selectFirst("a")!!.matches("p a"), page.selectFirst("nothing"), assertFails { page.selectFirst("[") })
+
+// back to text
+box := page.find("div")!!
+println(box.toHtml())
+println(page.find("img")!!.toHtml(), page.find("br")!!.toHtml(), page.find("script")!!.toHtml())
+println(xml.parseHtml("<p>caf\u{e9} \u{65e5}\u{672c} <b class=x>\u{1f600}</b> &lt;ok&gt; &unknown; &#0; &#99999999;</p>").toHtml())
+println(xml.parseHtml("").children.size(), xml.parseHtml("just text").children.size(), xml.parseHtml("<<>>< a <b").toHtml())
+println(xml.parseHtml("<div><p>a</div><p>b").toHtml(), xml.parseHtml("<a href=x>1</b></a>").toHtml())
+
+// selectors work on XML too
+library := xml.parse("<lib><shelf id='s1'><book year='1999'>A</book><book year='2005'>B</book></shelf><shelf id='s2'><book year='2010'>C</book></shelf></lib>")!!
+println(library.select("shelf#s2 book").map { it.text() }, library.select("book[year^=20]").map { it.text() }, library.select("shelf > book:first-child").map { it.text() })

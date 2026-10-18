@@ -1,0 +1,53 @@
+#document [#text, html, #text]
+en [head, body]
+Shop & more utf-8
+p > a { color: red } | if (1 < 2 && x) { document.write("<b>hi</b>") }
+home page top
+3 3 [Home, Shop, About © €5 A]
+[First paragraph with bold and aline break., Second paragraph, unclosed]
+[[1, 2], [3, 4]]
+[A, B] 1
+0 true Home page
+/shop?x=1&y=2 7 true About © €5 A
+li -> [li:Home, li:Shop, li:About © €5 A]
+li.first -> [li:Home]
+li.first.active -> [li:Home]
+.active a -> [a:Home]
+ul > li > a -> [a:Home, a:Shop, a:About © €5 A]
+ul a[href] -> [a:Home, a:Shop, a:About © €5 A]
+a[href^='/s'] -> [a:Shop]
+a[href$=about] -> [a:About © €5 A]
+a[href*=shop] -> [a:Shop]
+a[href='/'] -> [a:Home]
+a[title~=page] -> [a:Home]
+#top -> [body#top:Home   Shop   About © €5 A  First paragraph with bold and aline break. Second paragraph, unclosed onetwothree 1234  AB]
+body#top.home -> [body#top:Home   Shop   About © €5 A  First paragraph with bold and aline break. Second paragraph, unclosed onetwothree 1234  AB]
+#box > span -> [span:one, span:two, span:three]
+span.n -> [span:two, span:three]
+span.n.x -> [span:three]
+span:first-child -> [span:one]
+span:last-child -> [span:three]
+span:nth-child(2) -> [span:two]
+span:nth-child(odd) -> [span:one, span:three]
+span:nth-child(2n+1) -> [span:one, span:three]
+li + li -> [li:Shop, li:About © €5 A]
+li ~ li.last -> [li:About © €5 A]
+li:not(.first) -> [li:Shop, li:About © €5 A]
+li:not(.first):not(.last) -> [li:Shop]
+td:contains(3) -> [td:3]
+div, ul.menu -> [ul:Home   Shop   About © €5 A, div#box:onetwothree]
+*:empty -> [meta:, br:, img:]
+  p   >   b  -> [b:bold]
+ -> invalid
+a[ -> invalid
+li > -> invalid
+> li -> invalid
+li, -> invalid
+. -> invalid
+true false null not a valid selector: [
+<div id="box"><span>one</span><span class="n">two</span><span class="n x">three</span></div>
+<img src="a.png" alt=""> <br> <script>if (1 < 2 && x) { document.write("<b>hi</b>") }</script>
+<p>café 日本 <b class="x">😀</b> &lt;ok&gt; &amp;unknown; &amp;#0; &amp;#99999999;</p>
+0 1 &lt;&lt;&gt;&gt;&lt; a <b></b>
+<div><p>a</p></div><p>b</p> <a href="x">1</a>
+[C] [B, C] [A, C]
