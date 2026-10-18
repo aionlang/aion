@@ -1,0 +1,35 @@
+/** A task waiting on a connection that gets closed must not read from the connection that takes its place. */
+import net
+
+held := List<net.Conn>()
+silent := net.listen(0, "127.0.0.1")!!
+launch {
+    while true {
+        c := silent.accept()
+        if c == null { break }
+        held.add(c)
+    }
+}
+talker := net.listen(0, "127.0.0.1")!!
+launch {
+    while true {
+        c := talker.accept()
+        if c == null { break }
+        c.sendText("from the second connection")
+        held.add(c)
+    }
+}
+
+a := net.connect("127.0.0.1", silent.port())!!
+result := ""
+waiting := launch {
+    r := a.receive()
+    result = r == null ? "null: " + net.lastError() : "got " + r.toText()
+}
+sleep(30)
+a.close()
+b := net.connect("127.0.0.1", talker.port())!!
+sleep(50)
+waiting.join()
+println(result)
+println(b.receive()!!.toText())

@@ -31,6 +31,7 @@ typedef struct {
     bool used, listener;
     int64_t timeout_ms;
     char alpn[32]; /* the protocol TLS agreed on (ALPN), or "" */
+    int64_t serial; /* tells this use of the slot from an earlier one */
 } Conn;
 
 static Conn *conns;
@@ -48,9 +49,17 @@ static int64_t now_ms(void) {
 static void set_error(const char *what) { snprintf(error_text, sizeof error_text, "%s", what); }
 static void set_errno(const char *what) { snprintf(error_text, sizeof error_text, "%s: %s", what, strerror(errno)); }
 
+/*
+ * A handle is the slot number in its low 16 bits and a serial number above them.  Slots are reused, but never
+ * with the same serial, so a task that is still waiting on a connection somebody else closed cannot end up
+ * reading from the new connection that took its place.
+ */
+static int64_t next_serial;
+
 static Conn *get(int64_t h) {
-    if (h < 1 || h > nconns || !conns[h - 1].used) return NULL;
-    return &conns[h - 1];
+    int64_t i = (h & 0xffff) - 1;
+    if (h < 1 || i < 0 || i >= nconns || !conns[i].used || conns[i].serial != (h >> 16)) return NULL;
+    return &conns[i];
 }
 
 static int64_t add(int fd, bool listener, int64_t timeout_ms) {
@@ -58,14 +67,19 @@ static int64_t add(int fd, bool listener, int64_t timeout_ms) {
     if (!init) signal(SIGPIPE, SIG_IGN), init = true;
     int64_t i = 0;
     while (i < nconns && conns[i].used) i++;
+    if (i >= 0xffff) {
+        close(fd);
+        set_error("too many open connections");
+        return -1;
+    }
     if (i == nconns) {
         conns = realloc(conns, (size_t)(nconns + 16) * sizeof *conns);
         if (!conns) aion_panic("out of memory");
         memset(conns + nconns, 0, 16 * sizeof *conns);
         nconns += 16;
     }
-    conns[i] = (Conn){.fd = fd, .used = true, .listener = listener, .timeout_ms = timeout_ms};
-    return i + 1;
+    conns[i] = (Conn){.fd = fd, .used = true, .listener = listener, .timeout_ms = timeout_ms, .serial = ++next_serial};
+    return (next_serial << 16) | (i + 1);
 }
 
 static void make_nonblocking(int fd) {
