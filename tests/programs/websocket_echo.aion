@@ -1,0 +1,72 @@
+/** std.websocket: the RFC 6455 examples, then a client and a server talking in this program. */
+import net
+import websocket
+
+// RFC 6455, 1.3 and 5.7
+println(websocket.acceptKey("dGhlIHNhbXBsZSBub25jZQ=="))
+println(websocket.encodeFrame(1, "Hello".toBytes()).toHex())
+println(websocket.encodeFrame(1, "Hello".toBytes(), "37fa213d".fromHex()).toHex())
+println(websocket.encodeFrame(9, "Hello".toBytes()).toHex(), websocket.encodeFrame(10, "Hello".toBytes()).toHex())
+println(websocket.encodeFrame(1, "Hel".toBytes(), null, false).toHex(), websocket.encodeFrame(0, "lo".toBytes()).toHex())
+println(websocket.encodeFrame(2, Bytes(256)).slice(0, 4).toHex(), websocket.encodeFrame(2, Bytes(65536)).slice(0, 10).toHex())
+
+// an echo server; "bye" makes it close from its side
+events := List<String>()
+server := websocket.listen(0, "127.0.0.1") { ws ->
+    events.add("client connected to ${ws.path}")
+    while true {
+        msg := ws.receive()
+        if msg == null { break }
+        if !msg.binary && msg.text() == "bye" {
+            ws.close(1001, "going away")
+            break
+        }
+        if msg.binary { ws.sendBinary(msg.data) } else { ws.send("echo: " + msg.text()) }
+    }
+    events.add("client left with ${ws.closeCode}")
+}!!
+
+url := "ws://127.0.0.1:${server.port()}/chat?room=7"
+ws := websocket.connect(url, {"X-Token": "abc"})!!
+println(ws.path, ws.headers.getOrNull("upgrade"))
+ws.send("hello")
+println(ws.receive()!!.text())
+ws.sendBinary("010203".fromHex()!!)
+reply := ws.receive()!!
+println(reply.binary, reply.data.toHex())
+
+// lengths that need two and eight bytes in the frame header
+big := Bytes(70000)
+for i in 0..big.size() { big[i] = i % 251 }
+ws.sendBinary(big)
+echoed := ws.receive()!!
+println(echoed.data.size(), echoed.data == big)
+text200 := "x".repeat(200)
+ws.send(text200)
+println(ws.receive()!!.text() == "echo: " + text200)
+
+// a message in three fragments, with a ping in the middle (answered with a pong, which `receive` skips)
+ws.sendFrame(1, "Hel".toBytes(), false)
+ws.ping("p".toBytes())
+ws.sendFrame(0, "l".toBytes(), false)
+ws.sendFrame(0, "o".toBytes())
+println(ws.receive()!!.text())
+
+// closing: the server starts it this time
+ws.send("bye")
+println(ws.receive(), ws.closed, ws.closeCode, ws.closeReason)
+sleep(50)
+for e in events { println(e) }
+
+// a server that is not a WebSocket server, and an address that is not one
+plain := net.listen(0, "127.0.0.1")!!
+launch {
+    c := plain.accept()
+    if c != null {
+        c.receive()
+        c.sendText("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+        c.close()
+    }
+}
+println(websocket.connect("ws://127.0.0.1:${plain.port()}/"), websocket.lastError())
+println(websocket.connect("http://example.com"), websocket.lastError())

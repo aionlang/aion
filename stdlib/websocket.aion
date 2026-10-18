@@ -1,0 +1,347 @@
+// import websocket
+//
+//   ws := websocket.connect("wss://echo.example.com/chat")!!
+//   ws.send("hello")
+//   msg := ws.receive()                  // a Message, or null once the connection is closed
+//   println(msg!!.text())
+//   ws.close()
+//
+//   websocket.listen(9000) { ws ->       // a server: the handler runs in its own task for each client
+//       while true {
+//           msg := ws.receive()
+//           if msg == null { break }
+//           ws.send("you said: " + msg.text())
+//       }
+//   }
+//
+// WebSockets (RFC 6455) over `net`: a client for ws:// and wss:// (TLS needs OpenSSL's libssl), and a server.
+// Text and binary messages of any size up to `maxSize`, messages in fragments, pings answered for you, and the
+// closing handshake.  A message is read whole before `receive` returns it.  Extensions (compression) and
+// subprotocols are not supported.
+
+import encoding
+import hash
+import http
+import net
+import random
+
+problem := ""
+
+// Why the most recent `connect` or `listen` returned null.
+fn lastError() -> String = problem
+
+// Fixed by the standard; the accept key proves a server understood the handshake.
+val guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+fn acceptKey(key: String) -> String = encoding.base64Bytes(hash.sha1Bytes((key + guid).toBytes()))
+
+// What arrived: `binary` says which kind it is, `text()` reads it as UTF-8.
+type Message(binary: Bool, data: Bytes) {
+    fn text() -> String = data.toText()
+}
+
+// ── Frames ───────────────────────────────────────────────────────
+
+fn __mask(data: Bytes, key: Bytes) -> Bytes {
+    out := Bytes(data.size())
+    for i in 0..data.size() { out[i] = data[i].xor(key[i % 4]) }
+    return out
+}
+
+// One frame as it goes on the wire.  A client masks the payload with a random key (`maskKey`, 4 bytes);
+// a server sends it as it is (null).  `opcode`: 0 continuation, 1 text, 2 binary, 8 close, 9 ping, 10 pong.
+fn encodeFrame(opcode: Int, payload: Bytes, maskKey: Bytes? = null, fin: Bool = true) -> Bytes {
+    n := payload.size()
+    flag := maskKey == null ? 0 : 128
+    headerSize := n < 126 ? 2 : (n < 65536 ? 4 : 10)
+    header := Bytes(headerSize)
+    header[0] = (fin ? 128 : 0).or(opcode)
+    if n < 126 {
+        header[1] = flag.or(n)
+    } else if n < 65536 {
+        header[1] = flag.or(126)
+        header[2] = n.ushr(8).and(255)
+        header[3] = n.and(255)
+    } else {
+        header[1] = flag.or(127)
+        for i in 0..8 { header[2 + i] = n.ushr(8 * (7 - i)).and(255) }
+    }
+    if maskKey == null { return header.concat(payload) }
+    return header.concat(maskKey).concat(__mask(payload, maskKey))
+}
+
+// ── Connections ──────────────────────────────────────────────────
+
+// A WebSocket connection, from `connect` (a client) or a server's handler.
+type Socket(conn: net.Conn, reader: http.Reader, client: Bool) {
+    // For a server: the path asked for (with its query); the headers of the handshake request or reply (lower case).
+    path: String = ""
+    headers: Map<String, String> = Map<String, String>()
+    // The largest message `receive` accepts, in bytes; a bigger one closes the connection (code 1009).
+    maxSize: Int = 16777216
+    closed: Bool = false
+    closeCode: Int = 0
+    closeReason: String = ""
+    sending: Bool = false
+
+    // Send one frame (see `encodeFrame`); `fin = false` starts or continues a fragmented message.  False if it failed.
+    fn sendFrame(opcode: Int, payload: Bytes, fin: Bool = true) -> Bool {
+        if closed { return false }
+        // frames of two tasks must not mix on the wire
+        while sending { yield() }
+        sending = true
+        key: Bytes? = client ? random.secureBytes(4) : null
+        ok := conn.send(encodeFrame(opcode, payload, key, fin))
+        sending = false
+        return ok
+    }
+
+    fn send(text: String) -> Bool = sendFrame(1, text.toBytes())
+    fn sendBinary(data: Bytes) -> Bool = sendFrame(2, data)
+    fn ping(data: Bytes = Bytes(0)) -> Bool = sendFrame(9, data)
+
+    // Start the closing handshake and wait (briefly) for the other side's answer.  `code` 1000 is a normal close.
+    fn close(code: Int = 1000, reason: String = "") {
+        if closed { return }
+        body := Bytes(2).concat(reason.toBytes())
+        body[0] = code.ushr(8).and(255)
+        body[1] = code.and(255)
+        sendFrame(8, body)
+        closeCode = code
+        closed = true
+        // the other side answers with its own close frame; read until it does (or the connection ends)
+        conn.setTimeout(2000)
+        while true {
+            frame := readFrame()
+            if frame == null || frame.opcode == 8 { break }
+        }
+        conn.close()
+    }
+
+    fn readFrame() -> Frame? {
+        head := reader.exactly(2)
+        if head == null { return null }
+        fin := head[0].and(128) != 0
+        opcode := head[0].and(15)
+        masked := head[1].and(128) != 0
+        n := head[1].and(127)
+        if head[0].and(112) != 0 || masked == client || (opcode >= 8 && (!fin || n > 125)) {
+            return Frame(-1, true, Bytes(0))
+        }
+        if n == 126 {
+            ext := reader.exactly(2)
+            if ext == null { return null }
+            n = ext[0] * 256 + ext[1]
+        } else if n == 127 {
+            ext := reader.exactly(8)
+            if ext == null { return null }
+            n = 0
+            for i in 0..8 { n = n * 256 + ext[i] }
+            if n < 0 { return Frame(-2, true, Bytes(0)) }
+        }
+        if n > maxSize { return Frame(-2, true, Bytes(0)) }
+        key := masked ? reader.exactly(4) : null
+        if masked && key == null { return null }
+        payload := reader.exactly(n)
+        if payload == null { return null }
+        return Frame(opcode, fin, key == null ? payload : __mask(payload, key))
+    }
+
+    // The next message, whole: fragments are joined and pings answered on the way.  Null when the connection
+    // has closed (`closeCode` and `closeReason` say how) or failed.
+    fn receive() -> Message? {
+        if closed { return null }
+        pieces := BytesBuilder()
+        binary := false
+        started := false
+        while true {
+            frame := readFrame()
+            if frame == null {
+                closed = true
+                conn.close()
+                return null
+            }
+            if frame.opcode < 0 {
+                // a protocol error, or a message that is too large
+                close(frame.opcode == -2 ? 1009 : 1002, frame.opcode == -2 ? "message too large" : "protocol error")
+                return null
+            }
+            if frame.opcode == 8 {
+                data := frame.data
+                closeCode = data.size() >= 2 ? data[0] * 256 + data[1] : 1005
+                closeReason = data.size() > 2 ? data.slice(2, data.size()).toText() : ""
+                if !closed {
+                    sendFrame(8, data.size() >= 2 ? data.slice(0, 2) : Bytes(0))
+                    closed = true
+                }
+                conn.close()
+                return null
+            }
+            if frame.opcode == 9 {
+                sendFrame(10, frame.data)
+                continue
+            }
+            if frame.opcode == 10 { continue }
+            if frame.opcode == 0 {
+                if !started {
+                    close(1002, "protocol error")
+                    return null
+                }
+            } else if frame.opcode == 1 || frame.opcode == 2 {
+                if started {
+                    close(1002, "protocol error")
+                    return null
+                }
+                started = true
+                binary = frame.opcode == 2
+            } else {
+                close(1002, "protocol error")
+                return null
+            }
+            if pieces.size() + frame.data.size() > maxSize {
+                close(1009, "message too large")
+                return null
+            }
+            pieces.add(frame.data)
+            if frame.fin { return Message(binary, pieces.toBytes()) }
+        }
+        return null
+    }
+}
+
+type Frame(opcode: Int, fin: Bool, data: Bytes)
+
+// ── Handshakes ───────────────────────────────────────────────────
+
+// Open a connection to a ws:// or wss:// address.  `headers` are added to the handshake request (for a login
+// token, say).  Null if it fails; `lastError()` says why.
+fn connect(url: String, headers: Map<String, String> = Map<String, String>(), verify: Bool = true, timeoutMs: Int = 30000) -> Socket? {
+    problem = ""
+    secure := url.startsWith("wss://")
+    if !secure && !url.startsWith("ws://") {
+        problem = "a WebSocket address starts with ws:// or wss://"
+        return null
+    }
+    parsed := http.parseUrl((secure ? "https://" : "http://") + url.substring(secure ? 6 : 5, url.length()))
+    if parsed == null {
+        problem = "not a WebSocket address: $url"
+        return null
+    }
+    conn := net.connect(parsed.host, parsed.port, timeoutMs)
+    if conn == null {
+        problem = "cannot connect to ${parsed.host}:${parsed.port}: ${net.lastError()}"
+        return null
+    }
+    conn.setTimeout(timeoutMs)
+    if secure && !conn.startTls(parsed.host, verify) {
+        problem = "TLS failed: ${net.lastError()}"
+        conn.close()
+        return null
+    }
+    key := encoding.base64Bytes(random.secureBytes(16))
+    request := StringBuilder()
+    request.append("GET ${parsed.target} HTTP/1.1\r\nHost: ${parsed.authority()}\r\n")
+    request.append("Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: $key\r\nSec-WebSocket-Version: 13\r\n")
+    for e in headers {
+        if e.key.contains("\r") || e.key.contains("\n") || e.value.contains("\r") || e.value.contains("\n") {
+            problem = "a header cannot hold a line break"
+            conn.close()
+            return null
+        }
+        request.append("${e.key}: ${e.value}\r\n")
+    }
+    request.append("\r\n")
+    if !conn.sendText(request.toString()) {
+        problem = "could not send the handshake: ${net.lastError()}"
+        conn.close()
+        return null
+    }
+    reader := http.Reader(conn)
+    block := reader.until("\r\n\r\n".toBytes(), 65536)
+    if block == null {
+        problem = "no handshake reply: ${reader.problem.isEmpty() ? "the connection closed" : reader.problem}"
+        conn.close()
+        return null
+    }
+    lines := block.toText().split("\r\n")
+    status := lines[0].split(" ")
+    got := http.parseHeaders(lines, 1)
+    if status.size() < 2 || status[1] != "101" {
+        problem = "the server did not switch to WebSocket: ${lines[0]}"
+        conn.close()
+        return null
+    }
+    if (got.getOrNull("upgrade") ?: "").lower() != "websocket" || got.getOrNull("sec-websocket-accept") != acceptKey(key) {
+        problem = "the server's handshake reply is wrong"
+        conn.close()
+        return null
+    }
+    socket := Socket(conn, reader, true)
+    socket.headers = got
+    socket.path = parsed.target
+    return socket
+}
+
+// Answer a client's handshake request on an accepted connection; null (after an error reply) if it is not one.
+fn handshake(conn: net.Conn) -> Socket? {
+    reader := http.Reader(conn)
+    block := reader.until("\r\n\r\n".toBytes(), 65536)
+    if block == null {
+        conn.close()
+        return null
+    }
+    lines := block.toText().split("\r\n")
+    parts := lines[0].split(" ")
+    headers := http.parseHeaders(lines, 1)
+    key := headers.getOrNull("sec-websocket-key")
+    upgrade := (headers.getOrNull("upgrade") ?: "").lower()
+    if parts.size() != 3 || parts[0] != "GET" || upgrade != "websocket" || key == null || headers.getOrNull("sec-websocket-version") != "13" {
+        reply := "This is a WebSocket endpoint; send a WebSocket handshake (version 13).\n"
+        conn.sendText("HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: ${reply.length()}\r\nConnection: close\r\n\r\n$reply")
+        conn.close()
+        return null
+    }
+    conn.sendText("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${acceptKey(key)}\r\n\r\n")
+    socket := Socket(conn, reader, false)
+    socket.path = parts[1]
+    socket.headers = headers
+    return socket
+}
+
+// A listening server.  `accept()` waits for a client and does the handshake; `serve` does that for every client.
+type Server(listener: net.Listener) {
+    fn port() = listener.port()
+    fn close() { listener.close() }
+
+    // The next client that completes the handshake; null once the server is closed.
+    fn accept() -> Socket? {
+        while true {
+            conn := listener.accept()
+            if conn == null { return null }
+            socket := handshake(conn)
+            if socket != null { return socket }
+        }
+        return null
+    }
+}
+
+// Listen on a port (0 picks one) and run `handler` in its own task for each client that completes the handshake.
+fn listen(port: Int, host: String = "", handler: (Socket) -> Unit) -> Server? {
+    problem = ""
+    listener := net.listen(port, host)
+    if listener == null {
+        problem = net.lastError()
+        return null
+    }
+    launch {
+        while true {
+            conn := listener.accept()
+            if conn == null { break }
+            launch {
+                socket := handshake(conn)
+                if socket != null { handler(socket) }
+            }
+        }
+    }
+    return Server(listener)
+}

@@ -1,0 +1,17 @@
+s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+810548656c6c6f
+818537fa213d7f9f4d5158
+890548656c6c6f 8a0548656c6c6f
+010348656c 80026c6f
+827e0100 827f0000000000010000
+/chat?room=7 websocket
+echo: hello
+true 010203
+70000 true
+true
+echo: Hello
+null true 1001 going away
+client connected to /chat?room=7
+client left with 1001
+null the server did not switch to WebSocket: HTTP/1.1 200 OK
+null a WebSocket address starts with ws:// or wss://
