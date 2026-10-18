@@ -1,0 +1,103 @@
+// import unicode
+//
+//   unicode.normalize("e\u{301}", "NFC")          // "é" as one character (a composed form)
+//   unicode.lower("ÀÉÎ")                          // "àéî"      (the built-in lower() knows ASCII, Latin-1, Greek, Cyrillic)
+//   unicode.casefold("Straße") == unicode.casefold("STRASSE")   // true: for comparing without case
+//   unicode.stripAccents("Crème brûlée")          // "Creme brulee"
+//   unicode.width("日本語"), unicode.graphemes("e\u{301}a")      // 6 columns; ["é", "a"]
+//
+// Unicode text handling with the utf8proc library, which is loaded when first used (install libutf8proc, for example
+// the libutf8proc3 package; a program that does not import this needs nothing).  A function given text that is not
+// valid UTF-8 returns null; `lastError()` says what is missing when the library cannot be found.
+
+extern fn lastError() -> String = "aion_unicode_error"
+extern fn available() -> Bool = "aion_unicode_available"
+extern fn version() -> String = "aion_unicode_version"
+extern fn __map(text: String, mode: Int) -> String? = "aion_unicode_map"
+extern fn __case(text: String, mode: Int) -> String? = "aion_unicode_case"
+extern fn __category(c: Int) -> String = "aion_unicode_category"
+extern fn __width(text: String) -> Int = "aion_unicode_width"
+extern fn __graphemes(text: String) -> String? = "aion_unicode_graphemes"
+
+fn __need() {
+    if !available() { panic(lastError()) }
+}
+
+// The text in a normalization form: "NFC" (composed, the usual one), "NFD" (decomposed), "NFKC" or "NFKD" (the
+// K forms also replace compatibility characters such as "ﬁ" and "²").  Null for invalid text or an unknown form.
+fn normalize(text: String, form: String = "NFC") -> String? {
+    __need()
+    mode := when form.upper() {
+        "NFC" -> 0
+        "NFD" -> 1
+        "NFKC" -> 2
+        "NFKD" -> 3
+        else -> -1
+    }
+    return mode < 0 ? null : __map(text, mode)
+}
+
+// Lower case, upper case and title case (the first letter of each word capital) for every script, one character at a time.
+fn lower(text: String) -> String? {
+    __need()
+    return __case(text, 0)
+}
+
+fn upper(text: String) -> String? {
+    __need()
+    return __case(text, 1)
+}
+
+fn title(text: String) -> String? {
+    __need()
+    return __case(text, 2)
+}
+
+// A form of the text for comparing without regard to case or composed/decomposed spelling: `casefold(a) == casefold(b)`.
+fn casefold(text: String) -> String? {
+    __need()
+    return __map(text, 4)
+}
+
+// Are the two texts the same apart from case and spelling of accents (é as one character or e and a combining mark)?
+fn sameText(a: String, b: String) -> Bool {
+    x := casefold(a)
+    y := casefold(b)
+    return x != null && y != null && x == y
+}
+
+// The text without accents and other marks: "Crème brûlée" is "Creme brulee".
+fn stripAccents(text: String) -> String? {
+    __need()
+    return __map(text, 5)
+}
+
+// The two-letter category of a character: "Lu" upper case letter, "Ll" lower case letter, "Nd" digit, "Zs" space,
+// "Po" punctuation, "Sm" math symbol, "Mn" combining mark, ...  Empty for a value that is not a character.
+fn category(c: Char) -> String {
+    __need()
+    return __category(c.code())
+}
+
+fn isLetter(c: Char) -> Bool = category(c).startsWith("L")
+fn isDigit(c: Char) -> Bool = category(c) == "Nd"
+fn isUpper(c: Char) -> Bool = category(c) == "Lu"
+fn isLower(c: Char) -> Bool = category(c) == "Ll"
+fn isSpace(c: Char) -> Bool = category(c).startsWith("Z")
+fn isPunctuation(c: Char) -> Bool = category(c).startsWith("P")
+
+// How many columns the text takes on a terminal: wide East Asian characters count 2, combining marks 0.
+// -1 for invalid text.
+fn width(text: String) -> Int {
+    __need()
+    return __width(text)
+}
+
+// The characters as a reader sees them: "e" followed by a combining accent is one, and so is a family emoji
+// made of several code points.  Null for invalid text.
+fn graphemes(text: String) -> List<String>? {
+    __need()
+    joined := __graphemes(text)
+    if joined == null { return null }
+    return joined.isEmpty() ? List<String>() : joined.split("\u{1F}")
+}

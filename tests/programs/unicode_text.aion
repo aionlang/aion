@@ -1,0 +1,27 @@
+/** std.unicode: normalization, case, categories, widths and grapheme clusters (needs utf8proc). */
+import unicode
+
+composed := "\u{e9}"
+decomposed := "e\u{301}"
+println(composed == decomposed, composed.length(), decomposed.length())
+println(unicode.normalize(decomposed)!! == composed, unicode.normalize(composed, "NFD")!! == decomposed)
+println(unicode.normalize("\u{fb01}nal \u{b2}", "NFKC"), unicode.normalize("x", "NFX"))
+
+println(unicode.lower("\u{c0}\u{c9}\u{ce} \u{410}\u{411} \u{391}")!!, unicode.upper("stra\u{e9}e \u{f1} \u{436}")!!)
+println(unicode.title("hello wORLD o'neil \u{e9}cole")!!)
+println(unicode.casefold("Stra\u{df}e")!! == unicode.casefold("STRASSE")!!, unicode.sameText("Caf\u{e9}", "CAFE\u{301}"), unicode.sameText("a", "b"))
+println(unicode.stripAccents("Cr\u{e8}me br\u{fb}l\u{e9}e, \u{f1}and\u{fa}")!!)
+
+println(unicode.category('A'), unicode.category('\u{e9}'), unicode.category('5'), unicode.category(' '), unicode.category('!'), unicode.category('\u{65e5}'))
+println(unicode.isLetter('\u{e9}'), unicode.isLetter('7'), unicode.isDigit('\u{663}'), unicode.isUpper('Q'), unicode.isSpace('\u{a0}'), unicode.isPunctuation(','))
+
+println(unicode.width("abc"), unicode.width("\u{65e5}\u{672c}\u{8a9e}"), unicode.width(decomposed), unicode.width(""))
+parts := unicode.graphemes(decomposed + "a\u{1f1eb}\u{1f1f7}")!!
+println(parts.size(), parts.map { it.chars().size() })
+println(unicode.graphemes("")!!.size(), unicode.graphemes("abc")!!)
+
+bad := Bytes(2)
+bad[0] = 255
+bad[1] = 65
+println(unicode.lower(bad.toText()), unicode.normalize(bad.toText()), unicode.width(bad.toText()), unicode.graphemes(bad.toText()))
+println(unicode.version().isEmpty())
