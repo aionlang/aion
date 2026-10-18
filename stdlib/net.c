@@ -9,21 +9,63 @@
 #define _GNU_SOURCE
 #include "aion.h"
 
-#include <arpa/inet.h>
-#include <dlfcn.h>
+#include "aion_platform.h"
+
 #include <errno.h>
 #include <fcntl.h>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/socket.h>
 #include <time.h>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+
+/* Winsock: the same calls with a few different spellings.  The descriptor stays an int in this file. */
+#define close(fd) closesocket((SOCKET)(fd))
+#define setsockopt(s, level, name, value, size) setsockopt((SOCKET)(s), level, name, (const char *)(value), size)
+#define getsockopt(s, level, name, value, size) getsockopt((SOCKET)(s), level, name, (char *)(value), size)
+#define send(s, buf, n, flags) send((SOCKET)(s), (const char *)(buf), (int)(n), flags)
+#define recv(s, buf, n, flags) recv((SOCKET)(s), (char *)(buf), (int)(n), flags)
+#define accept(s, a, l) accept((SOCKET)(s), a, l)
+#define MSG_NOSIGNAL 0
+#define SOCK_ERROR() WSAGetLastError()
+#define SOCK_IN_PROGRESS(e) ((e) == WSAEWOULDBLOCK || (e) == WSAEINPROGRESS)
+#define SOCK_RETRY(e) ((e) == WSAEWOULDBLOCK || (e) == WSAEINTR)
+
+static const char *sock_message(int e) {
+    static char buf[256];
+    if (!FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, (DWORD)e, 0, buf, sizeof buf, NULL))
+        snprintf(buf, sizeof buf, "error %d", e);
+    size_t n = strlen(buf);
+    while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r' || buf[n - 1] == ' ' || buf[n - 1] == '.')) buf[--n] = '\0';
+    return buf;
+}
+
+static void net_init(void) {
+    static bool ready;
+    WSADATA data;
+    if (!ready && WSAStartup(MAKEWORD(2, 2), &data) == 0) ready = true;
+}
+#else
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <poll.h>
+#include <sys/socket.h>
 #include <unistd.h>
+
+#define SOCK_ERROR() errno
+#define SOCK_IN_PROGRESS(e) ((e) == EINPROGRESS)
+#define SOCK_RETRY(e) ((e) == EAGAIN || (e) == EWOULDBLOCK || (e) == EINTR)
+
+static const char *sock_message(int e) { return strerror(e); }
+static void net_init(void) {}
+#endif
 
 typedef struct {
     int fd;
@@ -41,13 +83,17 @@ static char error_text[256];
 const char *aion_net_error(void) { return aion_string(error_text); }
 
 static int64_t now_ms(void) {
+#ifdef _WIN32
+    return (int64_t)GetTickCount64();
+#else
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+#endif
 }
 
 static void set_error(const char *what) { snprintf(error_text, sizeof error_text, "%s", what); }
-static void set_errno(const char *what) { snprintf(error_text, sizeof error_text, "%s: %s", what, strerror(errno)); }
+static void set_errno(const char *what) { snprintf(error_text, sizeof error_text, "%s: %s", what, sock_message(SOCK_ERROR())); }
 
 /*
  * A handle is the slot number in its low 16 bits and a serial number above them.  Slots are reused, but never
@@ -64,7 +110,12 @@ static Conn *get(int64_t h) {
 
 static int64_t add(int fd, bool listener, int64_t timeout_ms) {
     static bool init;
+    net_init();
+#ifndef _WIN32
     if (!init) signal(SIGPIPE, SIG_IGN), init = true;
+#else
+    (void)init;
+#endif
     int64_t i = 0;
     while (i < nconns && conns[i].used) i++;
     if (i >= 0xffff) {
@@ -83,8 +134,13 @@ static int64_t add(int fd, bool listener, int64_t timeout_ms) {
 }
 
 static void make_nonblocking(int fd) {
+#ifdef _WIN32
+    u_long on = 1;
+    ioctlsocket((SOCKET)fd, FIONBIO, &on);
+#else
     fcntl(fd, F_SETFL, fcntl(fd, F_GETFL, 0) | O_NONBLOCK);
     fcntl(fd, F_SETFD, FD_CLOEXEC);
+#endif
 }
 
 /* Milliseconds left until `deadline` (-1 = no deadline). */
@@ -99,6 +155,7 @@ static int64_t deadline_for(int64_t timeout_ms) { return timeout_ms < 0 ? -1 : n
 /* ── Connecting and listening ─────────────────────────────────── */
 
 int64_t aion_net_connect(const char *host, int64_t port, int64_t timeout_ms) {
+    net_init();
     char service[16];
     snprintf(service, sizeof service, "%lld", (long long)port);
     struct addrinfo hints, *list = NULL;
@@ -116,7 +173,8 @@ int64_t aion_net_connect(const char *host, int64_t port, int64_t timeout_ms) {
         if (fd < 0) continue;
         make_nonblocking(fd);
         int r = connect(fd, a->ai_addr, a->ai_addrlen);
-        if (r < 0 && errno == EINPROGRESS) {
+        int connect_error = r < 0 ? SOCK_ERROR() : 0;
+        if (r < 0 && SOCK_IN_PROGRESS(connect_error)) {
             int w = aion_wait_fd(fd, POLLOUT, remaining(deadline));
             if (w == 0) {
                 snprintf(error_text, sizeof error_text, "connecting to %s:%s timed out", host, service);
@@ -127,12 +185,12 @@ int64_t aion_net_connect(const char *host, int64_t port, int64_t timeout_ms) {
             socklen_t len = sizeof err;
             getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len);
             if (w < 0 || err) {
-                snprintf(error_text, sizeof error_text, "cannot connect to %s:%s: %s", host, service, strerror(err ? err : errno));
+                snprintf(error_text, sizeof error_text, "cannot connect to %s:%s: %s", host, service, sock_message(err ? err : SOCK_ERROR()));
                 close(fd);
                 continue;
             }
         } else if (r < 0) {
-            snprintf(error_text, sizeof error_text, "cannot connect to %s:%s: %s", host, service, strerror(errno));
+            snprintf(error_text, sizeof error_text, "cannot connect to %s:%s: %s", host, service, sock_message(connect_error));
             close(fd);
             continue;
         }
@@ -147,6 +205,7 @@ int64_t aion_net_connect(const char *host, int64_t port, int64_t timeout_ms) {
 
 /* Listen on `host` (empty = every interface) and `port` (0 = pick a free one). */
 int64_t aion_net_listen(const char *host, int64_t port, int64_t backlog) {
+    net_init();
     char service[16];
     snprintf(service, sizeof service, "%lld", (long long)port);
     struct addrinfo hints, *list = NULL;
@@ -183,6 +242,7 @@ int64_t aion_net_listen(const char *host, int64_t port, int64_t backlog) {
 /* The addresses of a host name, one per line: IPv4 first, each once.  "" when it cannot be resolved.
  * (getaddrinfo blocks, so other tasks wait for a slow answer.) */
 const char *aion_net_lookup(const char *host) {
+    net_init();
     struct addrinfo hints, *list = NULL;
     memset(&hints, 0, sizeof hints);
     hints.ai_socktype = SOCK_STREAM;
@@ -223,6 +283,7 @@ const char *aion_net_lookup(const char *host) {
 
 /* The name of an IPv4 or IPv6 address, or NULL if it has none (or is not an address). */
 const char *aion_net_reverse(const char *ip) {
+    net_init();
     struct sockaddr_storage storage;
     memset(&storage, 0, sizeof storage);
     socklen_t length;
@@ -271,7 +332,7 @@ int64_t aion_net_accept(int64_t h, int64_t timeout_ms) {
             setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
             return add(fd, false, 30000);
         }
-        if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) return set_errno("accept failed"), -1;
+        if (!SOCK_RETRY(SOCK_ERROR())) return set_errno("accept failed"), -1;
         int w = aion_wait_fd(c->fd, POLLIN, remaining(deadline));
         if (w == 0) return set_error("timed out waiting for a connection"), -1;
         if (w < 0) return set_error("waiting for a connection failed"), -1;
@@ -332,26 +393,25 @@ static struct {
     void (*SSL_get0_alpn_selected)(const void *, const unsigned char **, unsigned int *);
 } tls;
 
-static void *open_library(const char *const *names) {
-    for (; *names; names++) {
-        void *lib = dlopen(*names, RTLD_NOW | RTLD_GLOBAL);
-        if (lib) return lib;
-    }
-    return NULL;
-}
+static void *open_library(const char *const *names) { return aion_dlopen(names); }
 
 static bool load_tls(void) {
     if (tls.tried) return tls.ok;
     tls.tried = true;
+#ifdef _WIN32
+    static const char *const crypto_names[] = {"libcrypto-3-x64.dll", "libcrypto-1_1-x64.dll", "libcrypto-3.dll", NULL};
+    static const char *const ssl_names[] = {"libssl-3-x64.dll", "libssl-1_1-x64.dll", "libssl-3.dll", NULL};
+#else
     static const char *const crypto_names[] = {"libcrypto.so.3", "libcrypto.so.1.1", "libcrypto.so", "libcrypto.3.dylib", "libcrypto.dylib", NULL};
     static const char *const ssl_names[] = {"libssl.so.3", "libssl.so.1.1", "libssl.so", "libssl.3.dylib", "libssl.dylib", NULL};
+#endif
     void *crypto = open_library(crypto_names), *ssl = open_library(ssl_names);
     if (!ssl || !crypto) {
         set_error("HTTPS needs OpenSSL: install libssl (for example the libssl3 or openssl package)");
         return false;
     }
 #define LOAD(lib, name) \
-    if (!(*(void **)&tls.name = dlsym(lib, #name))) { set_error("the installed OpenSSL is missing " #name); return false; }
+    if (!(*(void **)&tls.name = aion_dlsym(lib, #name))) { set_error("the installed OpenSSL is missing " #name); return false; }
     LOAD(ssl, TLS_client_method) LOAD(ssl, SSL_CTX_new) LOAD(ssl, SSL_CTX_free) LOAD(ssl, SSL_CTX_set_default_verify_paths)
     LOAD(ssl, SSL_CTX_load_verify_locations) LOAD(ssl, SSL_CTX_set_verify) LOAD(ssl, SSL_new) LOAD(ssl, SSL_set_fd)
     LOAD(ssl, SSL_ctrl) LOAD(ssl, SSL_set1_host) LOAD(ssl, SSL_connect) LOAD(ssl, SSL_read) LOAD(ssl, SSL_write)
@@ -471,9 +531,9 @@ bool aion_net_send(int64_t h, const void *data) {
             if (err != 2 && err != 3) return tls_error("TLS write failed"), false;
             want = err == 2 ? POLLIN : POLLOUT;
         } else {
-            ssize_t n = send(c->fd, p, (size_t)(total - sent), MSG_NOSIGNAL);
+            long long n = send(c->fd, p, (size_t)(total - sent), MSG_NOSIGNAL);
             if (n >= 0) { sent += n; continue; }
-            if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) return set_errno("send failed"), false;
+            if (!SOCK_RETRY(SOCK_ERROR())) return set_errno("send failed"), false;
             want = POLLOUT;
         }
         int w = aion_wait_fd(c->fd, want, remaining(deadline));
@@ -510,10 +570,10 @@ void *aion_net_receive(int64_t h, int64_t max) {
             if (err != 2 && err != 3) { tls_error("TLS read failed"); break; }
             want = err == 2 ? POLLIN : POLLOUT;
         } else {
-            ssize_t n = recv(c->fd, buf, (size_t)max, 0);
+            long long n = recv(c->fd, buf, (size_t)max, 0);
             if (n > 0) { result = aion_bytes_new(n), memcpy(aion_bytes_data(result), buf, (size_t)n); break; }
             if (n == 0) { result = aion_bytes_new(0); break; }
-            if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) { set_errno("receive failed"); break; }
+            if (!SOCK_RETRY(SOCK_ERROR())) { set_errno("receive failed"); break; }
         }
         int w = aion_wait_fd(c->fd, want, remaining(deadline));
         if (w == 0) { set_error("timed out waiting for data"); break; }
