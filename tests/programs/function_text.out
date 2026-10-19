@@ -1,0 +1,13 @@
+<function add(a: Int, b: Int) -> Int>
+got <function greet(name: String) -> Unit>
+<anonymous function (x: Int) -> Int>
+<anonymous function (a: Int, b: Int) -> Int>
+<anonymous function (it: Int) -> Int>
+42
+<constructor Point(x: Int, y: Int) -> Point>
+<stdlib function args() -> List<String>>
+<stdlib function math.toRadians(degrees: Float) -> Float>
+[<function add(a: Int, b: Int) -> Int>, <function add(a: Int, b: Int) -> Int>]
+Button(label=ok, onClick=<anonymous function () -> Unit>, onHover=null)
+Button(label=ok, onClick=<anonymous function () -> Unit>, onHover=<anonymous function (n: Int) -> Int>)
+null

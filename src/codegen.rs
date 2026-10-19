@@ -33,6 +33,7 @@ const RUNTIME_DECLS: &str = "\
 declare ptr @aion_new_object(i64, i64, i64)
 declare ptr @aion_concat(ptr, ptr)
 declare ptr @aion_int_to_str(i64)
+declare ptr @aion_fn_text(ptr, ptr, i64)
 declare ptr @aion_float_to_str(double)
 declare ptr @aion_bool_to_str(i64)
 declare i64 @aion_str_eq(ptr, ptr)
@@ -57,7 +58,7 @@ declare void @llvm.memset.p0.i64(ptr, i8, i64, i1)
 
 /// Symbols declared by [`RUNTIME_DECLS`]; externs must not redeclare them.
 const RUNTIME_SYMBOLS: &[&str] = &[
-    "aion_new_object", "aion_concat", "aion_int_to_str", "aion_float_to_str", "aion_bool_to_str",
+    "aion_new_object", "aion_concat", "aion_int_to_str", "aion_fn_text", "aion_float_to_str", "aion_bool_to_str",
     "aion_str_eq", "aion_str_cmp", "aion_print_str", "aion_print_char", "aion_char_to_str", "aion_print_int", "aion_print_float", "aion_print_bool",
     "aion_panic_null", "aion_panic_div_zero", "aion_panic_index", "aion_panic_unwrap", "aion_panic_cast", "aion_set_args", "aion_array_new", "aion_hash_int", "aion_hash_str", "aion_frame_top", "aion_trace_top",
 ];
@@ -148,6 +149,13 @@ pub fn emit(p: &Program) -> String {
         let slots: Vec<String> = names.iter().map(|n| format!("ptr {n}")).collect();
         let _ = writeln!(out, "@aion_type_names = internal constant [{} x ptr] [{}]", names.len(), slots.join(", "));
     }
+    if pool.uses_fn_table {
+        // Code address and text of every function value that can exist, for `aion_fn_text` to search.
+        let rows: Vec<String> = text_funcs(p)
+            .map(|f| format!("{{ ptr, ptr }} {{ ptr @\"{}\", ptr {} }}", f.symbol, pool.operand(f.text.as_deref().unwrap_or(""))))
+            .collect();
+        let _ = writeln!(out, "@aion_fn_table = internal constant [{} x {{ ptr, ptr }}] [{}]", rows.len(), rows.join(", "));
+    }
     out.push_str(&pool.definitions());
     out.push('\n');
     out.push_str(&funcs);
@@ -167,6 +175,11 @@ pub fn emit(p: &Program) -> String {
     }
     out.push_str("}\n");
     out
+}
+
+/// The functions a function value can run, with the text printing it shows.
+fn text_funcs(p: &Program) -> impl Iterator<Item = &Func> {
+    p.funcs.iter().filter(|f| f.kind == FuncKind::Closure && f.body.is_some() && f.text.is_some())
 }
 
 /// The name `typeOf` gives a type: the box that holds an `Int` inside an `Any` is just `Int`.
@@ -229,6 +242,8 @@ struct Pool {
     traces: Vec<String>,
     /// Some function reads `@aion_type_names`, so the table has to be written.
     uses_type_names: bool,
+    /// Some function reads `@aion_fn_table`, so the table has to be written.
+    uses_fn_table: bool,
 }
 
 impl Pool {
@@ -1158,6 +1173,15 @@ impl<'a> FnGen<'a> {
                         self.call_value("ptr", &format!("@aion_bool_to_str(i64 {z})"))
                     }
                 };
+                self.root(&t);
+                t
+            }
+
+            ExprKind::FnText(inner) => {
+                let v = self.expr(inner);
+                let n = text_funcs(self.p).count();
+                self.pool.uses_fn_table = true;
+                let t = self.call_value("ptr", &format!("@aion_fn_text(ptr {v}, ptr @aion_fn_table, i64 {n})"));
                 self.root(&t);
                 t
             }

@@ -1282,6 +1282,26 @@ impl<'a> Checker<'a> {
         self.std_modules.get(module).copied().unwrap_or(false)
     }
 
+    /// What printing a function value shows: `<function add(a: Int, b: Int) -> Int>` for a declared function
+    /// (`<function shapes.area(…)>` from another module), `<stdlib function strings.trim(…)>` for the standard
+    /// library's, and `<anonymous function (x: Int) -> Int>` for a lambda.  `name` is `None` for a lambda, whose text has no module in it.
+    pub fn function_text(&self, module: usize, kind: FuncKind, name: Option<&str>, params: &[(&str, Ty)], ret: Ty) -> String {
+        let word = match (name, kind) {
+            (None, _) => "anonymous function",
+            (_, FuncKind::Constructor) => "constructor",
+            _ => "function",
+        };
+        let origin = if self.is_std_module(module) { "stdlib " } else { "" };
+        // the entry module is the last one; the prelude's names are in scope everywhere, so they go unqualified
+        let qualifier = match self.module_names.get(module) {
+            Some(m) if name.is_some() && module + 1 != self.module_names.len() && m != "prelude" => format!("{m}."),
+            _ => String::new(),
+        };
+        let params: Vec<String> = params.iter().map(|(n, t)| format!("{n}: {}", self.t.ty_name(*t))).collect();
+        let ret = if ret == Ty::Void { "Unit".to_string() } else { self.t.ty_name(ret) };
+        format!("<{origin}{word} {qualifier}{}({}) -> {ret}>", name.unwrap_or(""), params.join(", "))
+    }
+
     /// A method the program declared over a standard-library one of the same name, made from the versions
     /// the program wrote and the standard library's versions that they do not replace.
     /// `mine` is the program's first version so far (if any), `std_first` the standard library's, and `info`
@@ -1828,6 +1848,7 @@ fn unused_func() -> hir::Func {
         locals: Vec::new(),
         body: None,
         captures: Vec::new(),
+        text: None,
     }
 }
 

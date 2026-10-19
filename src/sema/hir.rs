@@ -154,6 +154,8 @@ pub struct Func {
     pub body: Option<Vec<Stmt>>,
     /// Closures only: the variables copied out of the closure object on entry.
     pub captures: Vec<Capture>,
+    /// Closures only: what printing the function value shows, like `<function add(a: Int, b: Int) -> Int>`.
+    pub text: Option<String>,
 }
 
 impl Func {
@@ -272,6 +274,8 @@ pub enum ExprKind {
     Cond { cond: Box<Expr>, then: Box<Expr>, otherwise: Box<Expr> },
     /// Render an Int/Float/Bool as a String.
     ToStr(Box<Expr>),
+    /// Render a function value as a String, from the `text` of the code it runs ("null" for a null function).
+    FnText(Box<Expr>),
     /// Prints the arguments separated by spaces (each Int, Float, Bool or String).
     Print { newline: bool, args: Vec<Expr> },
 }

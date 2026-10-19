@@ -1,0 +1,39 @@
+import math
+
+fn add(a: Int, b: Int) -> Int = a + b
+
+fn greet(name: String) {
+    println("hello $name")
+}
+
+type Point(x: Int, y: Int)
+
+type Button(label: String, onClick: () -> Unit, onHover: ((Int) -> Int)?)
+
+fn main() {
+    // a declared function, printed and interpolated
+    println(add)
+    println("got $greet")
+
+    // a lambda, with and without named parameters
+    double := { x: Int -> x * 2 }
+    println(double)
+    println({ a: Int, b: Int -> a + b })
+    inc: (Int) -> Int = { it + 1 }
+    println(inc)
+    println(double(21))
+
+    // a constructor, the prelude's and the standard library's functions
+    println(Point)
+    println(args)
+    println(math.toRadians)
+
+    // functions inside other values
+    println([add, add])
+    b := Button("ok", { println("clicked") }, null)
+    println(b)
+    c := Button("ok", { println("clicked") }, { n: Int -> n })
+    println(c)
+    f: ((Int) -> Int)? = null
+    println(f)
+}

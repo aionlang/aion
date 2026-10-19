@@ -443,6 +443,16 @@ const char *aion_float_to_str(double f) {
 
 const char *aion_bool_to_str(int64_t b) { return aion_string(b ? "true" : "false"); }
 
+/* Text of a function value: its closure object starts with the address of the code it runs, which the
+ * compiler's table of `{ code, text }` rows (one per function value that can exist) maps to a description. */
+const char *aion_fn_text(void **closure, const void *const (*table)[2], int64_t n) {
+    if (closure == NULL) return aion_string("null");
+    for (int64_t i = 0; i < n; i++) {
+        if (table[i][0] == closure[0]) return table[i][1];
+    }
+    return aion_string("<function>");
+}
+
 /* ── Program arguments ────────────────────────────────────────── */
 
 static int program_argc = 0;

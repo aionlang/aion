@@ -225,6 +225,7 @@ pub(super) fn check_fn(ck: &Checker, id: FnId, work: &Work) -> Result<hir::Func>
         locals: cx.hir_locals(),
         body,
         captures: Vec::new(),
+        text: None,
     })
 }
 
@@ -239,6 +240,7 @@ impl Checker<'_> {
         self.thunks.borrow_mut().insert(id, thunk);
 
         let info = self.func(id);
+        let named: Vec<(&str, Ty)> = info.params.iter().map(|p| (p.name.as_str(), p.ty)).collect();
         let locals: Vec<hir::Local> = info
             .params
             .iter()
@@ -259,6 +261,7 @@ impl Checker<'_> {
             locals,
             body: Some(vec![if ret == Ty::Void { hir::Stmt::Expr(call) } else { hir::Stmt::Return(Some(call)) }]),
             captures: Vec::new(),
+            text: Some(self.function_text(info.module, info.kind, Some(&info.name), &named, ret)),
         };
         self.set_func(thunk, func);
         thunk
@@ -294,17 +297,7 @@ impl Checker<'_> {
             let label = if i == 0 { format!("{}=", f.name) } else { format!(", {}=", f.name) };
             acc = concat(acc, text(label));
             let field = mk(K::Field { obj: Box::new(cx.local_expr(this)), index: i }, f.ty);
-            let is_fn = match f.ty {
-                Ty::Fn(_) => true,
-                Ty::Opt(o) => matches!(self.t.opt_inner(o), Ty::Fn(_)),
-                _ => false,
-            };
-            let piece = if is_fn {
-                text("<function>".into())
-            } else {
-                cx.stringify(field, Span::default())?
-            };
-            acc = concat(acc, piece);
+            acc = concat(acc, cx.stringify(field, Span::default())?);
         }
         acc = concat(acc, text(")".into()));
 
@@ -317,6 +310,7 @@ impl Checker<'_> {
             locals: cx.hir_locals(),
             body: Some(vec![hir::Stmt::Return(Some(acc))]),
             captures: Vec::new(),
+            text: None,
         };
         self.set_func(id, func);
         Ok(id)
@@ -418,6 +412,7 @@ struct PendingLambda {
     locals: Vec<LocalInfo>,
     body: Vec<hir::Stmt>,
     captures: Vec<hir::Capture>,
+    text: String,
 }
 
 struct Cx<'c, 'a> {
@@ -672,6 +667,7 @@ impl<'c, 'a> Cx<'c, 'a> {
                 locals: self.convert_locals(l.locals),
                 body: Some(body),
                 captures: l.captures,
+                text: Some(l.text),
             };
             self.ck.set_func(l.id, func);
         }
@@ -769,7 +765,9 @@ impl<'c, 'a> Cx<'c, 'a> {
             file: file.clone(),
             line: self.ck.line_of(span),
         });
-        self.lambdas.push(PendingLambda { trace, id, ret, n_params: ps.len(), locals, body: stmts, captures });
+        let named: Vec<(&str, Ty)> = ps.iter().map(|(n, t)| (n.as_str(), *t)).collect();
+        let text = self.ck.function_text(self.module, hir::FuncKind::Closure, None, &named, ret);
+        self.lambdas.push(PendingLambda { trace, id, ret, n_params: ps.len(), locals, body: stmts, captures, text });
         let ty = self.ck.t.intern_fn(ps.iter().map(|p| p.1).collect(), ret);
         Ok(mk(K::Closure { func: id }, ty))
     }
@@ -2330,7 +2328,7 @@ impl<'c, 'a> Cx<'c, 'a> {
                 Ok(mk(K::Block(vec![hir::Stmt::Let(tmp, Some(e))], Box::new(cond)), Ty::Str))
             }
             Ty::Null => Ok(mk(K::Str("null".into()), Ty::Str)),
-            Ty::Fn(_) => Err(Diagnostic::new("cannot turn a function into text", span)),
+            Ty::Fn(_) => Ok(mk(K::FnText(Box::new(e)), Ty::Str)),
             Ty::Void => Err(Diagnostic::new("cannot turn nothing into text", span)),
         }
     }
@@ -3832,8 +3830,7 @@ impl<'c, 'a> Cx<'c, 'a> {
             // `println(null)` is fine: it prints "null".
             let v = if matches!(a.value.kind, A::Null) { mk(K::Null, Ty::Null) } else { self.value(&a.value)? };
             out.push(match v.ty {
-                Ty::Obj(_) | Ty::Opt(_) | Ty::Null | Ty::Bytes => self.stringify(v, a.value.span)?,
-                Ty::Fn(_) => return Err(Diagnostic::new("cannot print a function", a.value.span)),
+                Ty::Obj(_) | Ty::Opt(_) | Ty::Null | Ty::Bytes | Ty::Fn(_) => self.stringify(v, a.value.span)?,
                 _ => v,
             });
         }
