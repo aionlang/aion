@@ -1659,6 +1659,13 @@ type __ByteBox(value: Byte) { fn toString() = "$value" }
 type __StringBox(value: String) { fn toString() = value }
 type __BytesBox(value: Bytes) { fn toString() = "Bytes(${value.size()})" }
 
+// `print`, `println`, `typeOf` and `hashOf` take any type, so the compiler handles their calls itself.  Used as a value
+// (`apply(println, x)`), each stands for the function here that takes an `Any`.
+fn __builtin_print(value: Any) { print(value) }
+fn __builtin_println(value: Any) { println(value) }
+fn __builtin_typeOf(value: Any) -> String = typeOf(value)
+fn __builtin_hashOf(value: Any) -> Int = hashOf(value)
+
 fn __box_Int(v: Int) -> Any = __IntBox(v)
 fn __box_Float(v: Float) -> Any = __FloatBox(v)
 fn __box_Bool(v: Bool) -> Any = __BoolBox(v)

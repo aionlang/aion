@@ -28,6 +28,16 @@ fn main() {
     println(args)
     println(math.toRadians)
 
+    // the built-ins are functions of an Any
+    println(println)
+    show := println
+    show(42)
+    println(print)
+    println(typeOf)
+    println(hashOf)
+    describe := typeOf
+    println(describe(3.5))
+
     // functions inside other values
     println([add, add])
     b := Button("ok", { println("clicked") }, null)

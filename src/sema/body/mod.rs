@@ -2386,6 +2386,13 @@ impl<'c, 'a> Cx<'c, 'a> {
                     return Err(Diagnostic::new(format!("`{n}` is a module, not a value"), e.span)
                         .hint(format!("call one of its functions, e.g. `{n}.name(...)`")));
                 }
+                None if matches!(n.as_str(), "print" | "println" | "typeOf" | "hashOf") => {
+                    // a built-in used as a value is the prelude's version that takes an `Any`
+                    let Some(&Sym::Fn(id)) = self.ck.t.scopes[0].items.get(&format!("__builtin_{n}")) else {
+                        return Err(Diagnostic::new(format!("the prelude has no `__builtin_{n}`"), e.span));
+                    };
+                    self.fn_value(id, e.span)?
+                }
                 None => {
                     let d = Diagnostic::new(format!("undefined variable `{n}`"), e.span);
                     return Err(if n == "it" && self.this.is_some() {

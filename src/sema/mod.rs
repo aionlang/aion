@@ -1286,12 +1286,19 @@ impl<'a> Checker<'a> {
     /// (`<function shapes.area(…)>` from another module), `<stdlib function strings.trim(…)>` for the standard
     /// library's, and `<anonymous function (x: Int) -> Int>` for a lambda.  `name` is `None` for a lambda, whose text has no module in it.
     pub fn function_text(&self, module: usize, kind: FuncKind, name: Option<&str>, params: &[(&str, Ty)], ret: Ty) -> String {
+        // `print` and the like are built into the compiler; the prelude's `__builtin_print` stands in for them as a value
+        let builtin = name.and_then(|n| n.strip_prefix("__builtin_"));
         let word = match (name, kind) {
             (None, _) => "anonymous function",
             (_, FuncKind::Constructor) => "constructor",
             _ => "function",
         };
-        let origin = if self.is_std_module(module) { "stdlib " } else { "" };
+        let origin = match builtin {
+            Some(_) => "built-in ",
+            None if self.is_std_module(module) => "stdlib ",
+            None => "",
+        };
+        let name = builtin.or(name);
         // the entry module is the last one; the prelude's names are in scope everywhere, so they go unqualified
         let qualifier = match self.module_names.get(module) {
             Some(m) if name.is_some() && module + 1 != self.module_names.len() && m != "prelude" => format!("{m}."),

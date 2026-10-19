@@ -7,6 +7,12 @@ got <function greet(name: String) -> Unit>
 <constructor Point(x: Int, y: Int) -> Point>
 <stdlib function args() -> List<String>>
 <stdlib function math.toRadians(degrees: Float) -> Float>
+<built-in function println(value: Any) -> Unit>
+42
+<built-in function print(value: Any) -> Unit>
+<built-in function typeOf(value: Any) -> String>
+<built-in function hashOf(value: Any) -> Int>
+Float
 [<function add(a: Int, b: Int) -> Int>, <function add(a: Int, b: Int) -> Int>]
 Button(label=ok, onClick=<anonymous function () -> Unit>, onHover=null)
 Button(label=ok, onClick=<anonymous function () -> Unit>, onHover=<anonymous function (n: Int) -> Int>)
