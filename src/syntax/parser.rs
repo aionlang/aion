@@ -548,16 +548,18 @@ impl<'a> Parser<'a> {
         let name = self.ident()?;
         let type_params = self.type_params()?;
         self.expect(Token::LBrace)?;
-        let methods = self.scoped(false, false, |p| {
+        let (methods, defaults) = self.scoped(false, false, |p| {
             let mut methods = Vec::new();
+            let mut defaults = Vec::new();
             loop {
                 match p.peek() {
-                    Some(Token::RBrace) => return Ok(methods),
+                    Some(Token::RBrace) => return Ok((methods, defaults)),
                     Some(Token::Semi) => {
                         p.bump();
                     }
                     Some(Token::Fn) => {
-                        p.bump();
+                        let after_fn = p.pos + 1;
+                        let start = p.bump().span;
                         let name = p.ident()?;
                         let params = p.params()?;
                         if let Some(v) = params.iter().find(|p| p.vararg) {
@@ -565,19 +567,29 @@ impl<'a> Parser<'a> {
                         }
                         let ret = if p.eat(Token::Arrow) { Some(p.type_ref()?) } else { None };
                         if matches!(p.peek(), Some(Token::LBrace | Token::Eq)) && !p.nl() {
-                            return Err(Diagnostic::new(
-                                "an interface method is only a signature, without a body",
-                                p.here(),
-                            ));
+                            // a method with a body: read the whole declaration again, as a function
+                            p.pos = after_fn;
+                            let decl = p.fn_decl(start, false)?;
+                            if let Some(q) = decl.params.iter().find(|q| q.default.is_some()) {
+                                return Err(Diagnostic::new("interface methods cannot have default arguments", q.name.span));
+                            }
+                            let params = decl
+                                .params
+                                .iter()
+                                .map(|q| Param { name: q.name.clone(), ty: q.ty.clone(), default: None, vararg: false })
+                                .collect();
+                            methods.push(MethodSig { name: decl.name.clone(), params, ret: decl.ret.clone(), default: true });
+                            defaults.push(decl);
+                            continue;
                         }
-                        methods.push(MethodSig { name, params, ret });
+                        methods.push(MethodSig { name, params, ret, default: false });
                     }
                     _ => return Err(p.expected("`fn` or `}`")),
                 }
             }
         })?;
         self.expect(Token::RBrace)?;
-        Ok(InterfaceDecl { name, type_params, methods })
+        Ok(InterfaceDecl { name, type_params, methods, defaults })
     }
 
     fn type_decl(&mut self) -> Result<TypeDecl> {
@@ -2604,8 +2616,12 @@ mod tests {
         let m = module("interface Comparable<T> { fn compareTo(other: T) -> Int }");
         let Item::Interface(g) = &m.items[0] else { panic!("expected an interface") };
         assert_eq!(g.type_params.len(), 1);
-        let err = Parser::new(0, "interface A { fn f() = 1 }", 0).and_then(|mut p| p.module()).unwrap_err();
-        assert!(err.message.contains("only a signature"));
+        // a method with a body is a default
+        let m = module("interface Shape { fn area() -> Float\n fn describe() -> String = \"area ${area()}\"\n fn twice() { println(1) } }");
+        let Item::Interface(d) = &m.items[0] else { panic!("expected an interface") };
+        assert_eq!(d.methods.len(), 3);
+        assert_eq!(d.defaults.len(), 2);
+        assert!(!d.methods[0].default && d.methods[1].default && d.methods[2].default);
     }
 
     #[test]

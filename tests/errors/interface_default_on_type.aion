@@ -1,0 +1,7 @@
+// error: `Circle` has no method `describe`
+interface Shape {
+    fn area() -> Float
+    fn describe() -> String = "a shape"
+}
+type Circle(r: Float) { fn area() = r }
+println(Circle(1.0).describe())

@@ -7,6 +7,7 @@
   `<anonymous function (x: Int) -> Int>`, and the standard library's functions say `stdlib`.  Interpolation, lists and
   the fields of an object show functions the same way.
 - **`print`, `println`, `typeOf` and `hashOf` as values.** `show := println` and `describe := typeOf` work; they take an `Any`.
+- **Interface default methods.** An interface method with a body is used by the types that do not have a method of that name.
 - **Inheritance from generic types.** `open type Box<T>`, `type IntBox(n: Int) : Box<Int>(n)` and `type Named<T>(…) : Box<T>(…)`.
 - **`Int32` and `Byte`.** Sized integers that wrap around: `b: Byte = 200`, `b + 100` is 44, `n as Byte`, `n as? Int32`.
   Calls to C pass them as `int32_t` and `uint8_t`.

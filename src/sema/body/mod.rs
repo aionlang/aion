@@ -3047,6 +3047,14 @@ impl<'c, 'a> Cx<'c, 'a> {
                 if let Some(ty) = self.this {
                     // A method of the current object can be called bare…
                     let info = self.ck.t.ty(ty);
+                    // …and inside a method an interface comes with, so can the other methods of the interface.
+                    if let Some(methods) = &info.iface
+                        && methods.iter().any(|m| m.name == *n)
+                    {
+                        let recv = self.this_expr().expect("a method has `this`");
+                        let member = ast::Ident { name: n.clone(), span: callee.span };
+                        return self.interface_call(recv, ty, methods, &member, type_args, args, span);
+                    }
                     if let Some(&m) = info.methods.get(n) {
                         if !type_args.is_empty() {
                             return Err(not_generic(n));

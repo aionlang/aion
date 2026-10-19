@@ -1,0 +1,11 @@
+// error: expected Shape, found Circle
+interface Shape {
+    fn area() -> Float
+    fn describe() -> String = "a shape"
+}
+type Circle(r: Float) {
+    fn area() = r
+    fn describe() = 1
+}
+s: Shape = Circle(1.0)
+println(s.describe())

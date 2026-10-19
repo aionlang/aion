@@ -303,6 +303,7 @@ impl<'a> Checker<'a> {
         self.depth.set(self.depth.get() - 1);
         let methods = methods?;
         self.t.update_type(id, |ti| ti.iface = Some(methods));
+        self.declare_iface_defaults(gi.module, id, gi.decl, &subst)?;
         Ok(id)
     }
 

@@ -1,0 +1,5 @@
+// error: the method `describe` of an interface needs its result type
+interface Shape {
+    fn area() -> Float
+    fn describe() = "a shape"
+}

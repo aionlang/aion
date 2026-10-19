@@ -176,14 +176,18 @@ pub struct InterfaceDecl {
     /// `interface Comparable<T> { … }`
     pub type_params: Vec<Ident>,
     pub methods: Vec<MethodSig>,
+    /// The methods that come with a body: types that lack a method of that name use this one.
+    pub defaults: Vec<FnDecl>,
 }
 
-/// `fn area() -> Float` — a signature without a body.
+/// `fn area() -> Float` — a signature without a body (or the signature of a default method).
 #[derive(Debug)]
 pub struct MethodSig {
     pub name: Ident,
     pub params: Vec<Param>,
     pub ret: Option<TypeRef>,
+    /// The method has a body, in `InterfaceDecl::defaults`.
+    pub default: bool,
 }
 
 #[derive(Debug)]

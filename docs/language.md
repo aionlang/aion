@@ -1030,10 +1030,38 @@ arguments, variables, fields, list elements, return values, `Shape?`.  The
 methods must match in name, parameter types and result type; the error says what
 is missing: ``Blob does not implement `Shape`: it needs `fn area() -> Float` ``.
 Calls through the interface look up the real type at run time (a table indexed
-by a type number kept in every object).  Interface methods have no default bodies
-and cannot be generic or take named arguments, and interfaces cannot be
-instantiated or inherit from each other.  Only object types (declared with `type`)
+by a type number kept in every object).  Interface methods cannot be generic or take
+named arguments, and interfaces cannot be instantiated or inherit from each other.  Only object types (declared with `type`)
 become interface values; use a wrapper type for an `Int` or `String`.
+
+### Default methods
+
+A method with a body is a **default**: a type that has no method of that name gets it, and a type that has
+one keeps its own.  A default is written like any method, but needs its result type when it is a one-liner, and it can
+call the other methods of the interface bare or through `this`.  It is there on values typed as the interface; a
+`Circle` that never mentions `Shape` does not have it.
+
+```aion
+interface Shape {
+    fn area() -> Float
+    fn name() -> String
+    fn describe() -> String = "${name()} with area ${area()}"
+    fn show() { println("== ${describe()} ==") }
+}
+
+type Circle(r: Float) {
+    fn area() = 3.0 * r * r
+    fn name() = "circle"
+}
+type Square(s: Float) {
+    fn area() = s * s
+    fn name() = "square"
+    fn describe() = "a square of side $s"          // replaces the default
+}
+
+shapes: List<Shape> = [Circle(1.0), Square(2.0)]
+for s in shapes { s.show() }                   // == circle with area 3 == / == a square of side 2 ==
+```
 
 ## Inheritance
 

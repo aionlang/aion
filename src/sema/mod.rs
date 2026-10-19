@@ -94,6 +94,8 @@ pub struct IfaceMethod {
     pub name: String,
     pub params: Vec<Ty>,
     pub ret: Ty,
+    /// The version types use when they have no method of this name: its receiver is the interface itself.
+    pub default: Option<FnId>,
 }
 
 /// A generic function (or a generic method of a generic type's instance):
@@ -495,6 +497,19 @@ pub fn analyze(loaded: &Loaded, map: &SourceMap, trace: bool) -> Result<hir::Pro
                 }
             }
         }
+        // The methods interfaces come with are called through dispatch tables, so they are all needed.
+        let upcast_ifaces: BTreeSet<TypeId> = ck.upcasts.borrow().iter().map(|&(_, i)| i).collect();
+        for iface in upcast_ifaces {
+            let defaults: Vec<FnId> =
+                ck.t.ty(iface).iface.iter().flatten().filter_map(|m| m.default).collect();
+            for f in defaults {
+                let mut fns = ck.fns.borrow_mut();
+                if fns[f].state == State::New && !fns[f].used {
+                    fns[f].used = true;
+                    checked = true;
+                }
+            }
+        }
         // Types used as an interface that gets printed need their `toString` compiled.
         let pending: Vec<TypeId> = {
             let (ups, shown) = (ck.upcasts.borrow(), ck.stringified.borrow());
@@ -675,6 +690,7 @@ impl<'a> Checker<'a> {
         for &(id, d) in &own_ifaces {
             let methods = self.iface_methods(mi, d, &empty)?;
             self.t.update_type(id, |ti| ti.iface = Some(methods));
+            self.declare_iface_defaults(mi, id, d, &empty)?;
         }
 
         // 3a. Parents: `type Dog : Animal(…)`.  Parents come first, so a child sees their fields and methods.
@@ -845,9 +861,35 @@ impl<'a> Checker<'a> {
                 Some(r) => self.resolve_type(mi, r, subst)?,
                 None => Ty::Void,
             };
-            methods.push(IfaceMethod { name: m.name.name.clone(), params, ret });
+            methods.push(IfaceMethod { name: m.name.name.clone(), params, ret, default: None });
         }
         Ok(methods)
+    }
+
+    /// The methods of interface `id` that have a body become functions whose receiver is the interface; a type
+    /// without a method of that name is dispatched to them.
+    fn declare_iface_defaults(&self, mi: usize, id: TypeId, d: &'a ast::InterfaceDecl, subst: &Subst) -> Result<()> {
+        for decl in &d.defaults {
+            if !decl.type_params.is_empty() {
+                return Err(Diagnostic::new("an interface method cannot be generic", decl.name.span));
+            }
+            if decl.ret.is_none() && matches!(decl.body, ast::FnBody::Expr(_)) {
+                return Err(Diagnostic::new(
+                    format!("the method `{}` of an interface needs its result type", decl.name.name),
+                    decl.name.span,
+                )
+                .hint(format!("write it like `fn {}() -> Type = …`", decl.name.name)));
+            }
+            let symbol = method_symbol(&self.module_names[mi], &self.t.ty(id).name, id, &decl.name.name);
+            let info = self.signature(mi, decl, FuncKind::Method, Some(Ty::Obj(id)), symbol, subst)?;
+            let f = self.declare_fn(info, Work::Method { decl, subst: subst.clone() });
+            self.t.update_type(id, |ti| {
+                if let Some(m) = ti.iface.as_mut().and_then(|ms| ms.iter_mut().find(|m| m.name == decl.name.name)) {
+                    m.default = Some(f);
+                }
+            });
+        }
+        Ok(())
     }
 
     /// The fields of a type declaration: primary-constructor parameters, then body fields.
@@ -1601,6 +1643,10 @@ impl<'a> Checker<'a> {
                 },
             };
             let Some((actual, ret)) = found else {
+                // a method that comes with a body need not be there
+                if m.default.is_some() {
+                    continue;
+                }
                 return Err(format!("`{name}` does not implement `{}`: it needs `fn {}`", i.name, show(m)));
             };
             if actual != m.params {
@@ -1725,7 +1771,10 @@ impl<'a> Checker<'a> {
                 let entries = ups
                     .iter()
                     .filter(|&&(_, i)| i == iface)
-                    .map(|&(t, _)| (t, self.version_with(self.t.ty(t).methods[&m.name], &m.params)))
+                    .map(|&(t, _)| match self.t.ty(t).methods.get(&m.name) {
+                        Some(&f) => (t, self.version_with(f, &m.params)),
+                        None => (t, m.default.expect("a type without the method conforms only if there is a default")),
+                    })
                     .collect();
                 tables.push(hir::Dispatch { iface, method: index, entries });
             }
