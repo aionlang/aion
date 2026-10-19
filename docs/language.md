@@ -653,6 +653,27 @@ the value from their own iteration.  Function values can be stored in variables,
 fields and module variables and called like functions: `onClick(3)`,
 `button.onClick(3)`, `make()(3)`.
 
+A function value can be printed, and says where it comes from and what it takes: `function` for a
+declared function (with its module in front when it is from another module), `constructor`, `stdlib function`
+for the standard library and `anonymous function` for a lambda.  Names and types of the parameters and the result
+are shown; what a lambda captures is not.
+
+```aion
+import math
+
+fn add(a: Int, b: Int) = a + b
+type Point(x: Int, y: Int)
+
+println(add)                   // <function add(a: Int, b: Int) -> Int>
+println({ x: Int -> x * 2 })   // <anonymous function (x: Int) -> Int>
+println(Point)                 // <constructor Point(x: Int, y: Int) -> Point>
+println(math.toRadians)        // <stdlib function math.toRadians(degrees: Float) -> Float>
+println(println)               // <built-in function println(value: Any) -> Unit>
+```
+
+`print`, `println`, `typeOf` and `hashOf` can be used as values too: they then take an `Any`
+(`show := println`, then `show(42)`).
+
 ## Generics
 
 Functions and types can take **type parameters**.  They are inferred from the
@@ -1429,7 +1450,8 @@ import std.math            // …explicitly (aion.math works too)
 | `panic(message)`           | print `[aion] panic: message` to stderr and exit 1      |
 | `typeOf(value)`            | the name of the value's type, as text                   |
 
-Arguments may be Int, Float, Bool, String or objects.  Floats print with C's
+Arguments may be Int, Float, Bool, String, objects or functions (see
+[Function values and lambdas](#function-values-and-lambdas)).  Floats print with C's
 `%g` (`3.0` prints as `3`).
 
 `typeOf` gives the type the compiler knows (`Int`, `List<Int>`, `Point`, `(Int) -> Int`).  For a value
