@@ -47,6 +47,15 @@ Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 [Tasks]
 Name: "addtopath"; Description: "Add Aion to PATH (so that ""aion"" works in any terminal)"; GroupDescription: "Terminal:"
 
+[Run]
+; Unpack the C compiler that is inside aion.exe and build its C library, so that the first program does not wait.
+Filename: "{app}\aion.exe"; Parameters: "warmup"; StatusMsg: "Preparing the C compiler (about a minute, once)..."; \
+    Flags: runhidden waituntilterminated
+
+[UninstallDelete]
+; What aion.exe unpacked and built (the C compiler, its library, built programs) lives here.
+Type: filesandordirs; Name: "{localappdata}\aion"
+
 [Registry]
 ; The user's PATH, or the machine's when installing for all users.
 Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; \

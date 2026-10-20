@@ -125,11 +125,15 @@ jobs:
           [ -f "$instu/aion.exe" ] || fail "aion.exe was not installed: $(tail -n 8 "$RUNNER_TEMP/setup.log" 2>/dev/null | awk 'BEGIN { ORS = " | " } { print }')"
           user_path | tr ';' '\n' | grep -qxF "$inst" || fail "the install folder is not in the user PATH"
 
-          home="$RUNNER_TEMP/aion-home-installed"; rm -rf "$home"; mkdir -p "$home"
-          if ! env -i SystemRoot="$SYSTEMROOT" TEMP="$RUNNER_TEMP" TMP="$RUNNER_TEMP" LOCALAPPDATA="$home" PATH=/nonexistent \
+          # The installer prepared the C compiler, so the first program must not wait for it (and needs no tools).
+          compgen -G "$(cygpath -u "$LOCALAPPDATA")/aion/zig-*/zig.exe" >/dev/null || fail "the installer did not prepare the C compiler"
+          start=$SECONDS
+          if ! env -i SystemRoot="$SYSTEMROOT" TEMP="$RUNNER_TEMP" TMP="$RUNNER_TEMP" LOCALAPPDATA="$LOCALAPPDATA" PATH=/nonexistent \
                "$instu/aion.exe" examples/hello.aion > out.txt 2> err.txt || ! grep -q "Hello from Aion!" out.txt; then
             fail "the installed aion.exe failed: $(head -c 1500 err.txt | awk 'BEGIN { ORS = " | " } { print }')"
           fi
+          echo "first program after the install took $((SECONDS - start)) s"
+          [ $((SECONDS - start)) -lt 30 ] || fail "the first program took $((SECONDS - start)) s after the install: the compiler was not prepared"
 
           "$instu/unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART || true
           for i in $(seq 1 60); do [ -f "$instu/aion.exe" ] || break; sleep 1; done
