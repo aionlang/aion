@@ -4,6 +4,7 @@
 //! source ─▶ lexer/parser ─▶ loader (imports, deps) ─▶ sema (types) ─▶ codegen (LLVM IR) ─▶ clang
 //! ```
 
+mod banner;
 mod cache;
 mod codegen;
 mod diag;
@@ -370,7 +371,11 @@ fn run() -> Result<ExitCode, Failure> {
         Ok(c) => c,
         Err(msg) => {
             let is_error = !(msg.starts_with("Aion compiler") || msg.starts_with("aion "));
-            eprintln!("{msg}");
+            if msg.starts_with("error: unknown command") {
+                eprint!("{}", banner::render(banner::colors_enabled()));
+            } else {
+                eprintln!("{msg}");
+            }
             return Ok(if is_error { ExitCode::from(2) } else { ExitCode::SUCCESS });
         }
     };
