@@ -92,6 +92,52 @@ jobs:
           rm -rf "$name"
           ls -la
 
+      # Windows also gets a setup program (installer/aion.iss), built with Inno Setup, which the runners have.
+      - name: Build the Windows installer
+        if: runner.os == 'Windows'
+        env:
+          MSYS2_ARG_CONV_EXCL: "*"
+        run: |
+          set -eu
+          ver="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)"
+          case "${{ github.ref_name }}" in v[0-9]*) ver="${GITHUB_REF_NAME#v}" ;; esac
+          iscc="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
+          [ -x "$iscc" ] || choco install innosetup --no-progress -y
+          "$iscc" "/DAppVersion=$ver" "/DOutName=aion-${{ github.ref_name }}-x86_64-windows-setup" installer/aion.iss
+          ls -la dist
+
+      # Install it silently, run the installed aion.exe with no other tools, uninstall it, and look at PATH each time.
+      - name: Test the Windows installer
+        if: runner.os == 'Windows'
+        env:
+          MSYS2_ARG_CONV_EXCL: "*"
+        run: |
+          set -u
+          fail() { echo "::error title=Installer test failed::$1"; exit 1; }
+          tmp="$(cygpath -w "$RUNNER_TEMP")"
+          setup="$(ls dist/*-setup.exe)"
+          inst="$tmp\\aion-installed"
+          instu="$(cygpath -u "$inst")"
+          user_path() { powershell -NoProfile -Command "[Environment]::GetEnvironmentVariable('Path','User')"; }
+
+          "$setup" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER /TASKS=addtopath "/DIR=$inst" "/LOG=$tmp\\setup.log" || true
+          for i in $(seq 1 60); do [ -f "$instu/aion.exe" ] && break; sleep 1; done
+          [ -f "$instu/aion.exe" ] || fail "aion.exe was not installed: $(tail -n 8 "$RUNNER_TEMP/setup.log" 2>/dev/null | awk 'BEGIN { ORS = " | " } { print }')"
+          user_path | tr ';' '\n' | grep -qxF "$inst" || fail "the install folder is not in the user PATH"
+
+          home="$RUNNER_TEMP/aion-home-installed"; rm -rf "$home"; mkdir -p "$home"
+          if ! env -i SystemRoot="$SYSTEMROOT" TEMP="$RUNNER_TEMP" TMP="$RUNNER_TEMP" LOCALAPPDATA="$home" PATH=/nonexistent \
+               "$instu/aion.exe" examples/hello.aion > out.txt 2> err.txt || ! grep -q "Hello from Aion!" out.txt; then
+            fail "the installed aion.exe failed: $(head -c 1500 err.txt | awk 'BEGIN { ORS = " | " } { print }')"
+          fi
+
+          "$instu/unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART || true
+          for i in $(seq 1 60); do [ -f "$instu/aion.exe" ] || break; sleep 1; done
+          [ ! -f "$instu/aion.exe" ] || fail "uninstalling left aion.exe behind"
+          sleep 2
+          if user_path | tr ';' '\n' | grep -qxF "$inst"; then fail "uninstalling left the folder in the user PATH"; fi
+          echo "installer ok"
+
       - uses: actions/upload-artifact@v4
         with:
           name: aion-${{ matrix.platform }}
