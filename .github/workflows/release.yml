@@ -32,18 +32,15 @@ jobs:
         include:
           - { platform: x86_64-linux,   os: ubuntu-latest }
           - { platform: aarch64-linux,  os: ubuntu-24.04-arm }
-          - { platform: x86_64-macos,   os: macos-15-intel }
-          - { platform: aarch64-macos,  os: macos-latest }
+          # macOS is left out until the C runtime builds there: std_fs.c uses st_mtim, which macOS names
+          # st_mtimespec.  (The platforms are in toolchain/zig.lock: x86_64-macos on macos-15-intel,
+          # aarch64-macos on macos-latest.)
           - { platform: x86_64-windows, os: windows-latest }
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install zstd (macOS)
-        if: runner.os == 'macOS'
-        run: brew install zstd
 
       - name: Install zstd (Windows)
         if: runner.os == 'Windows'
