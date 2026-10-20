@@ -9,6 +9,7 @@ mod codegen;
 mod diag;
 mod embedded;
 mod format;
+mod intro;
 mod loader;
 mod manage;
 mod project;
@@ -26,42 +27,45 @@ use std::process::{Command, ExitCode};
 
 use diag::{Diagnostic, SourceMap};
 
-const USAGE: &str = "\
-Aion compiler
-
-usage:
-  aion [run] [file.aion] [args…]      compile and run (default: the project's entry)
-  aion build [file.aion] [-o <out>]   compile to a native executable
-  aion emit-ir [file.aion]            print the generated LLVM IR
-  aion check [file.aion]              type-check without building anything
-  aion repl                           an interactive prompt (builds at -O0 unless you give -O1 or -O3)
-  aion help                           show this text
-  aion test [path…]                   run the programs in tests/ (each passes if it exits with status 0)
-  aion fmt [--check] [path…]          tidy whitespace in .aion files
-  aion new <name>                     create a project directory
-  aion add <source> [--as NAME] [--tag T|--branch B|--rev R] [--script FILE] [--yes]
-                                      add a dependency (a git repo like github.com/me/http@v1, or a path)
-  aion remove <name>                  remove a dependency
-  aion update [name]                  fetch newer commits for git dependencies
-  aion tree [FILE]                    show the dependency tree
-  aion fetch                          download the project's dependencies
-  aion clean                          delete the build cache
-
-Arguments after the file are passed to the program (`args()` in Aion); put `--`
-before them if they look like options.
-
-options:
-  -O0..-O3       optimisation level (default -O2)
-  --project <p>  use this aion.project (or the folder holding it) instead of searching upward
-  --no-trace     leave out the stack trace a panic prints (a little faster)
-  --silent-empty-main  do not warn when the program has no `fn main()` and no top-level statements
-  --keep-temps   keep intermediate files
-  -h, --help     show this help
-  -V, --version  show the version
-
-A project is a folder with an `aion.project` file; see docs/projects.md.
-Needs `clang` (15 or newer) on PATH; set AION_CLANG to use another compiler.
-Set AION_NO_CACHE=1 to rebuild even when a cached binary exists.";
+const USAGE: &str = concat!(
+    "Aion compiler ", env!("CARGO_PKG_VERSION"), "\n",
+    "\n",
+    "usage:\n",
+    "  aion [run] [file.aion] [args…]      compile and run (default: the project's entry)\n",
+    "  aion build [file.aion] [-o <out>]   compile to a native executable\n",
+    "  aion emit-ir [file.aion]            print the generated LLVM IR\n",
+    "  aion check [file.aion]              type-check without building anything\n",
+    "  aion repl                           an interactive prompt (builds at -O0 unless you give -O1 or -O3)\n",
+    "  aion help                           show this text\n",
+    "  aion test [path…]                   run the programs in tests/ (each passes if it exits with status 0)\n",
+    "  aion fmt [--check] [path…]          tidy whitespace in .aion files\n",
+    "  aion new <name>                     create a project directory\n",
+    "  aion add <source> [--as NAME] [--tag T|--branch B|--rev R] [--script FILE] [--yes]\n",
+    "                                      add a dependency (a git repo like github.com/me/http@v1, or a path)\n",
+    "  aion remove <name>                  remove a dependency\n",
+    "  aion update [name]                  fetch newer commits for git dependencies\n",
+    "  aion tree [FILE]                    show the dependency tree\n",
+    "  aion fetch                          download the project's dependencies\n",
+    "  aion clean                          delete the build cache\n",
+    "  aion warmup                         prepare the C compiler that comes with aion now (the installer does)\n",
+    "\n",
+    "Arguments after the file are passed to the program (`args()` in Aion); put `--`\n",
+    "before them if they look like options.\n",
+    "\n",
+    "options:\n",
+    "  -O0..-O3       optimisation level (default -O2)\n",
+    "  --project <p>  use this aion.project (or the folder holding it) instead of searching upward\n",
+    "  --no-trace     leave out the stack trace a panic prints (a little faster)\n",
+    "  --silent-empty-main  do not warn when the program has no `fn main()` and no top-level statements\n",
+    "  --keep-temps   keep intermediate files\n",
+    "  -h, --help     show this help\n",
+    "  -V, --version  show the version\n",
+    "\n",
+    "A project is a folder with an `aion.project` file; see docs/projects.md.\n",
+    "Programs are built with a C compiler: the Windows installer and the release builds of aion carry their own;\n",
+    "otherwise aion uses clang 15 or newer, or zig, from the PATH (AION_CLANG or AION_ZIG name another one).\n",
+    "Set AION_NO_CACHE=1 to rebuild even when a cached binary exists.",
+);
 
 enum Subcommand {
     Run,
@@ -356,9 +360,27 @@ fn manage_command(command: &str, args: &[String]) -> ExitCode {
     }
 }
 
+/// `aion warmup`: unpack the C compiler that comes with aion and build what a program needs first (its C library and
+/// the bundled libraries), so that the first real program does not wait for it.  The Windows installer runs this.
+fn warmup() -> ExitCode {
+    let dir = std::env::temp_dir().join(format!("aion-warmup-{}", std::process::id()));
+    let file = dir.join("warmup.aion");
+    let source = "import sqlite\nimport zlib\nimport unicode\nprintln(\"aion is ready\")\n";
+    let done = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&file, source)).is_ok()
+        && std::env::current_exe().and_then(|exe| Command::new(exe).arg(&file).status()).is_ok_and(|s| s.success());
+    let _ = std::fs::remove_dir_all(&dir);
+    if done { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+}
+
 fn run() -> Result<ExitCode, Failure> {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // Just `aion`, with no project to run: say what Aion is, instead of an error.
+    if args.is_empty() && project::find(Path::new(".")).is_none() {
+        intro::print();
+        return Ok(ExitCode::SUCCESS);
+    }
     match args.first().map(String::as_str) {
+        Some("warmup") => return Ok(warmup()),
         Some("test") => return Ok(testing::test(&args[1..])),
         Some("fmt") => return Ok(testing::fmt(&args[1..])),
         _ => {}
@@ -370,7 +392,8 @@ fn run() -> Result<ExitCode, Failure> {
         Ok(c) => c,
         Err(msg) => {
             let is_error = !(msg.starts_with("Aion compiler") || msg.starts_with("aion "));
-            eprintln!("{msg}");
+            // The help and the version are what was asked for, so they go to the standard output (`aion --help | more`).
+            if is_error { eprintln!("{msg}") } else { println!("{msg}") }
             return Ok(if is_error { ExitCode::from(2) } else { ExitCode::SUCCESS });
         }
     };

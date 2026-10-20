@@ -1182,3 +1182,24 @@ fn aion_check_aion_fmt_and_aion_test() {
     assert!(text.contains("ok") && text.contains("FAIL") && text.contains("sum: expected 3 but got 2"), "{text}");
     assert!(text.contains("1 passed, 1 failed") && !text.contains("helper"), "{text}");
 }
+
+/// Just `aion`, in a folder with no project, says what Aion is instead of failing; `--help` writes to the standard output.
+#[test]
+fn aion_with_no_arguments_shows_the_welcome() {
+    let dir = std::env::temp_dir().join(format!("aion-welcome-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_aion")).args(args).current_dir(&dir).env("AION_CACHE", test_cache()).output().unwrap()
+    };
+
+    let welcome = run(&[]);
+    let text = String::from_utf8_lossy(&welcome.stdout).into_owned();
+    assert!(welcome.status.success(), "{}", stderr(&welcome));
+    assert!(text.contains(&format!("Aion {}", env!("CARGO_PKG_VERSION"))) && text.contains("aion --help"), "{text}");
+    assert!(!text.contains('\x1b'), "colour only on a terminal");
+
+    let help = run(&["--help"]);
+    assert!(help.status.success());
+    assert!(String::from_utf8_lossy(&help.stdout).starts_with(&format!("Aion compiler {}", env!("CARGO_PKG_VERSION"))));
+    let _ = std::fs::remove_dir_all(&dir);
+}

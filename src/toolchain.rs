@@ -169,6 +169,13 @@ fn compile(
             #[cfg(feature = "bundled-zig")]
             Candidate::Embedded => embedded_zig()?,
         };
+        // The first compile with the Zig that comes with aion also builds Zig's C library, which takes a while
+        // (about a minute on Windows), so say so; the marker file records that it is done.
+        let warm = cc.zig_cache.as_ref().map(|d| d.join(".warm"));
+        if warm.as_ref().is_some_and(|w| !w.exists()) {
+            eprintln!("aion: preparing the C compiler for the first time; this takes about a minute, once");
+        }
+
         // The bundled libraries, compiled with this compiler (once; they are kept in the cache directory).
         let mut objects = Vec::new();
         for name in vendors {
@@ -206,7 +213,12 @@ fn compile(
             cmd.arg("-pthread");
         }
         match cmd.output() {
-            Ok(out) if out.status.success() => return Ok(()),
+            Ok(out) if out.status.success() => {
+                if let Some(w) = &warm {
+                    let _ = std::fs::write(w, "");
+                }
+                return Ok(());
+            }
             Ok(out) => {
                 return Err(Diagnostic::general(format!(
                     "`{}` failed:\n{}",
@@ -288,6 +300,7 @@ fn vendor_objects(dir: &Path, cc: &Compiler, name: &str) -> Result<Option<Vec<Pa
 
     // Build in a temporary folder next to the final one and rename it, so a crash or a second `aion` building the
     // same library at the same time never leaves a half-built one.
+    eprintln!("aion: building the {name} library that comes with aion (once; it is kept in the cache)");
     let work = cached.with_file_name(format!(".build-{}-{}", std::process::id(), name));
     let _ = std::fs::remove_dir_all(&work);
     std::fs::create_dir_all(&work).map_err(io_err("create a cache directory"))?;

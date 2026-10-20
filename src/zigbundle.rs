@@ -30,6 +30,7 @@ pub fn compiler_path() -> Result<PathBuf, String> {
 fn unpack(root: &Path) -> Result<(), String> {
     let parent = root.parent().ok_or("the cache directory has no parent")?;
     std::fs::create_dir_all(parent).map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
+    remove_stale(parent);
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
     let temp = parent.join(format!(".zig-unpack-{}-{nanos}", std::process::id()));
 
@@ -49,4 +50,20 @@ fn extract(dest: &Path) -> Result<(), String> {
     let mut archive = tar::Archive::new(decoder);
     archive.set_preserve_permissions(true);
     archive.unpack(dest).map_err(|e| format!("cannot unpack into {}: {e}", dest.display()))
+}
+
+/// An unpacking that was interrupted (Ctrl+C) leaves its temporary folder behind; remove those over an hour old.
+fn remove_stale(parent: &Path) {
+    let Ok(entries) = std::fs::read_dir(parent) else { return };
+    for entry in entries.flatten() {
+        let old = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age.as_secs() > 3600);
+        if old && entry.file_name().to_string_lossy().starts_with(".zig-unpack-") {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
 }
