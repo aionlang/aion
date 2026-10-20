@@ -1,0 +1,14 @@
+# The Zig that scripts/bundle-zig.sh downloads and `cargo build --features bundled-zig` embeds into aion.
+# Official release archives from https://ziglang.org/download/index.json.
+# Columns: platform, file name (under https://ziglang.org/download/<version>/), SHA-256 of the archive, size in bytes.
+# To update: change the version, copy the new file names, hashes and sizes from index.json, run scripts/bundle-zig.sh,
+# and run the tests.  CI checks this file against index.json (scripts/bundle-zig.sh --check).
+
+version 0.17.0
+
+x86_64-linux    zig-x86_64-linux-0.17.0.tar.xz     1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026  57332648
+aarch64-linux   zig-aarch64-linux-0.17.0.tar.xz    9e8d11661d4ae3bd57702a3832781e23ad151dde5798e16a5ccd503f65234ff8  52877280
+x86_64-macos    zig-x86_64-macos-0.17.0.tar.xz     4f9a1c5269aa17ebda5e6d3c2b89d6cbf36f7d2b22a0306e9ab98f25f95529c6  59317572
+aarch64-macos   zig-aarch64-macos-0.17.0.tar.xz    b607e9b9234790a008116ae5bdb71c6243b84b9fb42a53a9e70fde41c06c536a  53985220
+x86_64-windows  zig-x86_64-windows-0.17.0.zip      b5663f69581dcf391293fbf16c06cb80d81d806545ce618b4d0bab7f0eb8c428  100268137
+aarch64-windows zig-aarch64-windows-0.17.0.zip     0a59d91fa1cb40cf068e9b0954434ce973500c7a2ea749f1e01af62cdab52d26  95992853
