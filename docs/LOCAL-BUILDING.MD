@@ -12,6 +12,12 @@ variables.
 | Rust  | stable, 2024 edition | builds the compiler                        |
 | clang | 15 or newer    | compiles generated IR + the C runtime, and links |
 
+## No clang? Use Zig
+
+When no `clang` is found, Aion falls back to `zig cc` (`zig` on `PATH`, a `zig/` folder next to the `aion`
+executable, or `AION_ZIG`).  Zig bundles a C compiler, a linker and the C library headers, so nothing else has to be
+installed.  Libraries that a standard library module links (`sqlite3`, `z`) must still be installed.
+
 ## Linux
 
 ```bash
@@ -77,13 +83,14 @@ aion new demo && cd demo && aion # a project
 | Variable          | Effect                                                         |
 |-------------------|----------------------------------------------------------------|
 | `AION_CLANG`      | the C compiler to use instead of `clang` / `clang-N`           |
+| `AION_ZIG`        | the `zig` to build with (`zig cc`) instead of searching        |
 | `AION_CACHE`      | where built programs and git dependencies are cached           |
 | `AION_NO_CACHE`   | rebuild every run instead of reusing a cached binary           |
 | `AION_GC_STRESS`  | when *running a compiled program*: collect on every allocation |
 
 ## Troubleshooting
 
-* **`no C compiler found`** — install clang 15+ or set `AION_CLANG`.
+* **`no C compiler found`** — install clang 15+ (or Zig), or set `AION_CLANG` / `AION_ZIG`.
 * **`clang failed` with IR errors** — your clang is older than 15 (no opaque
   pointers); upgrade it.
 * **Generated code looks wrong** — `aion emit-ir file.aion` prints the LLVM IR,

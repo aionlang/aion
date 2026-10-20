@@ -30,13 +30,46 @@ pub fn exe_suffix() -> &'static str {
     if windows() { ".exe" } else { "" }
 }
 
-/// Compiler executables to try, newest first.  `AION_CLANG` overrides.
-fn candidates() -> Vec<String> {
-    if let Ok(c) = std::env::var("AION_CLANG") {
-        return vec![c];
+/// A C compiler to try: the program, and the arguments that go before the usual ones (`cc` for `zig cc`).
+struct Compiler {
+    program: String,
+    leading: &'static [&'static str],
+}
+
+impl Compiler {
+    fn new(program: impl Into<String>) -> Compiler {
+        Compiler { program: program.into(), leading: &[] }
     }
-    let mut v = vec!["clang".to_string()];
-    v.extend((15..=22).rev().map(|n| format!("clang-{n}")));
+
+    /// `zig cc`.  Zig turns on the undefined-behavior sanitizer for unoptimized C by default; clang does not,
+    /// so it is switched off to build the same programs the same way.
+    fn zig(program: impl Into<String>) -> Compiler {
+        Compiler { program: program.into(), leading: &["cc", "-fno-sanitize=undefined"] }
+    }
+}
+
+/// Where a Zig that was shipped with Aion would be: `zig/zig` next to the `aion` executable.
+fn bundled_zig() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let path = exe.parent()?.join("zig").join(format!("zig{}", exe_suffix()));
+    path.is_file().then_some(path)
+}
+
+/// Compilers to try, in order: clang (newest first), then `zig cc`, which needs no C toolchain installed.
+/// `AION_CLANG` and `AION_ZIG` override and are then the only choice.
+fn candidates() -> Vec<Compiler> {
+    if let Ok(c) = std::env::var("AION_CLANG") {
+        return vec![Compiler::new(c)];
+    }
+    if let Ok(z) = std::env::var("AION_ZIG") {
+        return vec![Compiler::zig(z)];
+    }
+    let mut v = vec![Compiler::new("clang")];
+    v.extend((15..=22).rev().map(|n| Compiler::new(format!("clang-{n}"))));
+    if let Some(z) = bundled_zig() {
+        v.push(Compiler::zig(z.to_string_lossy()));
+    }
+    v.push(Compiler::zig("zig"));
     v
 }
 
@@ -85,10 +118,11 @@ fn compile(
         inputs.push(write(&format!("std_{name}"), text)?);
     }
 
-    let mut last_error = None;
+    let mut first_missing: Option<String> = None;
     for cc in candidates() {
-        let mut cmd = Command::new(&cc);
-        cmd.arg(format!("-O{}", opts.opt_level))
+        let mut cmd = Command::new(&cc.program);
+        cmd.args(cc.leading)
+            .arg(format!("-O{}", opts.opt_level))
             .arg("-w")
             .arg("-I")
             .arg(dir)
@@ -112,20 +146,23 @@ fn compile(
             Ok(out) if out.status.success() => return Ok(()),
             Ok(out) => {
                 return Err(Diagnostic::general(format!(
-                    "`{cc}` failed:\n{}",
+                    "`{}` failed:\n{}",
+                    cc.program,
                     String::from_utf8_lossy(&out.stderr).trim_end()
                 ))
                 .hint("this is probably a compiler bug; `aion emit-ir <file>` shows the generated IR"));
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => last_error = Some(cc),
-            Err(e) => return Err(Diagnostic::general(format!("cannot run `{cc}`: {e}"))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                first_missing.get_or_insert(cc.program);
+            }
+            Err(e) => return Err(Diagnostic::general(format!("cannot run `{}`: {e}", cc.program))),
         }
     }
     Err(Diagnostic::general(format!(
         "no C compiler found (tried `{}` and others)",
-        last_error.unwrap_or_else(|| "clang".into())
+        first_missing.unwrap_or_else(|| "clang".into())
     ))
-    .hint("install clang 15 or newer, or point AION_CLANG at it"))
+    .hint("install clang 15 or newer (or zig), or point AION_CLANG or AION_ZIG at it"))
 }
 
 fn io_err(what: &'static str) -> impl Fn(std::io::Error) -> Diagnostic {
