@@ -106,6 +106,7 @@ pub fn build(
     ir: &str,
     c_sources: &[(String, String)],
     libs: &[String],
+    vendors: &[String],
     output: &Path,
     opts: &Options,
 ) -> Result<()> {
@@ -113,7 +114,7 @@ pub fn build(
     let dir: PathBuf = std::env::temp_dir().join(format!("aion-{}-{nanos}", std::process::id()));
     std::fs::create_dir_all(&dir).map_err(io_err("create a temporary directory"))?;
 
-    let result = compile(&dir, ir, c_sources, libs, output, opts);
+    let result = compile(&dir, ir, c_sources, libs, vendors, output, opts);
     if opts.keep_temps {
         eprintln!("kept intermediate files in {}", dir.display());
     } else {
@@ -127,6 +128,7 @@ fn compile(
     ir: &str,
     c_sources: &[(String, String)],
     libs: &[String],
+    vendors: &[String],
     output: &Path,
     opts: &Options,
 ) -> Result<()> {
@@ -147,23 +149,47 @@ fn compile(
         inputs.push(write(&format!("std_{name}"), text)?);
     }
 
+    // The headers of the bundled libraries, for the C code of the modules that use them.
+    let mut vendor_dirs = Vec::new();
+    for name in vendors {
+        let vdir = dir.join("vendor").join(name);
+        std::fs::create_dir_all(&vdir).map_err(io_err("create a temporary directory"))?;
+        for (file, text) in vendor_files(name)? {
+            if file.ends_with(".h") {
+                std::fs::write(vdir.join(file), text).map_err(io_err("write a temporary file"))?;
+            }
+        }
+        vendor_dirs.push(vdir);
+    }
+
     let mut first_missing: Option<String> = None;
-    for candidate in candidates() {
+    'candidates: for candidate in candidates() {
         let cc = match candidate {
             Candidate::Command(cc) => cc,
             #[cfg(feature = "bundled-zig")]
             Candidate::Embedded => embedded_zig()?,
         };
-        let mut cmd = Command::new(&cc.program);
-        if let Some(cache) = &cc.zig_cache {
-            cmd.env("ZIG_GLOBAL_CACHE_DIR", cache).env("ZIG_LOCAL_CACHE_DIR", cache);
+        // The bundled libraries, compiled with this compiler (once; they are kept in the cache directory).
+        let mut objects = Vec::new();
+        for name in vendors {
+            match vendor_objects(dir, &cc, name)? {
+                Some(files) => objects.extend(files),
+                None => {
+                    first_missing.get_or_insert(cc.program);
+                    continue 'candidates;
+                }
+            }
         }
+
+        let mut cmd = base_command(&cc);
         cmd.args(cc.leading)
             .arg(format!("-O{}", opts.opt_level))
             .arg("-w")
             .arg("-I")
             .arg(dir)
+            .args(vendor_dirs.iter().flat_map(|d| [std::ffi::OsStr::new("-I"), d.as_os_str()]))
             .args(&inputs)
+            .args(&objects)
             .arg("-o")
             .arg(output)
             .arg("-lm");
@@ -200,6 +226,110 @@ fn compile(
         first_missing.unwrap_or_else(|| "clang".into())
     ))
     .hint("install clang 15 or newer (or zig), or point AION_CLANG or AION_ZIG at it"))
+}
+
+/// A command for `cc`, with the environment the embedded Zig needs.
+fn base_command(cc: &Compiler) -> Command {
+    let mut cmd = Command::new(&cc.program);
+    if let Some(cache) = &cc.zig_cache {
+        cmd.env("ZIG_GLOBAL_CACHE_DIR", cache).env("ZIG_LOCAL_CACHE_DIR", cache);
+    }
+    cmd
+}
+
+fn vendor_files(name: &str) -> Result<&'static [(&'static str, &'static str)]> {
+    embedded::vendor_files(name).ok_or_else(|| {
+        Diagnostic::general(format!("`// vendor: {name}` names a library that is not in vendor/"))
+    })
+}
+
+/// A short text that changes when the bundled library `name` does, for the cache key of a built program.
+pub fn vendor_fingerprint(name: &str) -> String {
+    let files = embedded::vendor_files(name).unwrap_or(&[]);
+    let sizes: Vec<String> = files.iter().map(|(f, t)| format!("{f}:{}", t.len())).collect();
+    format!("{name} {}", sizes.join(" "))
+}
+
+/// The object files of the bundled library `name`, compiled with `cc`: each `.c` file of vendor/<name>/ with the
+/// flags of its `FLAGS` file and `-O2` (the library does not depend on the optimization level of the program).
+/// They are built once and kept in `<cache>/vendor/`, keyed by the sources, the compiler and the target, so the
+/// next program that needs the library only links them.  `None` if the compiler is not installed.
+fn vendor_objects(dir: &Path, cc: &Compiler, name: &str) -> Result<Option<Vec<PathBuf>>> {
+    let files = vendor_files(name)?;
+    let flags: Vec<&str> = files
+        .iter()
+        .filter(|(f, _)| *f == "FLAGS")
+        .flat_map(|(_, t)| t.lines().map(str::trim).filter(|l| !l.is_empty()))
+        .collect();
+    // Every .c file is compiled, unless a `SOURCES` file names the ones that are (the others are included by those).
+    let listed: Vec<&str> = files
+        .iter()
+        .filter(|(f, _)| *f == "SOURCES")
+        .flat_map(|(_, t)| t.lines().map(str::trim).filter(|l| !l.is_empty()))
+        .collect();
+    let sources: Vec<&str> = files
+        .iter()
+        .map(|(f, _)| *f)
+        .filter(|f| f.ends_with(".c") && (listed.is_empty() || listed.contains(f)))
+        .collect();
+
+    let target = std::env::var("AION_TARGET").unwrap_or_default();
+    let leading = cc.leading.join(" ");
+    let mut parts: Vec<&[u8]> = vec![name.as_bytes(), cc.program.as_bytes(), leading.as_bytes(), target.as_bytes()];
+    for (f, t) in files {
+        parts.push(f.as_bytes());
+        parts.push(t.as_bytes());
+    }
+    let cached = crate::cache::dir().join("vendor").join(format!("{name}-{:016x}", crate::cache::hash(&parts)));
+    let list = |from: &Path| sources.iter().map(|f| from.join(format!("{f}.o"))).collect::<Vec<_>>();
+    if cached.is_dir() {
+        return Ok(Some(list(&cached)));
+    }
+
+    // Build in a temporary folder next to the final one and rename it, so a crash or a second `aion` building the
+    // same library at the same time never leaves a half-built one.
+    let work = cached.with_file_name(format!(".build-{}-{}", std::process::id(), name));
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(&work).map_err(io_err("create a cache directory"))?;
+    let src = dir.join("vendor-src").join(name);
+    std::fs::create_dir_all(&src).map_err(io_err("create a temporary directory"))?;
+    for (f, t) in files {
+        if *f != "FLAGS" && *f != "SOURCES" {
+            std::fs::write(src.join(f), t).map_err(io_err("write a temporary file"))?;
+        }
+    }
+    for f in &sources {
+        let mut cmd = base_command(cc);
+        cmd.args(cc.leading).args(["-c", "-O2", "-w", "-I"]).arg(&src).args(&flags).arg(src.join(f)).arg("-o");
+        cmd.arg(work.join(format!("{f}.o")));
+        match cmd.output() {
+            Ok(out) if out.status.success() => {}
+            Ok(out) => {
+                let _ = std::fs::remove_dir_all(&work);
+                return Err(Diagnostic::general(format!(
+                    "`{}` failed to build the bundled library {name} ({f}):\n{}",
+                    cc.program,
+                    String::from_utf8_lossy(&out.stderr).trim_end()
+                )));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let _ = std::fs::remove_dir_all(&work);
+                return Ok(None);
+            }
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&work);
+                return Err(Diagnostic::general(format!("cannot run `{}`: {e}", cc.program)));
+            }
+        }
+    }
+    if std::fs::rename(&work, &cached).is_err() {
+        // Another process finished first, and its copy is as good as ours.
+        let _ = std::fs::remove_dir_all(&work);
+        if !cached.is_dir() {
+            return Err(Diagnostic::general(format!("cannot store the library {name} in {}", cached.display())));
+        }
+    }
+    Ok(Some(list(&cached)))
 }
 
 fn io_err(what: &'static str) -> impl Fn(std::io::Error) -> Diagnostic {

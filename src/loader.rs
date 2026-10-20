@@ -48,6 +48,8 @@ pub struct Loaded {
     pub c_sources: Vec<(String, String)>,
     /// System libraries to link: the packages' `link` settings and the `// link:` lines of stdlib modules.
     pub libs: Vec<String>,
+    /// Bundled C libraries (vendor/) to compile and link: the `// vendor:` lines of stdlib modules.
+    pub vendors: Vec<String>,
     /// Things worth a mention that do not stop the build.
     pub warnings: Vec<Diagnostic>,
 }
@@ -65,6 +67,7 @@ pub fn load(map: &mut SourceMap, entry: &Path, packages: Vec<Package>) -> Result
         stack: Vec::new(),
         c_sources: Vec::new(),
         libs: Vec::new(),
+        vendors: Vec::new(),
         warnings: Vec::new(),
         packages,
     };
@@ -90,7 +93,7 @@ pub fn load(map: &mut SourceMap, entry: &Path, packages: Vec<Package>) -> Result
     let stem = entry.file_stem().map_or("main".into(), |s| s.to_string_lossy().into_owned());
     loader.add(key.display().to_string(), &entry.display().to_string(), &text, stem, Some(entry_dir), 0)?;
 
-    Ok(Loaded { modules: loader.modules, c_sources: loader.c_sources, libs: loader.libs, warnings: loader.warnings })
+    Ok(Loaded { modules: loader.modules, c_sources: loader.c_sources, libs: loader.libs, vendors: loader.vendors, warnings: loader.warnings })
 }
 
 struct Loader<'a> {
@@ -101,6 +104,7 @@ struct Loader<'a> {
     stack: Vec<String>,
     c_sources: Vec<(String, String)>,
     libs: Vec<String>,
+    vendors: Vec<String>,
     warnings: Vec<Diagnostic>,
     packages: Vec<Package>,
 }
@@ -274,6 +278,14 @@ impl Loader<'_> {
         for lib in aion.lines().take_while(|l| l.starts_with("//")).filter_map(|l| l.strip_prefix("// link:")) {
             for name in lib.split_whitespace() {
                 self.link(name.to_string());
+            }
+        }
+        // `// vendor: sqlite3` names a C library that comes with Aion (vendor/) and is built into the program.
+        for lib in aion.lines().take_while(|l| l.starts_with("//")).filter_map(|l| l.strip_prefix("// vendor:")) {
+            for name in lib.split_whitespace() {
+                if !self.vendors.iter().any(|v| v == name) {
+                    self.vendors.push(name.to_string());
+                }
             }
         }
         self.add(key, &format!("<std>/{name}.aion"), aion, name.to_string(), None, 0)

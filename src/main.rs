@@ -206,6 +206,7 @@ struct Compiled {
     ir: String,
     c_sources: Vec<(String, String)>,
     libs: Vec<String>,
+    vendors: Vec<String>,
 }
 
 /// Everything up to (but not including) invoking the C toolchain.
@@ -231,7 +232,7 @@ fn compile(
                 .hint("write statements in the file or define `fn main() { … }`; `--silent-empty-main` hides this warning");
             eprint!("{}", nothing.render(map));
         }
-        Ok::<_, Diagnostic>(Compiled { ir: codegen::emit(&program), c_sources: loaded.c_sources, libs: loaded.libs })
+        Ok::<_, Diagnostic>(Compiled { ir: codegen::emit(&program), c_sources: loaded.c_sources, libs: loaded.libs, vendors: loaded.vendors })
     })();
     result.map_err(|d| (d, None))
 }
@@ -254,7 +255,7 @@ fn program_command(exe: &Path) -> Command {
 
 /// Build (or reuse) the program for `ir`: the executable, and whether it is a temporary one to delete after use.
 fn build_program(program: &Compiled, opts: &toolchain::Options) -> Result<(PathBuf, bool), Diagnostic> {
-    let Compiled { ir, c_sources, libs } = program;
+    let Compiled { ir, c_sources, libs, vendors } = program;
     let cached = std::env::var_os("AION_NO_CACHE").is_none();
     let exe = if cached {
         let mut parts: Vec<&[u8]> = vec![env!("CARGO_PKG_VERSION").as_bytes(), opts.opt_level.as_bytes(), ir.as_bytes()];
@@ -270,6 +271,11 @@ fn build_program(program: &Compiled, opts: &toolchain::Options) -> Result<(PathB
         for lib in libs {
             parts.push(lib.as_bytes());
         }
+        // A bundled library is part of the program: a new compiler may carry a new version of it.
+        let vendor_sizes: Vec<String> = vendors.iter().map(|v| toolchain::vendor_fingerprint(v)).collect();
+        for v in &vendor_sizes {
+            parts.push(v.as_bytes());
+        }
         let bin_dir = cache::dir().join("bin");
         let exe = bin_dir.join(exe_name(&format!("{:016x}", cache::hash(&parts))));
         if !exe.is_file() {
@@ -277,7 +283,7 @@ fn build_program(program: &Compiled, opts: &toolchain::Options) -> Result<(PathB
                 .map_err(|e| Diagnostic::general(format!("cannot create {}: {e}", bin_dir.display())))?;
             // Build beside the final name, then rename, so a crash never leaves a half-written binary.
             let partial = bin_dir.join(exe_name(&format!("partial-{}", std::process::id())));
-            toolchain::build(ir, c_sources, libs, &partial, opts)?;
+            toolchain::build(ir, c_sources, libs, vendors, &partial, opts)?;
             std::fs::rename(&partial, &exe)
                 .map_err(|e| Diagnostic::general(format!("cannot store the build: {e}")))?;
             cache::trim(&bin_dir, 128);
@@ -285,7 +291,7 @@ fn build_program(program: &Compiled, opts: &toolchain::Options) -> Result<(PathB
         exe
     } else {
         let exe = std::env::temp_dir().join(exe_name(&format!("aion-run-{}", std::process::id())));
-        toolchain::build(ir, c_sources, libs, &exe, opts)?;
+        toolchain::build(ir, c_sources, libs, vendors, &exe, opts)?;
         exe
     };
     Ok((exe, !cached))
@@ -418,7 +424,7 @@ fn run() -> Result<ExitCode, Failure> {
                 entry.file_stem().map_or("a".into(), |s| s.to_string_lossy().into_owned())
             });
             let output = cli.output.clone().unwrap_or_else(|| PathBuf::from(exe_name(&stem)));
-            toolchain::build(&program.ir, &program.c_sources, &program.libs, &output, &cli.opts).map_err(general)?;
+            toolchain::build(&program.ir, &program.c_sources, &program.libs, &program.vendors, &output, &cli.opts).map_err(general)?;
             eprintln!("built {}", output.display());
             Ok(ExitCode::SUCCESS)
         }

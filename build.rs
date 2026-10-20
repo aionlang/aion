@@ -48,6 +48,7 @@ fn main() {
     code.push_str("];\n");
 
     fs::write(Path::new(&out).join("embedded.rs"), code).unwrap();
+    embed_vendor(&root, &out);
     embed_zig(&root, &out);
     println!("cargo:rerun-if-changed=stdlib");
     println!("cargo:rerun-if-changed=runtime");
@@ -104,4 +105,35 @@ fn embed_zig(root: &str, out: &str) {
     fs::write(Path::new(out).join("zigbundle.rs"), code).unwrap();
     println!("cargo:rerun-if-changed=toolchain/bundle/zig.tar.zst");
     println!("cargo:rerun-if-changed=toolchain/bundle/zig.version");
+}
+
+/// Every `vendor/<library>/` folder, as `VENDOR`: (library, [(file name, contents)]).  See vendor/README.md.
+fn embed_vendor(root: &str, out: &str) {
+    let mut libs: Vec<_> = fs::read_dir(Path::new(root).join("vendor"))
+        .expect("vendor/ directory")
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    libs.sort();
+    let mut code = String::from("/// (library, [(file name, contents)]) of the C libraries in vendor/.\n");
+    code.push_str("pub static VENDOR: &[(&str, &[(&str, &str)])] = &[\n");
+    for lib in &libs {
+        let mut files: Vec<_> = fs::read_dir(Path::new(root).join("vendor").join(lib))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n == "FLAGS" || n == "SOURCES" || n.ends_with(".c") || n.ends_with(".h"))
+            .collect();
+        files.sort();
+        writeln!(code, "    ({lib:?}, &[").unwrap();
+        for f in files {
+            let path = Path::new(root).join("vendor").join(lib).join(&f);
+            writeln!(code, "        ({f:?}, include_str!({:?})),", path.display().to_string()).unwrap();
+        }
+        code.push_str("    ]),\n");
+    }
+    code.push_str("];\n");
+    fs::write(Path::new(out).join("vendor.rs"), code).unwrap();
+    println!("cargo:rerun-if-changed=vendor");
 }
