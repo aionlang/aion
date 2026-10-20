@@ -4,7 +4,7 @@
 
 ```text
 $ aion repl
-Aion 0.3.0 — :help for commands, Ctrl-D to leave
+Aion 0.3.3 — :help for commands, Ctrl-D to leave
 >>> 1 + 2
 3
 >>> nums := [3, 1, 2]

@@ -1,6 +1,6 @@
 [package]
 name = "aion"
-version = "0.3.0"
+version = "0.3.3"
 edition = "2024"
 description = "The Aion programming language compiler"
 license = "MIT"
