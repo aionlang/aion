@@ -5,6 +5,7 @@
 <div align="center">
 
 <a href="https://github.com/aionlang/aion"><img src="https://img.shields.io/badge/github-aionlang%2Faion-blue?logo=github" alt="GitHub repository"></a>
+<a href="https://aionlang.github.io/documentation"><img src="https://img.shields.io/badge/docs-aionlang.github.io-4377df?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxjaXJjbGUgY3g9IjEyIiBjeT0iMTIiIHI9IjEwIi8+PGxpbmUgeDE9IjIiIHkxPSIxMiIgeDI9IjIyIiB5Mj0iMTIiLz48cGF0aCBkPSJNMTIgMmExNS4zIDE1LjMgMCAwIDEgNCAxMCAxNS4zIDE1LjMgMCAwIDEtNCAxMCAxNS4zIDE1LjMgMCAwIDEtNC0xMCAxNS4zIDE1LjMgMCAwIDEgNC0xMHoiLz48L3N2Zz4=" alt="Documentation website"></a>
 <img src="https://img.shields.io/badge/version-0.3.0-informational" alt="version 0.3.0">
 <img src="https://img.shields.io/badge/status-beta-yellow" alt="status: beta">
 <a href="LICENSE.md"><img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="Apache 2.0 license"></a>
@@ -152,6 +153,7 @@ See **[docs/architecture.md](docs/architecture.md)** for the details.
 
 | | |
 |---|---|
+| [aionlang.github.io/documentation](https://aionlang.github.io/documentation) | online language reference, prelude methods and stdlib documentation |
 | [docs/language.md](docs/language.md) | the language: syntax, types, lambdas, modules |
 | [docs/repl.md](docs/repl.md) | the interactive prompt, `aion repl`, and how it works |
 | [docs/projects.md](docs/projects.md) | scripts and projects, `aion add`, `// dep:` lines, dependencies, the build cache |
