@@ -1,0 +1,112 @@
+name: Release
+
+# Builds a self-contained `aion` for each platform: the executable has the Zig C compiler embedded
+# (see toolchain/zig.lock and scripts/bundle-zig.sh), so it compiles programs on a machine with no
+# C compiler installed.  Run it by hand from the Actions tab, or push a tag such as v0.3.0 (which also
+# publishes a GitHub release).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lock:
+    name: zig.lock matches ziglang.org
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/bundle-zig.sh --check
+
+  build:
+    name: ${{ matrix.platform }}
+    needs: lock
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: x86_64-linux,   os: ubuntu-latest }
+          - { platform: aarch64-linux,  os: ubuntu-24.04-arm }
+          - { platform: x86_64-macos,   os: macos-15-intel }
+          - { platform: aarch64-macos,  os: macos-latest }
+          - { platform: x86_64-windows, os: windows-latest }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install zstd (macOS)
+        if: runner.os == 'macOS'
+        run: brew install zstd
+
+      - name: Install zstd (Windows)
+        if: runner.os == 'Windows'
+        run: command -v zstd >/dev/null 2>&1 || choco install zstd --no-progress -y
+
+      - name: Download and pack Zig
+        run: scripts/bundle-zig.sh ${{ matrix.platform }}
+
+      - name: Build aion with the Zig embedded
+        run: cargo build --release --features bundled-zig
+
+      # The runners have a C compiler, so hide it: an empty PATH and an empty cache directory leave the
+      # executable only the compiler inside it.
+      - name: Smoke test with no C compiler
+        run: |
+          set -eu
+          exe=target/release/aion; [ "${{ runner.os }}" = Windows ] && exe=target/release/aion.exe
+          home="$RUNNER_TEMP/aion-home"; rm -rf "$home"; mkdir -p "$home"
+          if [ "${{ runner.os }}" = Windows ]; then
+            env -i SystemRoot="$SYSTEMROOT" TEMP="$RUNNER_TEMP" TMP="$RUNNER_TEMP" LOCALAPPDATA="$home" PATH=/nonexistent \
+              "$exe" examples/hello.aion | tee out.txt
+          else
+            env -i HOME="$home" TMPDIR="$RUNNER_TEMP" PATH=/nonexistent "$exe" examples/hello.aion | tee out.txt
+          fi
+          grep -q "Hello from Aion!" out.txt
+
+      - name: Run the test suite on the embedded compiler
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libutf8proc3 libsqlite3-dev zlib1g-dev libgmp-dev libexpat1 libarchive13
+          AION_BUNDLED=1 cargo test --release --features bundled-zig
+
+      - name: Package
+        run: |
+          set -eu
+          name="aion-${{ github.ref_name }}-${{ matrix.platform }}"
+          mkdir -p "dist/$name"
+          if [ "${{ runner.os }}" = Windows ]; then cp target/release/aion.exe "dist/$name/"; else cp target/release/aion "dist/$name/"; fi
+          cp README.md LICENSE.md "dist/$name/"
+          cd dist
+          if [ "${{ runner.os }}" = Windows ]; then 7z a "$name.zip" "$name" >/dev/null; else tar -czf "$name.tar.gz" "$name"; fi
+          rm -rf "$name"
+          ls -la
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aion-${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish the release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" dist/* --repo "${{ github.repository }}" --title "${{ github.ref_name }}" --generate-notes
