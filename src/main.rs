@@ -4,12 +4,12 @@
 //! source ─▶ lexer/parser ─▶ loader (imports, deps) ─▶ sema (types) ─▶ codegen (LLVM IR) ─▶ clang
 //! ```
 
+mod banner;
 mod cache;
 mod codegen;
 mod diag;
 mod embedded;
 mod format;
-mod intro;
 mod loader;
 mod manage;
 mod project;
@@ -374,9 +374,9 @@ fn warmup() -> ExitCode {
 
 fn run() -> Result<ExitCode, Failure> {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    // Just `aion`, with no project to run: say what Aion is, instead of an error.
+    // Just `aion`, with no project to run: show the banner, instead of an error.
     if args.is_empty() && project::find(Path::new(".")).is_none() {
-        intro::print();
+        banner::show(banner::Stream::Stdout);
         return Ok(ExitCode::SUCCESS);
     }
     match args.first().map(String::as_str) {
@@ -392,8 +392,14 @@ fn run() -> Result<ExitCode, Failure> {
         Ok(c) => c,
         Err(msg) => {
             let is_error = !(msg.starts_with("Aion compiler") || msg.starts_with("aion "));
-            // The help and the version are what was asked for, so they go to the standard output (`aion --help | more`).
-            if is_error { eprintln!("{msg}") } else { println!("{msg}") }
+            if msg.starts_with("error: unknown command") {
+                banner::show(banner::Stream::Stderr);
+            } else if is_error {
+                eprintln!("{msg}");
+            } else {
+                // The help and the version are what was asked for, so they go to the standard output (`aion --help | more`).
+                println!("{msg}");
+            }
             return Ok(if is_error { ExitCode::from(2) } else { ExitCode::SUCCESS });
         }
     };

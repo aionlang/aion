@@ -22,8 +22,9 @@
   a program builds on a machine with nothing installed.  Without one, `aion` falls back to `zig cc` when there is no
   `clang`.  See docs/LOCAL-BUILDING.MD.
 - **A Windows installer** (`aion-…-setup.exe`) with an uninstaller and an option to add `aion` to `PATH`.
-- **`aion` with no arguments** shows the logo, the version and the first commands instead of an error; `aion --help`
-  and `aion --version` write to the standard output.
+- **`aion` with no arguments** shows the logo, the version and where to find help instead of an error, and so does a
+  command `aion` does not know (on the standard error, with exit status 2); `aion --help` and `aion --version` write to
+  the standard output.
 
 ## 0.3.0 — scripting syntax, closures, generics, collections, nullability, interfaces, projects
 

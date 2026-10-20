@@ -1195,8 +1195,14 @@ fn aion_with_no_arguments_shows_the_welcome() {
     let welcome = run(&[]);
     let text = String::from_utf8_lossy(&welcome.stdout).into_owned();
     assert!(welcome.status.success(), "{}", stderr(&welcome));
-    assert!(text.contains(&format!("Aion {}", env!("CARGO_PKG_VERSION"))) && text.contains("aion --help"), "{text}");
+    assert!(text.contains(&format!("aion v{}", env!("CARGO_PKG_VERSION"))) && text.contains("aion --help"), "{text}");
     assert!(!text.contains('\x1b'), "colour only on a terminal");
+
+    // a command that does not exist gets the same banner on the standard error, and a failing exit status
+    let unknown = run(&["frobnicate"]);
+    assert_eq!(unknown.status.code(), Some(2));
+    assert!(stderr(&unknown).contains(&format!("aion v{}", env!("CARGO_PKG_VERSION"))), "{}", stderr(&unknown));
+    assert!(unknown.stdout.is_empty());
 
     let help = run(&["--help"]);
     assert!(help.status.success());
