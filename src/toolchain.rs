@@ -34,18 +34,30 @@ pub fn exe_suffix() -> &'static str {
 struct Compiler {
     program: String,
     leading: &'static [&'static str],
+    /// Where Zig keeps what it builds (the C library, cached objects); set for the Zig that is embedded in `aion`, so
+    /// that it does not depend on, or write to, the user's own Zig cache.
+    zig_cache: Option<PathBuf>,
 }
 
 impl Compiler {
     fn new(program: impl Into<String>) -> Compiler {
-        Compiler { program: program.into(), leading: &[] }
+        Compiler { program: program.into(), leading: &[], zig_cache: None }
     }
 
     /// `zig cc`.  Zig turns on the undefined-behavior sanitizer for unoptimized C by default; clang does not,
     /// so it is switched off to build the same programs the same way.
     fn zig(program: impl Into<String>) -> Compiler {
-        Compiler { program: program.into(), leading: &["cc", "-fno-sanitize=undefined"] }
+        Compiler { program: program.into(), leading: &["cc", "-fno-sanitize=undefined"], zig_cache: None }
     }
+}
+
+/// One entry of the list of compilers to try.
+enum Candidate {
+    Command(Compiler),
+    /// The Zig that was embedded in this executable (`--features bundled-zig`); it is unpacked on first use, so it
+    /// is tried only when nothing before it in the list was found.
+    #[cfg(feature = "bundled-zig")]
+    Embedded,
 }
 
 /// Where a Zig that was shipped with Aion would be: `zig/zig` next to the `aion` executable.
@@ -55,22 +67,39 @@ fn bundled_zig() -> Option<PathBuf> {
     path.is_file().then_some(path)
 }
 
-/// Compilers to try, in order: clang (newest first), then `zig cc`, which needs no C toolchain installed.
-/// `AION_CLANG` and `AION_ZIG` override and are then the only choice.
-fn candidates() -> Vec<Compiler> {
+/// Compilers to try, in order: clang (newest first), a Zig shipped next to `aion`, `zig` on the `PATH`, and last the
+/// Zig embedded in the executable.  `AION_CLANG` and `AION_ZIG` override and are then the only choice, and
+/// `AION_BUNDLED=1` makes the embedded Zig the only choice (to test it on a machine that has a C compiler).
+fn candidates() -> Vec<Candidate> {
     if let Ok(c) = std::env::var("AION_CLANG") {
-        return vec![Compiler::new(c)];
+        return vec![Candidate::Command(Compiler::new(c))];
     }
     if let Ok(z) = std::env::var("AION_ZIG") {
-        return vec![Compiler::zig(z)];
+        return vec![Candidate::Command(Compiler::zig(z))];
     }
-    let mut v = vec![Compiler::new("clang")];
-    v.extend((15..=22).rev().map(|n| Compiler::new(format!("clang-{n}"))));
+    #[cfg(feature = "bundled-zig")]
+    if std::env::var("AION_BUNDLED").is_ok_and(|v| !v.is_empty() && v != "0") {
+        return vec![Candidate::Embedded];
+    }
+    let mut v = vec![Candidate::Command(Compiler::new("clang"))];
+    v.extend((15..=22).rev().map(|n| Candidate::Command(Compiler::new(format!("clang-{n}")))));
     if let Some(z) = bundled_zig() {
-        v.push(Compiler::zig(z.to_string_lossy()));
+        v.push(Candidate::Command(Compiler::zig(z.to_string_lossy())));
     }
-    v.push(Compiler::zig("zig"));
+    v.push(Candidate::Command(Compiler::zig("zig")));
+    #[cfg(feature = "bundled-zig")]
+    v.push(Candidate::Embedded);
     v
+}
+
+/// The embedded Zig, unpacked into the cache directory the first time.
+#[cfg(feature = "bundled-zig")]
+fn embedded_zig() -> Result<Compiler> {
+    let path = crate::zigbundle::compiler_path()
+        .map_err(|e| Diagnostic::general(format!("cannot unpack the Zig compiler that comes with aion: {e}")))?;
+    let mut cc = Compiler::zig(path.to_string_lossy());
+    cc.zig_cache = Some(crate::cache::dir().join("zig-cache"));
+    Ok(cc)
 }
 
 pub fn build(
@@ -119,8 +148,16 @@ fn compile(
     }
 
     let mut first_missing: Option<String> = None;
-    for cc in candidates() {
+    for candidate in candidates() {
+        let cc = match candidate {
+            Candidate::Command(cc) => cc,
+            #[cfg(feature = "bundled-zig")]
+            Candidate::Embedded => embedded_zig()?,
+        };
         let mut cmd = Command::new(&cc.program);
+        if let Some(cache) = &cc.zig_cache {
+            cmd.env("ZIG_GLOBAL_CACHE_DIR", cache).env("ZIG_LOCAL_CACHE_DIR", cache);
+        }
         cmd.args(cc.leading)
             .arg(format!("-O{}", opts.opt_level))
             .arg("-w")

@@ -14,6 +14,13 @@ path = "src/main.rs"
 logos = "0.16.1"
 # line editing (the arrow keys, history) for `aion repl` on a terminal
 rustyline = { version = "15", default-features = false }
+# only for `--features bundled-zig`: unpack the Zig toolchain that is embedded in the executable
+ruzstd = { version = "0.9", optional = true }
+tar = { version = "0.4", default-features = false, optional = true }
+
+[features]
+# Embed a Zig toolchain (made by scripts/bundle-zig.sh) so aion can compile with no C compiler installed.
+bundled-zig = ["dep:ruzstd", "dep:tar"]
 
 [profile.release]
 opt-level = 3

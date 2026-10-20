@@ -18,6 +18,22 @@ When no `clang` is found, Aion falls back to `zig cc` (`zig` on `PATH`, a `zig/`
 executable, or `AION_ZIG`).  Zig bundles a C compiler, a linker and the C library headers, so nothing else has to be
 installed.  Libraries that a standard library module links (`sqlite3`, `z`) must still be installed.
 
+## A self-contained `aion` (Zig inside the executable)
+
+The release builds of `aion` have a Zig embedded, so they compile programs on a machine with no C compiler.  To make
+one yourself, on the platform you are building for:
+
+```bash
+scripts/bundle-zig.sh                        # downloads the Zig pinned in toolchain/zig.lock, checks its SHA-256, packs it
+cargo build --release --features bundled-zig # target/release/aion is now about 65 MB
+```
+
+`scripts/bundle-zig.sh <platform>` names another platform from `toolchain/zig.lock` (the build must be for the same
+one), and `ZIG_DOWNLOAD_BASE=<url>` downloads from a mirror.  The first time such an `aion` finds no C compiler, it
+unpacks its Zig into the cache directory (`AION_CACHE`, about 400 MB, about 5 seconds) and uses it from there.  A
+`clang` on the machine is still preferred; `AION_BUNDLED=1` makes the embedded Zig the only choice, which is how the
+release workflow (`.github/workflows/release.yml`) tests it.  To change the Zig version, edit `toolchain/zig.lock`.
+
 ## Linux
 
 ```bash
