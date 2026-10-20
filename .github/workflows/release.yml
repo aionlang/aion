@@ -120,7 +120,12 @@ jobs:
           instu="$(cygpath -u "$inst")"
           user_path() { powershell -NoProfile -Command "[Environment]::GetEnvironmentVariable('Path','User')"; }
 
-          "$setup" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER /TASKS=addtopath "/DIR=$inst" "/LOG=$tmp\\setup.log" || true
+          # Install as on a machine with nothing installed.  The runner has clang, which `aion warmup` would then use,
+          # and the Zig inside aion.exe would never be unpacked.
+          clean_path="$(echo "$PATH" | tr ':' '\n' | while IFS= read -r d; do
+            compgen -G "$d/clang*.exe" >/dev/null || compgen -G "$d/zig.exe" >/dev/null || printf '%s:' "$d"
+          done)"
+          PATH="${clean_path%:}" "$setup" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER /TASKS=addtopath "/DIR=$inst" "/LOG=$tmp\\setup.log" || true
           for i in $(seq 1 60); do [ -f "$instu/aion.exe" ] && break; sleep 1; done
           [ -f "$instu/aion.exe" ] || fail "aion.exe was not installed: $(tail -n 8 "$RUNNER_TEMP/setup.log" 2>/dev/null | awk 'BEGIN { ORS = " | " } { print }')"
           user_path | tr ';' '\n' | grep -qxF "$inst" || fail "the install folder is not in the user PATH"
