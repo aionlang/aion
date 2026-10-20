@@ -23,6 +23,13 @@
  * anything else is reported ready at once and its owner blocks in the call itself).
  */
 
+#ifdef __APPLE__
+/* macOS declares getcontext() and the like only when _XOPEN_SOURCE is defined, and then hides its own extensions
+ * (MAP_ANON and others) unless _DARWIN_C_SOURCE is defined too.  This must come before every system header. */
+#define _XOPEN_SOURCE 600
+#define _DARWIN_C_SOURCE
+#endif
+
 #ifdef _WIN32
 #include <winsock2.h> /* before windows.h, which aion_sync.h includes */
 #endif
