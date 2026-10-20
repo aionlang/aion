@@ -63,12 +63,17 @@ jobs:
           exe=target/release/aion; [ "${{ runner.os }}" = Windows ] && exe=target/release/aion.exe
           home="$RUNNER_TEMP/aion-home"; rm -rf "$home"; mkdir -p "$home"
           if [ "${{ runner.os }}" = Windows ]; then
-            env -i SystemRoot="$SYSTEMROOT" TEMP="$RUNNER_TEMP" TMP="$RUNNER_TEMP" LOCALAPPDATA="$home" PATH=/nonexistent \
-              "$exe" examples/hello.aion | tee out.txt
+            run() { env -i SystemRoot="$SYSTEMROOT" TEMP="$RUNNER_TEMP" TMP="$RUNNER_TEMP" LOCALAPPDATA="$home" PATH=/nonexistent "$@"; }
           else
-            env -i HOME="$home" TMPDIR="$RUNNER_TEMP" PATH=/nonexistent "$exe" examples/hello.aion | tee out.txt
+            run() { env -i HOME="$home" TMPDIR="$RUNNER_TEMP" PATH=/nonexistent "$@"; }
           fi
-          grep -q "Hello from Aion!" out.txt
+          # On a failure, show the message as an annotation of the run (the log needs a login to read).
+          if ! run "$exe" examples/hello.aion > out.txt 2> err.txt || ! grep -q "Hello from Aion!" out.txt; then
+            msg="$(head -c 3000 err.txt out.txt | awk 'BEGIN { ORS = "%0A" } { print }')"
+            echo "::error title=Smoke test failed on ${{ matrix.platform }}::$msg"
+            exit 1
+          fi
+          cat out.txt
 
       - name: Run the test suite on the embedded compiler
         if: runner.os == 'Linux'
