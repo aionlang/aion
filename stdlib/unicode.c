@@ -1,7 +1,7 @@
 /*
  * C half of std.unicode: normalization, case mapping, character categories and widths, and grapheme clusters
- * (POSIX).  The data comes from the utf8proc library, loaded at run time with dlopen like OpenSSL in std.crypto:
- * a program that never imports std.unicode needs nothing installed, and no header files are required to build.
+ * (POSIX).  The data comes from the utf8proc library, the copy that comes with Aion (vendor/utf8proc), which is
+ * built into every program that imports std.unicode, so nothing has to be installed.
  */
 
 #define _GNU_SOURCE
@@ -11,6 +11,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#define UTF8PROC_STATIC
+#include <utf8proc.h>
 
 static char error_text[256];
 
@@ -35,23 +38,11 @@ static struct {
 static bool load(void) {
     if (u8.tried) return u8.ok;
     u8.tried = true;
-    #ifdef _WIN32
-    static const char *const names[] = {"libutf8proc-3.dll", "libutf8proc-2.dll", "libutf8proc.dll", NULL};
-    #else
-    static const char *const names[] = {"libutf8proc.so.3", "libutf8proc.so.2", "libutf8proc.so", "libutf8proc.3.dylib",
-                                        "libutf8proc.2.dylib", "libutf8proc.dylib", NULL};
-    #endif
-    void *lib = aion_dlopen(names);
-    if (!lib) {
-        snprintf(error_text, sizeof error_text, "std.unicode needs the utf8proc library: install libutf8proc (for example the libutf8proc3 package)");
-        return false;
-    }
-#define LOAD(name) \
-    if (!(*(void **)&u8.name = aion_dlsym(lib, #name))) { snprintf(error_text, sizeof error_text, "the installed utf8proc is missing " #name); return false; }
-    LOAD(utf8proc_map) LOAD(utf8proc_iterate) LOAD(utf8proc_encode_char) LOAD(utf8proc_tolower) LOAD(utf8proc_toupper)
-    LOAD(utf8proc_totitle) LOAD(utf8proc_category_string) LOAD(utf8proc_charwidth) LOAD(utf8proc_grapheme_break_stateful)
-    LOAD(utf8proc_version)
-#undef LOAD
+#define BIND(name) *(void **)&u8.name = (void *)name;
+    BIND(utf8proc_map) BIND(utf8proc_iterate) BIND(utf8proc_encode_char) BIND(utf8proc_tolower) BIND(utf8proc_toupper)
+    BIND(utf8proc_totitle) BIND(utf8proc_category_string) BIND(utf8proc_charwidth) BIND(utf8proc_grapheme_break_stateful)
+    BIND(utf8proc_version)
+#undef BIND
     u8.ok = true;
     return true;
 }

@@ -116,7 +116,9 @@ int aion_wait_fd(int fd, int events, int64_t ms);    // let other tasks run unti
 Return a `Bytes` from C by creating it with `aion_bytes_new` and filling `aion_bytes_data`; return a
 `Bytes?` by returning `NULL`.  A C function that waits for a socket or a pipe should call `aion_wait_fd`
 instead of blocking, so that other [tasks](language.md#tasks-and-channels) keep running.  A `// link: name ...` comment at the
-top of a module's `.aion` file adds `-lname` to the link step of every program that imports the module.
+top of a module's `.aion` file adds `-lname` to the link step of every program that imports the module.  A `// vendor: name` comment asks for
+one of the C libraries that come with Aion ([vendor/](../vendor/README.md)): it is compiled once, kept in the cache, and
+linked into every program that imports the module, and its header can be included by the module's C file.
 
 Don't call `aion_string*` while holding another Aion `String` obtained *from the
 GC heap* in a C local — a collection may run inside the call.  (Arguments passed
@@ -327,9 +329,8 @@ operating system's source.
 
 ### `std.unicode`
 
-Unicode text handling with the [utf8proc](https://juliastrings.github.io/utf8proc/) library, found when first used
-(install `libutf8proc`, for example the `libutf8proc3` package; a program that does not import `unicode` needs
-nothing).  The built-in `lower()` and `upper()` know ASCII, Latin-1, Greek and Cyrillic; these know every script.
+Unicode text handling with the [utf8proc](https://juliastrings.github.io/utf8proc/) library, which comes with Aion
+([vendor/](../vendor/README.md)), so nothing has to be installed.  The built-in `lower()` and `upper()` know ASCII, Latin-1, Greek and Cyrillic; these know every script.
 
 * `normalize(text, form = "NFC") -> String?` (`"NFC"`, `"NFD"`, `"NFKC"`, `"NFKD"`; null for an unknown form or text that
   is not valid UTF-8), so that "é" typed as one character and as `e` plus a combining accent compare equal.
@@ -725,8 +726,8 @@ db.close()
 re-raises if the body panics) and `close()`.  Parameters (`?`) are `Value`s: `sqlite.int(5)`, `float`, `text`,
 `blob(bytes)`, `bool`, `nil()`.  A `Row` reads by column name: `int text float blob isNull value(name)` (with
 optional fallbacks); a `Value` has `kind`, `asInt() asFloat() asText() asBlob() isNull()`.  Failures return `false`/`null`
-and `sqlite.lastError()` says why.  Building a program that imports `sqlite` needs the SQLite development files
-(`libsqlite3-dev`); the module declares `// link: sqlite3` for you.
+and `sqlite.lastError()` says why.  SQLite comes with Aion ([vendor/](../vendor/README.md)); nothing has to be
+installed.
 
 ### `std.zlib`
 
@@ -742,7 +743,7 @@ println(zlib.decompress(zlib.compress(data, 9)!!)?.size(), zlib.gunzip("junk".to
 `gzip compress deflate(data, level = -1)` (gzip file format, zlib format, raw deflate; level 0–9) and
 `gunzip decompress inflate decompressAny(data, maxSize = 1 GiB)`, all returning `Bytes?` — null for damaged or
 truncated data or a result over `maxSize` (so a small file cannot expand into all of memory); `zlib.lastError()`
-says which.  Needs `zlib1g-dev` to build.
+says which.  zlib comes with Aion ([vendor/](../vendor/README.md)); nothing has to be installed.
 
 ### `std.csv`
 

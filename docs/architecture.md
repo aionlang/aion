@@ -332,7 +332,13 @@ clang -O2 -w -I <dir> program.ll core.c tasks.c [stdlib C files] [package C file
 The libraries come from `link = [...]` in `aion.project` and `// link: name` comments at the top
 of stdlib modules; a package's `c = [...]` files are compiled in beside the stdlib's.
 
-It tries `clang`, then `clang-22 … clang-15`; `AION_CLANG` overrides.  `aion run`
+A `// vendor: name` comment asks for a C library that comes with Aion (`vendor/`, see its README): SQLite, zlib and
+utf8proc.  Their sources are embedded in the compiler.  The first program that needs one compiles its `.c` files
+with the same compiler (`-c -O2`, flags from the folder's `FLAGS` file) into `<cache>/vendor/<name>-<hash>/`, and
+every program after that only links those object files, so SQLite's 9 MB amalgamation is compiled once, not per
+program.  The hash covers the sources, the compiler and the target.
+
+It tries `clang`, then `clang-22 … clang-15`, then `zig cc` (see docs/LOCAL-BUILDING.MD); `AION_CLANG` overrides.  `aion run`
 hashes the generated IR and C sources and stores the executable in the cache
 (`cache.rs`), so an unchanged program is not recompiled.
 

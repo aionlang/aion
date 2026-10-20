@@ -10,9 +10,9 @@
 //
 // SQLite databases through prepared statements.  Values go in as `sqlite.int(5)`, `text("x")`,
 // `float(1.5)`, `blob(bytes)` and `nil()`, and come out of a Row by column name or position.  A failing call
-// returns false / null and `sqlite.lastError()` explains.  Needs the SQLite development package
-// (libsqlite3-dev, sqlite-devel, ...) when the program is built.
-// link: sqlite3
+// returns false / null and `sqlite.lastError()` explains.  SQLite itself comes with Aion (vendor/sqlite3),
+// so nothing has to be installed.
+// vendor: sqlite3
 
 extern fn lastError() -> String = "aion_sqlite_error"
 // The version of the SQLite library, e.g. "3.45.1".

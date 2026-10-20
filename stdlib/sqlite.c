@@ -1,6 +1,6 @@
 /*
  * C half of std.sqlite: databases and prepared statements, as small integer handles.
- * Needs the SQLite development files (sqlite3.h and libsqlite3).
+ * SQLite is the copy that comes with Aion (vendor/sqlite3), built into every program that imports std.sqlite.
  */
 
 #include "aion.h"

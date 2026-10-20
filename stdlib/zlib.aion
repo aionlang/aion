@@ -5,9 +5,8 @@
 //   zlib.decompress(zlib.compress(data))
 //
 // Compression with deflate in its three wrappers: gzip (files ending in .gz, HTTP bodies), zlib (the common
-// stream format) and raw deflate (zip entries).  Needs the zlib development package (zlib1g-dev, zlib-devel, ...)
-// when the program is built.
-// link: z
+// stream format) and raw deflate (zip entries).  zlib itself comes with Aion (vendor/zlib), so nothing has to be installed.
+// vendor: zlib
 
 extern fn lastError() -> String = "aion_zlib_error"
 extern fn __deflate(data: Bytes, level: Int, windowBits: Int) -> Bytes? = "aion_zlib_deflate"

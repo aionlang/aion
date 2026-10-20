@@ -6,9 +6,9 @@
 //   unicode.stripAccents("Crème brûlée")          // "Creme brulee"
 //   unicode.width("日本語"), unicode.graphemes("e\u{301}a")      // 6 columns; ["é", "a"]
 //
-// Unicode text handling with the utf8proc library, which is loaded when first used (install libutf8proc, for example
-// the libutf8proc3 package; a program that does not import this needs nothing).  A function given text that is not
-// valid UTF-8 returns null; `lastError()` says what is missing when the library cannot be found.
+// Unicode text handling with the utf8proc library, which comes with Aion (vendor/utf8proc), so nothing has to be
+// installed.  A function given text that is not valid UTF-8 returns null.
+// vendor: utf8proc
 
 extern fn lastError() -> String = "aion_unicode_error"
 extern fn available() -> Bool = "aion_unicode_available"

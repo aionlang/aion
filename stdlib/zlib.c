@@ -1,6 +1,6 @@
 /*
  * C half of std.zlib: deflate/inflate in the zlib, gzip and raw formats.
- * Needs the zlib development files (zlib.h and libz).
+ * zlib is the copy that comes with Aion (vendor/zlib), built into every program that imports std.zlib.
  */
 
 #include "aion.h"

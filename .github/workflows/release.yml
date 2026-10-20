@@ -76,7 +76,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libutf8proc3 libsqlite3-dev zlib1g-dev libgmp-dev libexpat1 libarchive13
+          # SQLite, zlib and utf8proc come with Aion (vendor/) and are deliberately not installed here.
+          sudo apt-get install -y libgmp-dev libexpat1 libarchive13
           AION_BUNDLED=1 cargo test --release --features bundled-zig
 
       - name: Package
