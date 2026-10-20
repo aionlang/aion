@@ -19,7 +19,8 @@ fn aion_files(path: &Path, skip_helpers: bool, out: &mut Vec<PathBuf>) {
     for p in entries {
         let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         if p.is_dir() {
-            if !name.starts_with('.') && name != "target" {
+            // a folder of downloaded packages is somebody else's code
+            if !name.starts_with('.') && name != "target" && !p.join(crate::project::PACKAGES_MARKER).exists() {
                 aion_files(&p, skip_helpers, out);
             }
         } else if p.extension().is_some_and(|e| e == "aion") && !(skip_helpers && name.starts_with('_')) {

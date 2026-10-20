@@ -1,4 +1,4 @@
-//! `aion add`, `aion remove`, `aion update` and `aion tree`: managing dependencies from the command line.
+//! `aion add`, `aion install`, `aion remove`, `aion update` and `aion tree`: managing dependencies from the command line.
 //!
 //! A dependency lives either in a project's `aion.project` or, for a loose script, in a `// dep:` line at the
 //! top of the script.  The editing functions here are pure (text in, text out) so they can be tested.
@@ -14,6 +14,11 @@ use crate::project::{self, Dependency, GitRef, Source};
 /// Asks yes/no questions; the real one only asks when a person can answer.
 pub trait Prompt {
     fn confirm(&mut self, question: &str, default_yes: bool) -> bool;
+
+    /// Ask for a line of text; the answer is `default` when nobody can answer or the answer is empty.
+    fn ask(&mut self, _question: &str, default: &str) -> String {
+        default.to_string()
+    }
 }
 
 pub struct Terminal {
@@ -38,6 +43,22 @@ impl Prompt for Terminal {
             _ => false,
         }
     }
+
+    fn ask(&mut self, question: &str, default: &str) -> String {
+        if self.yes || !std::io::stdin().is_terminal() {
+            return default.to_string();
+        }
+        eprint!("{question} [{default}] ");
+        let _ = std::io::stderr().flush();
+        let mut line = String::new();
+        if std::io::stdin().lock().read_line(&mut line).is_err() {
+            return default.to_string();
+        }
+        match line.trim() {
+            "" => default.to_string(),
+            answer => answer.to_string(),
+        }
+    }
 }
 
 // ── command line ────────────────────────────────────────────────────
@@ -51,6 +72,8 @@ pub struct Opts {
     pub rev: Option<String>,
     pub script: Option<PathBuf>,
     pub project: Option<PathBuf>,
+    /// `--packages DIR`: where the project keeps its downloaded packages (`cache` for the shared cache).
+    pub packages: Option<String>,
     pub yes: bool,
 }
 
@@ -66,6 +89,7 @@ pub fn parse_opts(args: &[String]) -> Result<Opts, String> {
             "--rev" => o.rev = Some(value("--rev")?),
             "--script" => o.script = Some(PathBuf::from(value("--script")?)),
             "--project" => o.project = Some(PathBuf::from(value("--project")?)),
+            "--packages" => o.packages = Some(value("--packages")?),
             "--yes" | "-y" => o.yes = true,
             f if f.starts_with('-') => return Err(format!("unknown option `{f}`")),
             _ => o.positional.push(a.clone()),
@@ -201,6 +225,76 @@ pub fn remove_from_manifest(text: &str, name: &str) -> Option<String> {
     let i = (start + 1..end).find(|&i| is_entry_of(&lines[i], name))?;
     lines.remove(i);
     Some(join_lines(&lines))
+}
+
+/// The default folder for downloaded packages, and what to answer to share the cache between projects instead.
+pub const DEFAULT_PACKAGES: &str = "aion-dependencies";
+const SHARED_CACHE: &str = "cache";
+
+/// A folder as a person typed it for `packages`: `.\deps\` → `deps`.  `cache` stays as it is.
+pub fn packages_folder(answer: &str) -> Result<String, String> {
+    let folder = answer.trim().replace('\\', "/");
+    let folder = folder.trim_start_matches("./").trim_end_matches('/');
+    if folder.is_empty() {
+        return Ok(DEFAULT_PACKAGES.into());
+    }
+    if folder.chars().any(|c| c == '"' || c.is_control()) {
+        return Err(format!("`{folder}` is not a usable folder name"));
+    }
+    Ok(folder.to_string())
+}
+
+/// `aion.project` with `packages = "folder"` among the first lines; `cache` takes the line away (the shared cache is
+/// what a project without it uses).
+pub fn with_packages(text: &str, folder: &str) -> String {
+    let mut lines: Vec<String> = text.lines().map(String::from).collect();
+    let top = lines.iter().position(|l| l.trim_start().starts_with('[')).unwrap_or(lines.len());
+    let entry = (folder != SHARED_CACHE).then(|| format!("packages = \"{folder}\""));
+    match ((0..top).find(|&i| is_entry_of(&lines[i], "packages")), entry) {
+        (Some(i), Some(entry)) => lines[i] = entry,
+        (Some(i), None) => {
+            lines.remove(i);
+        }
+        (None, Some(entry)) => {
+            let after_name = (0..top).find(|&i| is_entry_of(&lines[i], "name")).map_or(0, |i| i + 1);
+            lines.insert(after_name, entry);
+        }
+        (None, None) => {}
+    }
+    join_lines(&lines)
+}
+
+/// Is `folder` a place inside the project that `.gitignore` can name?
+fn inside_project(folder: &str) -> bool {
+    folder != SHARED_CACHE && Path::new(folder).is_relative() && !Path::new(folder).components().any(|c| matches!(c, Component::ParentDir))
+}
+
+/// Keep a folder of downloaded packages out of git: create `.gitignore` in `root`, or add the folder to the one there.
+/// Returns whether the file changed.
+pub fn ignore_packages(root: &Path, folder: &str) -> Result<bool, String> {
+    let file = root.join(".gitignore");
+    let existing = match std::fs::read_to_string(&file) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(io_err("read", &file, e)),
+    };
+    let listed = |line: &str| {
+        let line = line.trim().trim_start_matches('/').trim_end_matches('/');
+        line == folder
+    };
+    if existing.lines().any(listed) {
+        return Ok(false);
+    }
+    let mut text = existing;
+    if !text.is_empty() {
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push('\n');
+    }
+    text.push_str(&format!("# Packages downloaded by `aion install`\n/{folder}/\n"));
+    std::fs::write(&file, text).map_err(|e| io_err("write", &file, e))?;
+    Ok(true)
 }
 
 /// Where the header of a script ends: the blank lines, `#!` line and `//` comments it starts with
@@ -397,6 +491,57 @@ fn file_of(target: &Target) -> &Path {
 }
 
 pub fn add(opts: &Opts, cwd: &Path, home: Option<&Path>, prompt: &mut dyn Prompt) -> Result<String, String> {
+    add_dependency(opts, cwd, home, prompt, false)
+}
+
+/// `aion install <source>`: `add`, which also asks where a new project keeps its packages.  Without a source it
+/// downloads what the project already depends on.
+pub fn install(opts: &Opts, cwd: &Path, home: Option<&Path>, prompt: &mut dyn Prompt) -> Result<String, String> {
+    if opts.positional.is_empty() {
+        return install_all(opts, cwd, home, prompt);
+    }
+    add_dependency(opts, cwd, home, prompt, true)
+}
+
+/// Where the packages of a project go, as `aion install` tells it.
+fn packages_note(target: &Target) -> String {
+    let Target::Manifest(file) = target else { return String::new() };
+    match project::load(file) {
+        Ok(p) => match p.packages {
+            Some(dir) => format!("\npackages are downloaded into {}", relative(&dir, &p.root)),
+            None => String::new(),
+        },
+        Err(_) => String::new(),
+    }
+}
+
+fn install_all(opts: &Opts, cwd: &Path, home: Option<&Path>, prompt: &mut dyn Prompt) -> Result<String, String> {
+    let target = choose_target(opts, cwd, home, prompt, false)?;
+    if let (Target::Manifest(file), Some(answer)) = (&target, &opts.packages) {
+        let folder = packages_folder(answer)?;
+        let text = std::fs::read_to_string(file).map_err(|e| io_err("read", file, e))?;
+        write_atomically(file, &with_packages(&text, &folder))?;
+        if inside_project(&folder) {
+            ignore_packages(&base_of(&target), &folder)?;
+        }
+    }
+    let packages = resolve_target(&target)?;
+    let count = packages.len() - 1;
+    Ok(format!(
+        "{count} package{} installed for {}{}",
+        if count == 1 { "" } else { "s" },
+        file_of(&target).display(),
+        packages_note(&target)
+    ))
+}
+
+fn add_dependency(
+    opts: &Opts,
+    cwd: &Path,
+    home: Option<&Path>,
+    prompt: &mut dyn Prompt,
+    installing: bool,
+) -> Result<String, String> {
     let target = choose_target(opts, cwd, home, prompt, true)?;
     let base = base_of(&target);
     let source = source_from(opts, &std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf()))?;
@@ -431,9 +576,23 @@ pub fn add(opts: &Opts, cwd: &Path, home: Option<&Path>, prompt: &mut dyn Prompt
         }
     }
 
+    // Where a project keeps its packages is chosen once, when `install` makes the project (or when `--packages` says so).
+    let folder = match (&target, &opts.packages) {
+        (Target::Manifest(_), Some(answer)) => Some(packages_folder(answer)?),
+        (Target::Manifest(_), None) if installing && !existed => {
+            let question = format!("Where should packages be downloaded? A folder in the project, or `{SHARED_CACHE}` to share one copy between projects.");
+            Some(packages_folder(&prompt.ask(&question, DEFAULT_PACKAGES))?)
+        }
+        _ => None,
+    };
+    let manifest = match &folder {
+        Some(folder) => with_packages(&before, folder),
+        None => before.clone(),
+    };
+
     let after = match &target {
-        Target::Manifest(_) => add_to_manifest(&before, &name, &manifest_value(&source, &base)),
-        Target::Script(_) => add_to_script(&before, &name, &source_text(&source, &base)),
+        Target::Manifest(_) => add_to_manifest(&manifest, &name, &manifest_value(&source, &base)),
+        Target::Script(_) => add_to_script(&manifest, &name, &source_text(&source, &base)),
     };
     write_atomically(&file, &after)?;
     if let Err(e) = resolve_target(&target) {
@@ -445,8 +604,14 @@ pub fn add(opts: &Opts, cwd: &Path, home: Option<&Path>, prompt: &mut dyn Prompt
         }
         return Err(e);
     }
+    let mut note = packages_note(&target);
+    if let Some(folder) = folder.as_deref().filter(|f| inside_project(f))
+        && ignore_packages(&base, folder)?
+    {
+        note.push_str("\nadded it to .gitignore");
+    }
     let created = if existed { "" } else { " (created)" };
-    Ok(format!("added {name} ({}) to {}{created}", source_text(&source, &base), file.display()))
+    Ok(format!("added {name} ({}) to {}{created}{note}", source_text(&source, &base), file.display()))
 }
 
 fn git_url(s: &Source) -> String {
@@ -579,6 +744,44 @@ mod tests {
             manifest_value(&Source::Git { url: "https://h/x".into(), spec: GitRef::Branch("dev".into()) }, Path::new("/w")),
             "{ git = \"https://h/x\", branch = \"dev\" }"
         );
+    }
+
+    #[test]
+    fn the_packages_folder_is_written_near_the_top_of_the_manifest() {
+        let plain = "name = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\nhttp = { git = \"https://h/x\" }\n";
+        let set = with_packages(plain, "aion-dependencies");
+        assert_eq!(set, "name = \"app\"\npackages = \"aion-dependencies\"\nversion = \"0.1.0\"\n\n[dependencies]\nhttp = { git = \"https://h/x\" }\n");
+        assert_eq!(with_packages(&set, "vendor"), set.replace("aion-dependencies", "vendor"));
+        assert_eq!(with_packages(&set, "cache"), plain);
+        assert_eq!(with_packages(plain, "cache"), plain);
+        assert_eq!(with_packages("[dependencies]\n", "deps"), "packages = \"deps\"\n[dependencies]\n");
+
+        assert_eq!(packages_folder("").unwrap(), "aion-dependencies");
+        assert_eq!(packages_folder("  .\\deps\\ ").unwrap(), "deps");
+        assert_eq!(packages_folder("./third_party/aion/").unwrap(), "third_party/aion");
+        assert_eq!(packages_folder("cache").unwrap(), "cache");
+        assert!(packages_folder("a\"b").is_err());
+        assert!(inside_project("aion-dependencies") && !inside_project("../shared") && !inside_project("cache"));
+    }
+
+    #[test]
+    fn gitignore_is_created_or_extended_once() {
+        let dir = std::env::temp_dir().join(format!("aion-ignore-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join(".gitignore");
+
+        assert!(ignore_packages(&dir, "aion-dependencies").unwrap());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "# Packages downloaded by `aion install`\n/aion-dependencies/\n");
+        assert!(!ignore_packages(&dir, "aion-dependencies").unwrap(), "already listed");
+
+        std::fs::write(&file, "target\n*.exe").unwrap();
+        assert!(ignore_packages(&dir, "deps").unwrap());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "target\n*.exe\n\n# Packages downloaded by `aion install`\n/deps/\n");
+
+        std::fs::write(&file, "deps/\n").unwrap();
+        assert!(!ignore_packages(&dir, "deps").unwrap(), "written another way");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     struct Fake(Vec<(String, bool)>, bool);

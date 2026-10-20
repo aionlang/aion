@@ -428,6 +428,90 @@ fn aion_add_remove_update_and_tree_manage_dependencies() {
     assert_eq!(std::fs::read_to_string(branch.join("aion.project")).unwrap(), before);
 }
 
+/// `aion install` makes a project that keeps its packages in `aion-dependencies/`, next to a `.gitignore`.
+#[test]
+fn aion_install_downloads_packages_into_the_project() {
+    if Command::new("git").arg("--version").output().is_err() {
+        eprintln!("skipping: git is not installed");
+        return;
+    }
+    let root = scratch("install");
+    let home = root.join("home");
+    let cache = root.join("cache");
+    let env = [("HOME", home.as_path()), ("AION_CACHE", cache.as_path())];
+    let repo = root.join("http_repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let git = |dir: &Path, args: &[&str]| {
+        let ok = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(ok, "git {args:?} failed");
+    };
+    git(&repo, &["init", "-q"]);
+    write(&repo.join("lib.aion"), "fn version() = \"1.0\"\n");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "one"]);
+    git(&repo, &["tag", "v1"]);
+    let url = format!("file://{}", repo.display());
+
+    // no project yet and nobody to ask: the defaults make one, with the packages in aion-dependencies
+    let app = home.join("app");
+    std::fs::create_dir_all(&app).unwrap();
+    write(&app.join("main.aion"), "import http\nprintln(http.version())\n");
+    let out = aion_in_env(&app, &["install", &format!("{url}@v1"), "--as", "http"], &env);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stderr(&out);
+    assert!(text.contains("packages are downloaded into aion-dependencies") && text.contains(".gitignore"), "{text}");
+
+    let manifest = std::fs::read_to_string(app.join("aion.project")).unwrap();
+    assert!(manifest.contains("packages = \"aion-dependencies\"") && manifest.contains("http = {"), "{manifest}");
+    let ignore = std::fs::read_to_string(app.join(".gitignore")).unwrap();
+    assert!(ignore.contains("/aion-dependencies/"), "{ignore}");
+
+    let folders: Vec<_> = std::fs::read_dir(app.join("aion-dependencies"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    let package = folders.iter().find(|f| f.starts_with("http-")).unwrap_or_else(|| panic!("{folders:?}"));
+    assert!(app.join("aion-dependencies").join(package).join("lib.aion").is_file());
+    assert!(!app.join("aion-dependencies").join(package).join(".git").exists(), "just the files");
+    assert!(!cache.join("git").exists(), "nothing went to the shared cache");
+    assert_eq!(stdout(&aion_in_env(&app, &[], &env)).trim(), "1.0");
+
+    // a missing folder is downloaded again, to the same place
+    std::fs::remove_dir_all(app.join("aion-dependencies")).unwrap();
+    let out = aion_in_env(&app, &["install"], &env);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stderr(&out).contains("1 package installed"), "{}", stderr(&out));
+    assert!(app.join("aion-dependencies").join(package).join("lib.aion").is_file());
+
+    // `aion fmt` and `aion test` leave the downloaded code alone
+    write(&app.join("aion-dependencies").join(package).join("theirs.aion"), "x := 1   \n");
+    write(&app.join("mine.aion"), "x := 1   \n");
+    let out = aion_in_env(&app, &["fmt", "--check"], &env);
+    let report = format!("{}{}", stdout(&out), stderr(&out));
+    assert!(report.contains("mine.aion") && !report.contains("theirs.aion"), "{report}");
+
+    // the other answer: one copy in the shared cache, and nothing to ignore
+    let shared = home.join("shared");
+    std::fs::create_dir_all(&shared).unwrap();
+    let out = aion_in_env(&shared, &["install", &format!("{url}@v1"), "--as", "http", "--packages", "cache"], &env);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(!std::fs::read_to_string(shared.join("aion.project")).unwrap().contains("packages"));
+    assert!(!shared.join("aion-dependencies").exists() && !shared.join(".gitignore").exists());
+    assert!(cache.join("git").is_dir());
+
+    // `aion new` starts with a .gitignore too
+    let out = aion_in_env(&home, &["new", "fresh"], &env);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(std::fs::read_to_string(home.join("fresh/.gitignore")).unwrap().contains("/aion-dependencies/"));
+}
+
 // ── projects & dependencies ─────────────────────────────────────────
 
 /// A scratch directory unique to one test.

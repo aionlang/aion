@@ -14,7 +14,8 @@
 //! ```
 //!
 //! Git dependencies are cloned into the cache and pinned to an exact commit in
-//! `aion.lock` next to the project file.
+//! `aion.lock` next to the project file.  With `packages = "aion-dependencies"` they are put in that folder of the
+//! project instead (one folder per package and commit, without the `.git` directory).
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -25,6 +26,8 @@ use crate::diag::{Diagnostic, Result};
 
 pub const FILE_NAME: &str = "aion.project";
 pub const LOCK_NAME: &str = "aion.lock";
+/// Written into a folder of downloaded packages, so that `aion fmt` and `aion test` know to leave it alone.
+pub const PACKAGES_MARKER: &str = ".aion-packages";
 
 #[derive(Debug)]
 pub struct Project {
@@ -37,6 +40,8 @@ pub struct Project {
     pub link: Vec<String>,
     /// C source files (inside the project) compiled into the program.
     pub c: Vec<PathBuf>,
+    /// `packages`: the folder git dependencies are downloaded into (default: the shared cache).
+    pub packages: Option<PathBuf>,
     pub deps: Vec<Dependency>,
 }
 
@@ -141,7 +146,7 @@ pub fn load(file: &Path) -> Result<Project> {
         }
     };
     for (k, _, line) in &toml.top {
-        if !["name", "version", "entry", "lib", "link", "c"].contains(&k.as_str()) {
+        if !["name", "version", "entry", "lib", "link", "c", "packages"].contains(&k.as_str()) {
             return Err(Diagnostic::general(format!("{}:{line}: unknown key `{k}`", file.display())));
         }
     }
@@ -149,6 +154,10 @@ pub fn load(file: &Path) -> Result<Project> {
     let name = string("name")?.ok_or_else(|| err("missing `name`".into()))?;
     let entry = root.join(string("entry")?.unwrap_or_else(|| "main.aion".into()));
     let lib = string("lib")?.map(|l| root.join(l));
+    let packages = match string("packages")? {
+        Some(p) if p.trim().is_empty() => return Err(err("`packages` must name a folder, like \"aion-dependencies\"".into())),
+        other => other.map(|p| root.join(p)),
+    };
     let link = match toml.top.iter().find(|(k, _, _)| k == "link") {
         None => Vec::new(),
         Some((_, Value::List(names), line)) => {
@@ -217,7 +226,7 @@ pub fn load(file: &Path) -> Result<Project> {
             deps.push(Dependency { name: dep.clone(), source });
         }
     }
-    Ok(Project { root, name, entry, lib, link, c, deps })
+    Ok(Project { root, name, entry, lib, link, c, packages, deps })
 }
 
 // ── dependencies written in a script ────────────────────────────────
@@ -317,6 +326,7 @@ pub fn resolve(
         by_root: HashMap::new(),
         lock: Lock::read(&lock_path),
         lock_changed: false,
+        store: project.and_then(|p| p.packages.clone()),
     };
     r.by_root.insert(std::fs::canonicalize(&root).unwrap_or(root.clone()), 0);
     if let Some(p) = project {
@@ -334,6 +344,8 @@ struct Resolver {
     by_root: HashMap<PathBuf, usize>,
     lock: Lock,
     lock_changed: bool,
+    /// The project's `packages` folder, where git dependencies go instead of the cache.
+    store: Option<PathBuf>,
 }
 
 impl Resolver {
@@ -376,10 +388,17 @@ impl Resolver {
         Ok(())
     }
 
-    /// Make sure `url@spec` is in the cache at an exact commit; return its directory.
+    /// Make sure `url@spec` is at an exact commit, in the project's `packages` folder if it has one and in the cache
+    /// otherwise; return its directory.
     fn fetch_git(&mut self, name: &str, url: &str, spec: &GitRef) -> Result<PathBuf> {
         let key = format!("{url}#{}", spec.describe());
         let repo_dir = cache::dir().join("git").join(format!("{}-{:016x}", sanitize(name), cache::hash(&[url.as_bytes()])));
+        let store = self.store.clone();
+        // Where the files of one commit live: `aion-dependencies/http-9fceb02a41c3` or `<cache>/git/http-<hash>/<commit>`.
+        let place = |commit: &str| match &store {
+            Some(store) => store.join(format!("{}-{}", sanitize(name), commit.get(..12).unwrap_or(commit))),
+            None => repo_dir.join(commit),
+        };
         let git = |dir: &Path, args: &[&str]| -> Result<String> {
             let out = Command::new("git").arg("-C").arg(dir).args(args).output().map_err(|e| {
                 Diagnostic::general(format!("dependency `{name}`: cannot run `git`: {e}"))
@@ -396,31 +415,52 @@ impl Resolver {
         };
 
         if let Some(commit) = self.lock.get(&key) {
-            let dest = repo_dir.join(commit);
+            let dest = place(commit);
             if dest.is_dir() {
                 return Ok(dest);
             }
         }
 
-        std::fs::create_dir_all(&repo_dir)
-            .map_err(|e| Diagnostic::general(format!("cannot create {}: {e}", repo_dir.display())))?;
-        let tmp = repo_dir.join(format!("tmp-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        eprintln!("fetching {name} from {url}");
-        git(&repo_dir, &["clone", "--quiet", url, tmp.to_str().unwrap()])?;
-        let wanted = match (self.lock.get(&key), spec) {
-            (Some(c), _) => Some(c.to_string()),
-            (None, GitRef::Default) => None,
-            (None, GitRef::Tag(r) | GitRef::Branch(r) | GitRef::Rev(r)) => Some(r.clone()),
-        };
-        if let Some(rev) = wanted {
-            git(&tmp, &["checkout", "--quiet", &rev])?;
+        // The clone is made next to where it ends up, so that moving it into place is a rename.
+        let staging = store.clone().unwrap_or_else(|| repo_dir.clone());
+        std::fs::create_dir_all(&staging)
+            .map_err(|e| Diagnostic::general(format!("cannot create {}: {e}", staging.display())))?;
+        if store.is_some() {
+            let marker = staging.join(PACKAGES_MARKER);
+            if !marker.exists() {
+                let _ = std::fs::write(&marker, "Packages downloaded by `aion install` (see `packages` in aion.project).\n");
+            }
         }
-        let commit = git(&tmp, &["rev-parse", "HEAD"])?;
-        let dest = repo_dir.join(&commit);
+        let tmp = staging.join(format!("tmp-{}", std::process::id()));
+        remove_tree(&tmp);
+        eprintln!("fetching {name} from {url}");
+        let cloned = (|| -> Result<String> {
+            git(&staging, &["clone", "--quiet", url, tmp.to_str().unwrap()])?;
+            let wanted = match (self.lock.get(&key), spec) {
+                (Some(c), _) => Some(c.to_string()),
+                (None, GitRef::Default) => None,
+                (None, GitRef::Tag(r) | GitRef::Branch(r) | GitRef::Rev(r)) => Some(r.clone()),
+            };
+            if let Some(rev) = wanted {
+                git(&tmp, &["checkout", "--quiet", &rev])?;
+            }
+            git(&tmp, &["rev-parse", "HEAD"])
+        })();
+        let commit = match cloned {
+            Ok(commit) => commit,
+            Err(e) => {
+                remove_tree(&tmp);
+                return Err(e);
+            }
+        };
+        let dest = place(&commit);
         if dest.is_dir() {
-            let _ = std::fs::remove_dir_all(&tmp);
+            remove_tree(&tmp);
         } else {
+            if store.is_some() {
+                // a copy in the project is just the files; the history stays in git
+                remove_tree(&tmp.join(".git"));
+            }
             std::fs::rename(&tmp, &dest)
                 .map_err(|e| Diagnostic::general(format!("cannot move the clone into place: {e}")))?;
         }
@@ -430,6 +470,29 @@ impl Resolver {
         }
         Ok(dest)
     }
+}
+
+/// Delete a directory tree, including the read-only files git leaves in `.git` (Windows will not delete those).
+fn remove_tree(path: &Path) {
+    #[cfg(windows)]
+    {
+        #[allow(clippy::permissions_set_readonly_false)]
+        fn writable(dir: &Path) {
+            let Ok(entries) = std::fs::read_dir(dir) else { return };
+            for entry in entries.flatten() {
+                let (path, Ok(meta)) = (entry.path(), entry.metadata()) else { continue };
+                if meta.is_dir() {
+                    writable(&path);
+                } else if meta.permissions().readonly() {
+                    let mut permissions = meta.permissions();
+                    permissions.set_readonly(false);
+                    let _ = std::fs::set_permissions(&path, permissions);
+                }
+            }
+        }
+        writable(path);
+    }
+    let _ = std::fs::remove_dir_all(path);
 }
 
 /// `lib.aion`, then `<name>.aion`, in the package root.

@@ -42,6 +42,9 @@ const USAGE: &str = concat!(
     "  aion new <name>                     create a project directory\n",
     "  aion add <source> [--as NAME] [--tag T|--branch B|--rev R] [--script FILE] [--yes]\n",
     "                                      add a dependency (a git repo like github.com/me/http@v1, or a path)\n",
+    "  aion install [<source>] [--packages DIR]\n",
+    "                                      like add; a new project asks where to keep its packages (default\n",
+    "                                      aion-dependencies/). With no source: download what the project needs\n",
     "  aion remove <name>                  remove a dependency\n",
     "  aion update [name]                  fetch newer commits for git dependencies\n",
     "  aion tree [FILE]                    show the dependency tree\n",
@@ -330,6 +333,7 @@ fn new_project(name: &str) -> Result<(), Diagnostic> {
     std::fs::create_dir_all(dir).map_err(|e| Diagnostic::general(format!("cannot create {name}: {e}")))?;
     write(project::FILE_NAME, format!("name = \"{stem}\"\nversion = \"0.1.0\"\nentry = \"main.aion\"\n\n[dependencies]\n"))?;
     write("main.aion", format!("println(\"Hello from {stem}!\")\n"))?;
+    manage::ignore_packages(dir, manage::DEFAULT_PACKAGES).map_err(Diagnostic::general)?;
     eprintln!("created {name}/  — try: cd {name} && aion");
     Ok(())
 }
@@ -343,6 +347,7 @@ fn manage_command(command: &str, args: &[String]) -> ExitCode {
         let mut prompt = manage::Terminal { yes: opts.yes };
         match command {
             "add" => manage::add(&opts, &cwd, home.as_deref(), &mut prompt),
+            "install" => manage::install(&opts, &cwd, home.as_deref(), &mut prompt),
             "remove" => manage::remove(&opts, &cwd, home.as_deref(), &mut prompt),
             "update" => manage::update(&opts, &cwd, home.as_deref(), &mut prompt),
             _ => manage::tree(&opts, &cwd, home.as_deref(), &mut prompt),
@@ -385,7 +390,7 @@ fn run() -> Result<ExitCode, Failure> {
         Some("fmt") => return Ok(testing::fmt(&args[1..])),
         _ => {}
     }
-    if let Some(command) = args.first().map(String::as_str).filter(|c| ["add", "remove", "update", "tree"].contains(c)) {
+    if let Some(command) = args.first().map(String::as_str).filter(|c| ["add", "install", "remove", "update", "tree"].contains(c)) {
         return Ok(manage_command(command, &args[1..]));
     }
     let cli = match parse_args(&args) {

@@ -15,6 +15,7 @@ name = "myapp"
 version = "0.1.0"
 entry = "main.aion"           # optional; this is the default
 lib = "src/lib.aion"          # optional: what `import myapp` loads in a dependent project
+packages = "aion-dependencies"  # optional: download git dependencies into this folder (default: the shared cache)
 link = ["sqlite3"]            # optional: system libraries the package's C code needs (-lsqlite3)
 c = ["native/glue.c"]         # optional: C files compiled into programs that use the package
 
@@ -23,7 +24,7 @@ utils = { path = "../utils" }
 http  = { git = "https://github.com/someone/http", tag = "v1.2" }
 ```
 
-`aion new myapp` creates this layout.
+`aion new myapp` creates this layout, and a `.gitignore` that keeps `aion-dependencies/` out of git.
 
 `c` lists C source files of the package (paths inside the project); they are compiled into every program that
 uses it and may `#include "aion.h"`; see [packages.md](packages.md).  `link` lists system libraries (`-l<name>`) that are added to the link step of any program
@@ -38,6 +39,7 @@ that uses the package, so a package with its own `extern fn` bindings can call i
 | `aion file.aion`           | run one file; if it lies inside a project, that project's dependencies are available |
 | `aion build [-o out]`      | build an executable (named after the project by default)        |
 | `aion add <source>`        | add a dependency to the project (or a script) — see below       |
+| `aion install [<source>]`  | `add`, and download it; a new project asks where to keep packages. With no source: download what the project needs |
 | `aion remove <name>`       | remove one                                                      |
 | `aion update [name]`       | fetch newer commits for git dependencies (all, or one)          |
 | `aion tree [file]`         | show the dependency tree with the pinned commits                |
@@ -140,6 +142,30 @@ offline — even if a tag is moved or the repository disappears — as long as t
 cache still has the clone.  Commit `aion.lock` to your repository.  To move to a
 newer version, delete its line from `aion.lock` (or the file) and build again.
 Git dependencies need `git` on `PATH`.
+
+### Keeping the packages in the project
+
+By default the clones live in the shared cache, which `aion clean` empties.  To keep a project's packages
+beside it, run `aion install` instead of `aion add`:
+
+```text
+$ aion install github.com/someone/http@v1.2
+No aion.project in this folder or above. Create one here? [Y/n]
+Where should packages be downloaded? A folder in the project, or `cache` to share one copy between projects. [aion-dependencies]
+added http (github.com/someone/http@tag:v1.2) to aion.project (created)
+packages are downloaded into aion-dependencies
+added it to .gitignore
+```
+
+This writes `packages = "aion-dependencies"` into `aion.project` and adds the folder to `.gitignore`
+(creating the file if there is none).  Every git dependency, including the dependencies of dependencies, is then
+downloaded to `aion-dependencies/<name>-<commit>/` as plain files, without the `.git` folder.  Because
+`aion.lock` pins the commits, `aion install` with no source downloads exactly the same files again, for
+example after a fresh `git clone` of your project.  Answer `cache` (or pass `--packages cache`) to keep using
+the shared cache, `--yes` to take the defaults without questions, and `--packages DIR` to choose another folder, also
+for an existing project.  Delete the line from `.gitignore` if you prefer to commit the packages.
+
+`aion fmt` and `aion test` skip a folder of downloaded packages.
 
 ## The build cache
 
