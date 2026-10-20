@@ -506,8 +506,9 @@ void *aion_regex_compile(const char *pattern, const char *flags) {
             Header h = {MAGIC, c.ncode, c.nranges, c.ngroups, final_flags, (int32_t)c.names_len};
             memcpy(p, &h, sizeof h);
             memcpy(p + sizeof h, c.code, (size_t)c.ncode * sizeof(Inst));
-            memcpy(p + sizeof h + (size_t)c.ncode * sizeof(Inst), c.ranges, (size_t)c.nranges * 8);
-            memcpy(p + sizeof h + (size_t)c.ncode * sizeof(Inst) + (size_t)c.nranges * 8, c.names, c.names_len);
+            /* c.ranges and c.names are NULL when empty, and memcpy must not get a NULL pointer even for 0 bytes */
+            if (c.nranges > 0) memcpy(p + sizeof h + (size_t)c.ncode * sizeof(Inst), c.ranges, (size_t)c.nranges * 8);
+            if (c.names_len > 0) memcpy(p + sizeof h + (size_t)c.ncode * sizeof(Inst) + (size_t)c.nranges * 8, c.names, c.names_len);
         }
     }
     for (size_t i = 0; i < c.nnodes; i++) free(c.nodes[i]);
