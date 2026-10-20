@@ -2,11 +2,12 @@ name: Release
 
 # Builds a self-contained `aion` for each platform: the executable has the Zig C compiler embedded
 # (see toolchain/zig.lock and scripts/bundle-zig.sh), so it compiles programs on a machine with no
-# C compiler installed.  Run it by hand from the Actions tab, or push a tag such as v0.3.0 (which also
-# publishes a GitHub release).
+# C compiler installed.  It runs on every push to main (to check that all platforms still build), by hand
+# from the Actions tab, and on a tag such as v0.3.0, which also publishes a GitHub release.
 
 on:
   push:
+    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
 
