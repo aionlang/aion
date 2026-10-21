@@ -1246,6 +1246,19 @@ impl<'a> Parser<'a> {
         Self::tuple_expr(items, span)
     }
 
+    /// A fresh copy of a name pattern (`x`, `_`, `(a, b)`), so it can be bound more than once.
+    fn copy_pattern(&mut self, pattern: &Expr) -> Result<Expr> {
+        let span = pattern.span;
+        Ok(match &pattern.kind {
+            ExprKind::Name(n) => Expr { kind: ExprKind::Name(n.clone()), span },
+            ExprKind::Call { args, .. } => {
+                let items = args.iter().map(|a| self.copy_pattern(&a.value)).collect::<Result<Vec<_>>>()?;
+                Self::tuple_expr(items, span)?
+            }
+            _ => return Err(Diagnostic::new("expected a name", span)),
+        })
+    }
+
     /// A name, or names in parentheses (which may nest): `x`, `(a, b)`, `(a, (b, c))`.
     fn pattern(&mut self) -> Result<Expr> {
         if self.peek() != Some(Token::LParen) {
@@ -1835,14 +1848,19 @@ impl<'a> Parser<'a> {
         let start = self.expect(Token::LBrace)?.span;
         let (params, explicit, body) = self.scoped(false, false, |p| {
             let save = p.pos;
-            let (params, explicit) = match p.lambda_params() {
-                Some(params) => (params, true),
+            let (params, explicit, taken_apart) = match p.lambda_params() {
+                Some((params, taken_apart)) => (params, true, taken_apart),
                 None => {
                     p.pos = save;
-                    (Vec::new(), false)
+                    (Vec::new(), false, Vec::new())
                 }
             };
             let mut body = Vec::new();
+            // `{ (k, v) -> … }`: the parameter is taken apart first thing
+            for (name, pattern) in taken_apart {
+                let value = Expr { kind: ExprKind::Name(name), span: pattern.span };
+                p.bind(pattern, value, true, &mut body)?;
+            }
             loop {
                 match p.peek() {
                     Some(Token::RBrace) => break,
@@ -1860,19 +1878,28 @@ impl<'a> Parser<'a> {
     }
 
     /// `a, b: Int ->`, or just `->`.  `None` if this isn't a parameter list.
-    fn lambda_params(&mut self) -> Option<Vec<LambdaParam>> {
+    /// The parameters, and the ones written as a pattern (`(k, v)`) with the name they were given.
+    fn lambda_params(&mut self) -> Option<(Vec<LambdaParam>, Vec<(String, Expr)>)> {
         let mut params = Vec::new();
+        let mut patterns = Vec::new();
         if self.eat(Token::Arrow) {
-            return Some(params);
+            return Some((params, patterns));
         }
         loop {
-            let name = self.ident().ok()?;
-            let ty = if self.eat(Token::Colon) { Some(self.type_ref().ok()?) } else { None };
-            params.push(LambdaParam { name, ty });
+            if self.peek() == Some(Token::LParen) {
+                let pattern = self.pattern().ok()?;
+                let name = Ident { name: self.temp("l"), span: pattern.span };
+                patterns.push((name.name.clone(), pattern));
+                params.push(LambdaParam { name, ty: None });
+            } else {
+                let name = self.ident().ok()?;
+                let ty = if self.eat(Token::Colon) { Some(self.type_ref().ok()?) } else { None };
+                params.push(LambdaParam { name, ty });
+            }
             if self.eat(Token::Comma) {
                 continue;
             }
-            return self.eat(Token::Arrow).then_some(params);
+            return self.eat(Token::Arrow).then_some((params, patterns));
         }
     }
 
@@ -1947,6 +1974,8 @@ impl<'a> Parser<'a> {
                 }
                 let covered_before = covered.len();
                 let mut cond: Option<Expr> = None;
+                // `is P(x, y) ->`: the names to take the value apart into, and what is being taken apart
+                let mut parts: Option<(Vec<Expr>, String, Span)> = None;
                 loop {
                     let c = if p.at_is_arm() {
                         let negated = p.eat(Token::Bang);
@@ -1957,6 +1986,21 @@ impl<'a> Parser<'a> {
                         let ty = p.type_ref()?;
                         // a plain variable is tested itself, so it is smart-cast inside the branch
                         let tested = subject_name.clone().unwrap_or_else(|| tmp.clone());
+                        if p.peek() == Some(Token::LParen) && !negated && !p.nl() {
+                            p.bump();
+                            let mut names = Vec::new();
+                            while p.peek() != Some(Token::RParen) {
+                                names.push(p.pattern()?);
+                                if !p.eat(Token::Comma) {
+                                    break;
+                                }
+                            }
+                            p.expect(Token::RParen)?;
+                            if names.is_empty() {
+                                return Err(Diagnostic::new("name the parts to take out, e.g. `is Point(x, y)`", at));
+                            }
+                            parts = Some((names, tested.clone(), at));
+                        }
                         let value = Expr { kind: ExprKind::Name(tested), span: subject_span };
                         Expr { kind: ExprKind::Is { value: Box::new(value), ty, negated }, span: at.to(p.prev_span()) }
                     } else if p.peek() == Some(Token::In) {
@@ -1995,18 +2039,43 @@ impl<'a> Parser<'a> {
                     if !p.eat(Token::Comma) {
                         break;
                     }
+                    if let Some((_, _, at)) = &parts {
+                        return Err(Diagnostic::new("an arm that takes a value apart cannot have alternatives", *at));
+                    }
                 }
+                // the part names, bound once for the guard (in a block) and once for the body
+                let take_apart = |p: &mut Self| -> Result<Vec<Stmt>> {
+                    let mut out = Vec::new();
+                    if let Some((names, tested, at)) = &parts {
+                        for (i, name) in names.iter().enumerate() {
+                            let copy = p.copy_pattern(name)?;
+                            p.bind(copy, Self::component(tested, i + 1, *at), true, &mut out)?;
+                        }
+                    }
+                    Ok(out)
+                };
                 // `1, 2 if x > 0 ->`: the arm applies only when the guard holds too (and then covers nothing for a
                 // `when` over an enum)
                 if p.peek() == Some(Token::If) {
                     p.bump();
                     let guard = p.expr()?;
                     let span = cond.as_ref().expect("an arm has a pattern").span.to(guard.span);
+                    let mut bound = take_apart(p)?;
+                    let guard = if bound.is_empty() {
+                        guard
+                    } else {
+                        // the guard may use the parts: evaluate it in a block that binds them first
+                        let gspan = guard.span;
+                        bound.push(Self::expr_stmt(guard));
+                        Expr { kind: ExprKind::Block(bound), span: gspan }
+                    };
                     cond = Some(Expr { kind: ExprKind::Binary(BinOp::And, Box::new(cond.take().unwrap()), Box::new(guard)), span });
                     covered.truncate(covered_before);
                 }
                 p.expect(Token::Arrow)?;
-                arms.push((cond.unwrap(), p.arm_body()?));
+                let mut body = take_apart(p)?;
+                body.extend(p.arm_body()?);
+                arms.push((cond.unwrap(), body));
             }
         })?;
         let end = self.expect(Token::RBrace)?.span;
@@ -2357,6 +2426,21 @@ mod tests {
         let err = |src: &str| Parser::new(0, src, 0).and_then(|mut p| p.expr()).unwrap_err().message;
         assert!(err("\"\"\"never closed").contains("unterminated"));
         assert!(err("r\"\"\"never closed").contains("unterminated"));
+    }
+
+    #[test]
+    fn arms_and_lambda_parameters_can_take_values_apart() {
+        // `is P(x, y) ->` binds the parts first thing in the branch
+        let e = parse_expr("when (v) { is P(x, y) -> x + y\n else -> 0 }");
+        let ExprKind::Block(stmts) = &e.kind else { panic!("expected a block, got {e:?}") };
+        let StmtKind::Expr(top) = &stmts[1].kind else { panic!() };
+        let ExprKind::If { then, .. } = &top.kind else { panic!("expected an if") };
+        assert_eq!(then.len(), 3); // $d := v; x := …; y := …; then the body… (temp, x, y, body)
+        // a parameter written as a pattern becomes a plain parameter plus a binding
+        let ExprKind::Lambda { params, body, .. } = &parse_expr("{ (k, v) -> k }").kind else { panic!() };
+        assert_eq!(params.len(), 1);
+        assert!(params[0].name.name.starts_with("$l"));
+        assert!(body.len() >= 3);
     }
 
     #[test]

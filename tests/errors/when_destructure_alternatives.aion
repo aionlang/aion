@@ -1,0 +1,6 @@
+// error: an arm that takes a value apart cannot have alternatives
+data type P(x: Int, y: Int)
+fn f(v: Any) = when (v) {
+    is P(x, y), is P(a, b) -> 1
+    else -> 0
+}

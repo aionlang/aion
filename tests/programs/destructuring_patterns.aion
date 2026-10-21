@@ -1,0 +1,22 @@
+// `when` arms and lambda parameters can take a value apart: `is P(x, y) ->` and `{ (k, v) -> … }`.
+data type P(x: Int, y: Int)
+data type Seg(from: P, to: P)
+fn show(v: Any) = when (v) {
+    is Seg(a, _) -> "seg from ${a.x},${a.y}"
+    is P(x, y) if x > y -> "P with x>y: $x $y"
+    is P(x, _) -> "P x=$x"
+    else -> "other"
+}
+println(show(P(5, 1)))
+println(show(P(1, 5)))
+println(show(3))
+println(show(Seg(P(1, 2), P(3, 4))))
+
+m := {"a": 1, "b": 2}
+m.entries().forEach { (k, v) -> println("$k=$v") }
+pairs := ["x", "y"].zip([10, 20])
+println(pairs.map { (name, n) -> "$name$n" })
+println(pairs.fold(0) { acc, (name, n) -> acc + n })
+nested := [(1, (2, 3))]
+println(nested.map { (a, (b, c)) -> a + b + c })
+println([1, 2, 3].map { it * 2 })

@@ -1,0 +1,10 @@
+P with x>y: 5 1
+P x=1
+other
+seg from 1,2
+a=1
+b=2
+[x10, y20]
+30
+[6]
+[2, 4, 6]
