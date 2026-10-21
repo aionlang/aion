@@ -21,6 +21,8 @@
   all threads while it runs, and a program whose threads all wait for each other is reported as a deadlock.
 
 ### Tooling
+- **`aion doc`.** Writes a Markdown reference from the `/** … */` comments in front of declarations (`@param`,
+  `@return`, code blocks), for a file, a folder or the project; `-o file` writes it to a file.
 - **Self-contained builds.** `aion` can carry its own C compiler (Zig), and SQLite, zlib and utf8proc come with it, so
   a program builds on a machine with nothing installed.  Without one, `aion` falls back to `zig cc` when there is no
   `clang`.  See docs/LOCAL-BUILDING.MD.

@@ -1519,6 +1519,28 @@ import std.math            // …explicitly (aion.math works too)
   be assigned (`m.label = "x"`).
 * Everything a module defines is public.  Circular imports are an error.
 
+## Documentation comments
+
+A comment that starts with `/**` and stands right in front of a function, type, interface, enum, synonym, a
+member of a type or an extension method describes it; `aion doc` collects these into a reference
+(see [projects.md](projects.md#documentation)).  The stars at the start of each line are not part of the text, the
+text is Markdown, and `@param name text` and `@return text` lines become lists:
+
+```text
+/**
+ * Add two numbers.
+ *
+ *     add(1, 2)       // an indented block is code
+ *
+ * @param a the first number
+ * @return the sum
+ */
+fn add(a: Int, b: Int) = a + b
+```
+
+A `/**` comment that is not followed by a declaration (one at the top of a file, say) describes the file.  Names
+starting with `_` are [private](#modules) and left out.  To the compiler these are comments like any other.
+
 ## Built-in functions
 
 | Call                       | Effect                                                  |

@@ -165,7 +165,23 @@ example after a fresh `git clone` of your project.  Answer `cache` (or pass `--p
 the shared cache, `--yes` to take the defaults without questions, and `--packages DIR` to choose another folder, also
 for an existing project.  Delete the line from `.gitignore` if you prefer to commit the packages.
 
-`aion fmt` and `aion test` skip a folder of downloaded packages.
+`aion fmt`, `aion doc` and `aion test` skip a folder of downloaded packages.
+
+## Documentation
+
+`aion doc` writes an API reference, in Markdown, from the declarations of the project and the
+[`/** … */` comments](language.md#documentation-comments) in front of them:
+
+```text
+aion doc                      # the whole project (not tests/ or examples/), to the standard output
+aion doc src/lib.aion         # just this file, or every file in this folder
+aion doc -o API.md            # to a file
+```
+
+Each file is a section, in the order of the source: every public function, type (with its fields, methods and
+computed properties), enum, interface and synonym gets a heading, its signature and its comment.  Names that start
+with `_` and the members the compiler makes for a `data type` are left out.  A file that does not parse is
+skipped with a message, and the exit status is 1.
 
 ## The build cache
 

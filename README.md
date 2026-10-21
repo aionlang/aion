@@ -114,7 +114,7 @@ can still change between versions (see the [changelog](CHANGELOG.MD)).
 |------|-------|
 | Language | functions, types, data types, generics, interfaces, inheritance, closures, nullable types, tuples, operators on your own types, `defer` / `try`, tasks, threads and channels, type synonyms |
 | Standard library | text, collections, lazy streams, files, time, random, regex, JSON, CSV, sockets, HTTP and TLS, SQLite, zlib, hashing |
-| Tooling | native builds with a build cache, project files and git dependencies, formatter (`aion fmt`), test runner (`aion test`), [VS Code extension](https://github.com/aionlang/aion-vscode), Docker image |
+| Tooling | native builds with a build cache, project files and git dependencies, formatter (`aion fmt`), test runner (`aion test`), API reference from doc comments (`aion doc`), [VS Code extension](https://github.com/aionlang/aion-vscode), Docker image |
 | Linux, macOS | build instructions in [docs/LOCAL-BUILDING.MD](docs/LOCAL-BUILDING.MD) |
 | Windows | the whole test suite passes cross-compiled and run under Wine; not yet run on real Windows ([details](docs/LOCAL-BUILDING.MD#windows)); needs a MinGW clang |
 
