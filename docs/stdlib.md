@@ -511,6 +511,39 @@ text and `lastError()` gives the position and the problem.  Build documents with
 `array()`, `string(s)`, `int(n)`, `number(x)`, `bool(b)` and `nil()`.  Whole numbers stay exact
 `Int`s; nesting deeper than 512 levels is refused.
 
+#### Data types as JSON
+
+In a file that imports `json`, every `data type` gets three more members, so a record goes to JSON and back
+without writing the conversion:
+
+```aion
+import json
+
+data type Address(street: String, zip: Int)
+data type User(name: String, age: Int, address: Address, tags: List<String>, nick: String?)
+
+u := User("Ann", 31, Address("Main St", 12345), ["admin", "dev"], null)
+text := u.toJson().compact()
+println(text)
+// > {"name":"Ann","age":31,"address":{"street":"Main St","zip":12345},"tags":["admin","dev"],"nick":null}
+
+back := User.parseJson(text)
+println(back?.address?.street, back?.tags)
+// > Main St [admin, dev]
+
+println(User.parseJson("{\"name\": \"Bob\"}"))      // fields are missing
+// > null
+```
+
+`toJson()` gives a `Json` value (an object with the parameters as fields), `User.fromJson(value)` reads a
+`Json?` and `User.parseJson(text)` reads text.  The two readers give `null` when the document is not valid, a
+field is missing, or one has the wrong kind of value; a field of a nullable type may be missing or `null`
+(and is `null` also when its value does not fit).  A field can be an `Int`, `Float`, `Bool`, `String`, a
+`List` or a `Map<String, …>` of those, another data type, or any of them nullable.  A data type with a field
+of another kind (a `Char`, a tuple, a function, a plain `type`), and a generic data type, gets no JSON members, and
+a member of those names that you write yourself is kept.  The members are generated where `json` is
+imported, under the name it is imported as (`import json as j`).
+
 ### `std.regex`
 
 ```aion

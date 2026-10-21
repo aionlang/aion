@@ -480,7 +480,9 @@ println(visited.size())                             // 2
 `equals(other)`, `hashCode()`, `copy(…)` (every parameter defaults to the current value) and
 `component1()`, `component2()`, … come from the primary parameters; a method of the same name that
 you write yourself is kept.  A data type cannot be `open` or extend another type.  Fields hold
-what they hold: a `List` field is compared by identity, a nested data type by value.
+what they hold: a `List` field is compared by identity, a nested data type by value.  In a file that
+imports `json`, a data type also gets `toJson()`, `fromJson(…)` and `parseJson(…)` (see
+[std.json](stdlib.md#data-types-as-json)).
 
 ### Computed properties
 

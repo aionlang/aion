@@ -3,6 +3,9 @@
 ## Unreleased
 
 ### Language
+- **JSON for data types.** In a file that imports `json`, a `data type` gets `toJson()`, `static fromJson(value)` and
+  `static parseJson(text)`, generated at compile time from its parameters (numbers, strings, booleans, lists, maps
+  with string keys, nested data types and nullable fields); a document that does not fit gives `null`.
 - **Printing functions.** `println(add)` shows `<function add(a: Int, b: Int) -> Int>`; a lambda is an
   `<anonymous function (x: Int) -> Int>`, and the standard library's functions say `stdlib`.  Interpolation, lists and
   the fields of an object show functions the same way.
