@@ -45,7 +45,7 @@ println(add5(1), add9(1))
 
 // ── each iteration captures its own variable ─────────────────────────
 type Node(f: (Int) -> Int) {
-    next: Node
+    next: Node?
 }
 chain := Node({ it })
 for i in 1..=3 {
@@ -56,7 +56,7 @@ for i in 1..=3 {
 cur := chain
 for _ in 0..3 {
     print(cur.f(100), "")
-    cur = cur.next
+    cur = cur.next!!
 }
 println()                                           // 103 102 101
 

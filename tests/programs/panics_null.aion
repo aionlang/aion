@@ -1,7 +1,6 @@
 // exit: 1
 // stderr: null reference
 type Box {
-    inner: Box
     value: Int
     constructor(value: Int) {
         this.value = value
@@ -11,6 +10,7 @@ type Box {
 fn main() {
     b := Box(1)
     println(b.value)
-    println(b.inner.value)
+    boxes := Array<Box>(1)   // slots start out null
+    println(boxes[0].value)
     println("not reached")
 }

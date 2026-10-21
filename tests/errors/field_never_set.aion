@@ -1,0 +1,4 @@
+// error: the field `next` is never given a value, so it would be null
+type Node(value: Int) {
+    next: Node
+}

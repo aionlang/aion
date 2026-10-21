@@ -926,6 +926,30 @@ impl<'a> Checker<'a> {
         if fields.len() > 64 {
             return Err(Diagnostic::new("a type can have at most 64 fields", td.name.span));
         }
+        // An object or function field that nothing sets would stay null, and `Type` promises it is not.
+        for f in &td.fields {
+            let is_param = matches!(&f.ty.kind, ast::TypeKind::Named { name, args } if args.is_empty() && td.type_params.iter().any(|t| &t.name == name));
+            let Some(have) = fields.iter().find(|g| g.name == f.name.name) else { continue };
+            if f.init.is_some() || is_param || !matches!(have.ty, Ty::Obj(_) | Ty::Fn(_)) {
+                continue;
+            }
+            let mut set = false;
+            for stmts in td.inits.iter().chain(td.ctor.iter().map(|c| &c.body)) {
+                body::walk_stmts(stmts, false, &mut |a| set |= a.name == f.name.name && !a.in_lambda);
+            }
+            if !set {
+                return Err(Diagnostic::new(
+                    format!("the field `{}` is never given a value, so it would be null", f.name.name),
+                    f.name.span,
+                )
+                .hint(format!(
+                    "give it a value (`{}: {} = …`), set it in `init` or the constructor, or declare it optional: `{}?`",
+                    f.name.name,
+                    self.t.ty_name(have.ty),
+                    self.t.ty_name(have.ty)
+                )));
+            }
+        }
         if td.primary.is_some()
             && let Some(c) = &td.ctor
         {

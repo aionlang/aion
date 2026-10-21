@@ -6,7 +6,7 @@ import std.gc;
 
 type Cell {
     value: Int
-    next: Cell
+    next: Cell?
     constructor(value: Int) {
         this.value = value
     }
@@ -57,7 +57,7 @@ fn main() {
         total += n.value
         count += 1
         if (count < 300000) {
-            n = n.next
+            n = n.next!!
         }
     }
     println(total)

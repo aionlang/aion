@@ -4,7 +4,7 @@
 type Node {
     value: Int
     text: String
-    next: Node
+    next: Node?
 
     constructor(value: Int) {
         this.value = value
@@ -41,10 +41,10 @@ fn main() {
     k := 0
     while (k < 100) {
         sum += n.value
-        n = n.next
+        n = n.next!!
         k += 1
     }
     println(sum)
     println(head.text)
-    println(head.next.next.text)
+    println(head.next!!.next!!.text)
 }

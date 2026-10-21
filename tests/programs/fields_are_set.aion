@@ -1,0 +1,22 @@
+// A field of an object type needs a value from an initialiser, `init`, the constructor or a parameter;
+// one that may be missing is declared optional.
+type Inner(n: Int)
+type A(inner: Inner)                      // a constructor parameter
+type B {
+    inner: Inner = Inner(2)               // an initialiser
+}
+type C {
+    inner: Inner
+    init { inner = Inner(3) }             // assigned in init
+}
+type D {
+    inner: Inner
+    constructor(n: Int) { this.inner = Inner(n) }   // assigned in the constructor
+}
+type E {
+    inner: Inner?                         // may be missing
+}
+type F<T> {
+    value: T                              // depends on the instance, not checked
+}
+println(A(Inner(1)).inner.n, B().inner.n, C().inner.n, D(4).inner.n, E().inner == null)
