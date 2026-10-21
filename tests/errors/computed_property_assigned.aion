@@ -1,0 +1,6 @@
+// error: `double` is a computed property, so it cannot be assigned
+type R(w: Int) {
+    double: Int get() = w * 2
+}
+r := R(2)
+r.double = 5

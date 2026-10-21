@@ -469,6 +469,8 @@ enum Named {
     Local(LocalId),
     /// A field of `this`.
     Field(usize, Ty),
+    /// A computed property of `this` (its getter).
+    Property(FnId),
     Global(GlobalId),
     Fn(FnId),
     Type(TypeId),
@@ -590,6 +592,11 @@ impl<'c, 'a> Cx<'c, 'a> {
             && let Some(i) = self.ck.t.ty(ty).fields.iter().position(|f| f.name == n)
         {
             return Some(Named::Field(i, self.ck.t.ty(ty).fields[i].ty));
+        }
+        if let Some(ty) = self.this
+            && let Some(&getter) = self.ck.t.ty(ty).methods.get(&format!("$get_{n}"))
+        {
+            return Some(Named::Property(getter));
         }
         match self.ck.t.lookup(self.module, n) {
             Some(Sym::Fn(id)) => Some(Named::Fn(id)),
@@ -1318,6 +1325,7 @@ impl<'c, 'a> Cx<'c, 'a> {
                     let obj = self.this_expr().expect("fields imply `this`");
                     Ok((Target::Field { obj, index }, ty))
                 }
+                Some(Named::Property(_)) => Err(computed(n, target.span)),
                 Some(Named::Global(g)) => {
                     if self.ck.t.globals[g].immutable {
                         return Err(read_only(n, target.span));
@@ -1341,6 +1349,11 @@ impl<'c, 'a> Cx<'c, 'a> {
                     return Ok((Target::Global(g), self.global_use(g, field.span)?));
                 }
                 let obj = self.value(obj)?;
+                if let Ty::Obj(t) = obj.ty
+                    && self.ck.t.ty(t).methods.contains_key(&format!("$get_{}", field.name))
+                {
+                    return Err(computed(&field.name, field.span));
+                }
                 let (index, ty) = self.field_of(&obj, field)?;
                 Ok((Target::Field { obj, index }, ty))
             }
@@ -2369,6 +2382,12 @@ impl<'c, 'a> Cx<'c, 'a> {
                     let obj = self.this_expr().expect("fields imply `this`");
                     mk(K::Field { obj: Box::new(obj), index }, ty)
                 }
+                Some(Named::Property(getter)) => {
+                    let obj = self.this_expr().expect("properties imply `this`");
+                    let ty = obj.ty;
+                    let call = self.call_values(getter, Some(obj), Vec::new(), e.span)?;
+                    self.virtual_on(call, ty, &format!("$get_{n}"))
+                }
                 Some(Named::Global(g)) => {
                     let ty = self.global_use(g, e.span)?;
                     self.narrowed_global(mk(K::Global(g), ty), g)
@@ -2426,8 +2445,7 @@ impl<'c, 'a> Cx<'c, 'a> {
                     };
                 }
                 let obj = self.value(obj)?;
-                let (index, ty) = self.field_of(&obj, field)?;
-                mk(K::Field { obj: Box::new(obj), index }, ty)
+                self.member_value(obj, field)?
             }
 
             A::Call { callee, type_args, args } => self.call(callee, type_args, args, e.span, None)?,
@@ -2523,10 +2541,7 @@ impl<'c, 'a> Cx<'c, 'a> {
 
             A::SafeField(obj, field) => {
                 let recv = self.value(obj)?;
-                self.safe_access(recv, e.span, |cx, plain| {
-                    let (index, ty) = cx.field_of(&plain, field)?;
-                    Ok(mk(K::Field { obj: Box::new(plain), index }, ty))
-                })?
+                self.safe_access(recv, e.span, |cx, plain| cx.member_value(plain, field))?
             }
 
             A::Slice { obj, start, end, inclusive } => {
@@ -2657,6 +2672,23 @@ impl<'c, 'a> Cx<'c, 'a> {
         then = self.coerce(then, ty, span)?;
         other = self.coerce(other, ty, span)?;
         Ok(mk(K::Cond { cond: Box::new(cond), then: Box::new(then), otherwise: Box::new(other) }, ty))
+    }
+
+    /// `obj.name`: a field, or a computed property (read through its getter, the method `$get_name`).
+    fn member_value(&mut self, obj: hir::Expr, field: &ast::Ident) -> Result<hir::Expr> {
+        if let Ty::Obj(t) = obj.ty {
+            let info = self.ck.t.ty(t);
+            let getter = format!("$get_{}", field.name);
+            if !info.fields.iter().any(|f| f.name == field.name)
+                && let Some(&method) = info.methods.get(&getter)
+            {
+                let ty = obj.ty;
+                let call = self.call_values(method, Some(obj), Vec::new(), field.span)?;
+                return Ok(self.virtual_on(call, ty, &getter));
+            }
+        }
+        let (index, ty) = self.field_of(&obj, field)?;
+        Ok(mk(K::Field { obj: Box::new(obj), index }, ty))
     }
 
     fn field_of(&self, obj: &hir::Expr, field: &ast::Ident) -> Result<(usize, Ty)> {
@@ -3902,4 +3934,9 @@ fn const_expr(c: &Const) -> hir::Expr {
 fn read_only(name: &str, span: Span) -> Diagnostic {
     Diagnostic::new(format!("cannot assign to `{name}`: it was declared with `val`"), span)
         .hint("declare it with `:=` if it has to change")
+}
+
+fn computed(name: &str, span: Span) -> Diagnostic {
+    Diagnostic::new(format!("`{name}` is a computed property, so it cannot be assigned"), span)
+        .hint("a property written `name: Type get() = …` has no storage of its own")
 }

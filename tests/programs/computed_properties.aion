@@ -1,0 +1,26 @@
+// A property written `name: Type get() = …` is worked out each time it is read; it has no storage and cannot be assigned.
+type Rect(w: Int, h: Int) {
+    area: Int get() = w * h
+    label: String get() {
+        return "${w}x$h"
+    }
+    perimeter: Int get() = 2 * (w + h)
+    fn describe() = "$label has area $area and perimeter $perimeter"
+}
+r := Rect(3, 4)
+println(r.area, r.label)
+println(r.describe())
+r.w = 10
+println(r.area)
+n: Rect? = null
+println(n?.area, Rect(1, 1)?.area)
+
+data type Box<T>(value: T) {
+    twice: List<T> get() = [value, value]
+}
+println(Box(7).twice)
+
+open type Shape(name: String) {
+    kind: String get() = "shape"
+}
+println(Shape("s").kind)

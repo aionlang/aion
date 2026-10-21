@@ -714,6 +714,31 @@ impl<'a> Parser<'a> {
                             let name = p.ident()?;
                             p.expect(Token::Colon)?;
                             let ty = p.type_ref()?;
+                            // `area: Float get() = w * h`: a computed property, a method `$get_area` read like a field
+                            if p.peek() == Some(Token::Ident) && p.text(p.toks[p.pos]) == "get" && p.peek_at(1) == Some(Token::LParen) {
+                                let start = p.bump().span;
+                                p.expect(Token::LParen)?;
+                                p.expect(Token::RParen)?;
+                                let body = if p.eat(Token::Eq) {
+                                    FnBody::Expr(p.expr()?)
+                                } else if p.peek() == Some(Token::LBrace) {
+                                    FnBody::Block(p.block()?)
+                                } else {
+                                    return Err(p.expected("`=` or `{` after `get()`"));
+                                };
+                                methods.push(FnDecl {
+                                    name: Ident { name: format!("$get_{}", name.name), span: name.span },
+                                    type_params: Vec::new(),
+                                    bounds: Vec::new(),
+                                    params: Vec::new(),
+                                    ret: Some(ty),
+                                    body,
+                                    span: start.to(p.prev_span()),
+                                    modifier: Modifier::None,
+                                    is_static: false,
+                                });
+                                continue;
+                            }
                             let init = if p.eat(Token::Eq) { Some(p.expr()?) } else { None };
                             fields.push(FieldDecl { name, ty, init });
                         }
