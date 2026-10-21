@@ -880,6 +880,31 @@ println((1, 2) in seen, (2, 1) in seen)    // true false
   `((Int) -> Int)?` and an optional pair is `(Int, Int)?`.
 * The compiler writes tuples as the library types `Tuple2` … `Tuple5`.
 
+**Taking values apart in `when` and in lambdas.**  A `when` arm can open a value after testing its type,
+and a lambda parameter can be a group of names:
+
+```aion
+data type P(x: Int, y: Int)
+
+fn show(v: Any) = when (v) {
+    is P(x, y) if x > y -> "P with x > y: $x $y"      // the parts are available to the guard
+    is P(x, _) -> "P with x = $x"
+    else -> "something else"
+}
+println(show(P(5, 1)))                                // P with x > y: 5 1
+println(show(P(1, 5)))                                // P with x = 1
+println(show(3))                                      // something else
+
+m := {"a": 1, "b": 2}
+m.entries().forEach { (k, v) -> println("$k=$v") }    // a=1 then b=2
+println(["x", "y"].zip([10, 20]).map { (name, n) -> "$name$n" })   // [x10, y20]
+```
+
+`is P(x, y)` calls `component1()`, `component2()`, … like `x, y := p` does (so it works for data types, tuples
+and your own types), `_` skips a part, and an arm that takes a value apart has no alternatives
+(`is A(x), is B(x)` is an error).  The parts are names or groups like `(a, b)`; a type pattern inside another
+(`is Seg(P(a, b), _)`) is not supported.
+
 ## Nullability
 
 `T?` is a `T` or `null`.  `null` converts to any `T?`, and a `T` converts to

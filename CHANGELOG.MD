@@ -137,6 +137,8 @@ migration notes at the end of this section.
   hashed by value), `a, b := pair`, `(a, (b, c)) := …`, `_`, `a, b = b, a` (also fields and elements),
   `for (k, v) in …` / `for k, v in …`, through `component1()`, `component2()`, … which tuples, `Entry`
   and `List` have. Parenthesised types group: `((Int) -> Int)?`. Library: `zip`, `enumerate`.
+- **Destructuring in `when` and lambdas.** `is P(x, y) ->` takes a value apart in a `when` arm (guards can use
+  the parts), and lambda parameters can be groups: `{ (k, v) -> … }`, `{ acc, (a, b) -> … }`.
 - **Packages and imports.** A folder is a package (`import shapes` loads `shapes/lib.aion`);
   `import @util` starts at the package root, `import .circle` / `import ..shared` at the importing file;
   names starting with `_` are private to their file; a local file that shadows a standard-library module warns.
