@@ -165,6 +165,62 @@ fn string(value: String) -> Json = JsonString(value)
 fn array() -> JsonArray = JsonArray(List<Json>())
 fn object() -> JsonObject = JsonObject(Map<String, Json>())
 
+// ── Data types ───────────────────────────────────────────────────
+//
+// A `data type` in a file that imports json gets `toJson()`, `fromJson(value)` and `parseJson(text)`
+// generated; these helpers are what the generated code is made of.
+
+fn encodeList<T>(items: List<T>, encode: (T) -> Json) -> Json {
+    out := array()
+    for item in items { out.add(encode(item)) }
+    return out
+}
+
+fn encodeMap<T>(items: Map<String, T>, encode: (T) -> Json) -> Json {
+    out := object()
+    for entry in items { out[entry.key] = encode(entry.value) }
+    return out
+}
+
+fn encodeOptional<T>(value: T?, encode: (T) -> Json) -> Json {
+    if value == null { return nil() }
+    return encode(value)
+}
+
+fn decodeInt(value: Json?) -> Int? = value?.asInt()
+fn decodeFloat(value: Json?) -> Float? = value?.asFloat()
+fn decodeBool(value: Json?) -> Bool? = value?.asBool()
+fn decodeString(value: Json?) -> String? = value?.asString()
+
+// Null if `value` is not an array or an element does not decode.
+fn decodeList<T>(value: Json?, decode: (Json?) -> T?) -> List<T>? {
+    if value == null || value.kind() != "array" { return null }
+    out := List<T>()
+    for item in value.items() {
+        element := decode(item)
+        if element == null { return null }
+        out.add(element)
+    }
+    return out
+}
+
+fn decodeMap<T>(value: Json?, decode: (Json?) -> T?) -> Map<String, T>? {
+    if value == null || value.kind() != "object" { return null }
+    out := Map<String, T>()
+    for key in value.keys() {
+        element := decode(value.get(key))
+        if element == null { return null }
+        out[key] = element
+    }
+    return out
+}
+
+// A missing or `null` value gives null, and so does one that does not decode.
+fn decodeOptional<T>(value: Json?, decode: (Json?) -> T?) -> T? {
+    if value == null || value.isNull() { return null }
+    return decode(value)
+}
+
 // ── Writing ──────────────────────────────────────────────────────
 
 fn newline(out: StringBuilder, indent: Int, depth: Int) {

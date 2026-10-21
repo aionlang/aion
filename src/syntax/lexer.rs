@@ -348,6 +348,8 @@ pub(super) fn interpolation_end(b: &[u8], mut i: usize) -> Option<usize> {
 pub struct Tok {
     pub kind: Token,
     pub span: Span,
+    /// Where the token's text is in the source being parsed; differs from `span` only for generated code.
+    pub raw: Span,
     /// A line break separates this token from the previous one.
     pub nl: bool,
 }
@@ -367,7 +369,7 @@ pub fn lex(file: u32, src: &str, base: usize) -> Result<Vec<Tok>> {
         let nl = (prev_end == 0 && out.is_empty()) || lexer.source()[prev_end..r.start].contains('\n');
         prev_end = r.end;
         match result {
-            Ok(kind) => out.push(Tok { kind, span, nl }),
+            Ok(kind) => out.push(Tok { kind, span, raw: span, nl }),
             Err(()) if lexer.source()[r.start..].starts_with('"') || lexer.source()[r.start..].starts_with("r\"") => {
                 return Err(Diagnostic::new("unterminated string literal", span));
             }

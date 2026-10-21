@@ -1,0 +1,6 @@
+// error: has no method `toJson`
+import json
+
+data type Letter(c: Char)
+
+println(Letter('a').toJson())

@@ -1,0 +1,42 @@
+// A data type in a file that imports json can be written to and read from JSON.
+import json
+
+data type Tag(name: String, weight: Float)
+data type Address(street: String, zip: Int)
+data type User(name: String, age: Int, address: Address, tags: List<Tag>, scores: Map<String, Int>, nick: String?, admin: Bool)
+data type Grid(rows: List<List<Int>>, owner: User?)
+data type Chars(c: Char)
+
+u := User("Ann", 31, Address("Main St", 12345), [Tag("a", 1.5), Tag("b", 2.0)], {"x": 1}, null, true)
+text := u.toJson().compact()
+println(text)
+
+back := User.parseJson(text)
+println(back)
+println(back?.toJson()?.compact() == text)
+println(back?.address == u.address)
+
+// something missing or of the wrong kind is null, never half a value
+println(User.parseJson("{\"name\": 1}"))
+println(User.parseJson("not json"))
+println(User.fromJson(null))
+println(User.parseJson("{\"name\":\"B\",\"age\":1,\"address\":{\"street\":\"s\",\"zip\":\"x\"},\"tags\":[],\"scores\":{},\"admin\":false}"))
+
+// nullable fields may be left out, and nest
+g := Grid([[1, 2], [3]], u)
+gt := g.toJson().compact()
+println(gt)
+println(Grid.parseJson(gt)?.rows)
+println(Grid.parseJson("{\"rows\": []}")?.owner)
+println(Grid.parseJson("{\"rows\": [[1], [true]]}"))
+
+// the document can be taken further by hand
+doc := Address("Elm", 7).toJson()
+println(doc.getString("street"), doc.getInt("zip"))
+
+// a type of its own `toJson` keeps it
+data type Odd(v: Int) {
+    fn toJson() -> json.Json = json.string("odd")
+}
+println(Odd(1).toJson())
+println(Odd.parseJson("{\"v\": 4}"))

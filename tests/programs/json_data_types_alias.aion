@@ -1,0 +1,7 @@
+// The generated members use whatever name json was imported under.
+import json as j
+
+data type Point(x: Int, y: Int)
+
+println(Point(1, 2).toJson())
+println(Point.parseJson("{\"x\": 3, \"y\": 4}"))

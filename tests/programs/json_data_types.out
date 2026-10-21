@@ -1,0 +1,15 @@
+{"name":"Ann","age":31,"address":{"street":"Main St","zip":12345},"tags":[{"name":"a","weight":1.5},{"name":"b","weight":2}],"scores":{"x":1},"nick":null,"admin":true}
+User(name=Ann, age=31, address=Address(street=Main St, zip=12345), tags=[Tag(name=a, weight=1.5), Tag(name=b, weight=2)], scores={x: 1}, nick=null, admin=true)
+true
+true
+null
+null
+null
+null
+{"rows":[[1,2],[3]],"owner":{"name":"Ann","age":31,"address":{"street":"Main St","zip":12345},"tags":[{"name":"a","weight":1.5},{"name":"b","weight":2}],"scores":{"x":1},"nick":null,"admin":true}}
+[[1, 2], [3]]
+null
+null
+Elm 7
+"odd"
+Odd(v=4)

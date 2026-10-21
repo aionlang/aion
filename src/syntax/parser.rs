@@ -28,6 +28,54 @@ pub fn parse_module(file: u32, text: &str) -> Result<Module> {
     Parser::new(file, text, 0)?.module()
 }
 
+/// The source of an expression turning `value` (of type `ty`) into a `json.Json`, or None if JSON cannot hold it.
+fn json_encode(ty: &TypeRef, value: &str, json: &str, depth: usize) -> Option<String> {
+    let each = |arg: &TypeRef| json_encode(arg, &format!("v{depth}_"), json, depth + 1);
+    Some(match &ty.kind {
+        TypeKind::Named { name, args } => match (name.as_str(), args.as_slice()) {
+            ("Int", []) => format!("{json}.int({value})"),
+            ("Float", []) => format!("{json}.number({value})"),
+            ("Bool", []) => format!("{json}.bool({value})"),
+            ("String", []) => format!("{json}.string({value})"),
+            ("List", [item]) => format!("{json}.encodeList({value}, {{ v{depth}_ -> {} }})", each(item)?),
+            ("Map", [key, item]) if matches!(&key.kind, TypeKind::Named { name, .. } if name == "String") => {
+                format!("{json}.encodeMap({value}, {{ v{depth}_ -> {} }})", each(item)?)
+            }
+            (other, _) if JSON_FOREIGN.contains(&other) || other.starts_with("Tuple") || !args.is_empty() => return None,
+            _ => format!("{value}.toJson()"),
+        },
+        TypeKind::Nullable(inner) => format!("{json}.encodeOptional({value}, {{ v{depth}_ -> {} }})", each(inner)?),
+        TypeKind::Fn { .. } => return None,
+    })
+}
+
+/// The source of an expression reading a `json.Json?` (`value`) as `ty`: a `ty?`, null when it does not fit.
+fn json_decode(ty: &TypeRef, value: &str, json: &str, depth: usize) -> Option<String> {
+    let each = |arg: &TypeRef| json_decode(arg, &format!("v{depth}_"), json, depth + 1);
+    Some(match &ty.kind {
+        TypeKind::Named { name, args } => match (name.as_str(), args.as_slice()) {
+            ("Int", []) => format!("{json}.decodeInt({value})"),
+            ("Float", []) => format!("{json}.decodeFloat({value})"),
+            ("Bool", []) => format!("{json}.decodeBool({value})"),
+            ("String", []) => format!("{json}.decodeString({value})"),
+            ("List", [item]) => format!("{json}.decodeList({value}, {{ v{depth}_ -> {} }})", each(item)?),
+            ("Map", [key, item]) if matches!(&key.kind, TypeKind::Named { name, .. } if name == "String") => {
+                format!("{json}.decodeMap({value}, {{ v{depth}_ -> {} }})", each(item)?)
+            }
+            (other, _) if JSON_FOREIGN.contains(&other) || other.starts_with("Tuple") || !args.is_empty() => return None,
+            (other, _) => format!("{other}.fromJson({value})"),
+        },
+        TypeKind::Nullable(inner) => format!("{json}.decodeOptional({value}, {{ v{depth}_ -> {} }})", each(inner)?),
+        TypeKind::Fn { .. } => return None,
+    })
+}
+
+/// Library types with no JSON form.
+const JSON_FOREIGN: [&str; 9] = ["Char", "Bytes", "Set", "Array", "Range", "Any", "Unit", "Task", "Channel"];
+
+/// The parameters of a lambda, and the patterns among them as (temporary, pattern) pairs.
+type LambdaParams = (Vec<LambdaParam>, Vec<(String, Expr)>);
+
 /// An `enum` variant as written: `Red` or `Earth(5.97e24)`.
 struct Variant {
     name: Ident,
@@ -93,7 +141,7 @@ impl<'a> Parser<'a> {
     }
 
     fn text(&self, tok: Tok) -> &'a str {
-        &self.src[tok.span.start as usize - self.base..tok.span.end as usize - self.base]
+        &self.src[tok.raw.start as usize - self.base..tok.raw.end as usize - self.base]
     }
 
     /// Span of the next token, or an empty span at the end of input.
@@ -300,6 +348,8 @@ impl<'a> Parser<'a> {
         let mut items = Vec::new();
         // The variables holding enum variants run before any other top-level code.
         let mut variables: Vec<Stmt> = Vec::new();
+        // Where the `data type`s are in `items`, for the JSON members.
+        let mut data_types: Vec<usize> = Vec::new();
         while let Some(tok) = self.peek() {
             match tok {
                 Token::Semi => {
@@ -319,6 +369,7 @@ impl<'a> Parser<'a> {
                     self.bump();
                     let mut decl = self.type_decl()?;
                     Self::data_members(&mut decl)?;
+                    data_types.push(items.len());
                     items.push(Item::Type(decl));
                 }
                 // `enum Color { Red, Green }`: see [`Parser::enum_decl`]
@@ -358,6 +409,13 @@ impl<'a> Parser<'a> {
                     let mut stmts = Vec::new();
                     self.stmt_into(&mut stmts)?;
                     items.extend(stmts.into_iter().map(Item::Stmt));
+                }
+            }
+        }
+        if let Some(alias) = Self::json_alias(&imports) {
+            for &at in &data_types {
+                if let Item::Type(decl) = &mut items[at] {
+                    self.json_members(decl, &alias)?;
                 }
             }
         }
@@ -1050,6 +1108,59 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+
+    /// The name the standard library's `json` module goes by in this file, if it is imported whole.
+    fn json_alias(imports: &[Import]) -> Option<String> {
+        imports
+            .iter()
+            .find(|i| i.base == ImportBase::Bare && i.names.is_none() && i.path.len() == 1 && i.path[0].name == "json")
+            .map(|i| i.alias.as_ref().map_or("json".to_string(), |a| a.name.clone()))
+    }
+
+    /// In a file that imports `json`, a `data type` gets `toJson()`, `static fromJson(value)` and
+    /// `static parseJson(text)`, unless a field has a type JSON cannot hold (or the type declares them).
+    /// They are written as source and parsed, with every token pointing at the type's name.
+    fn json_members(&self, decl: &mut TypeDecl, json: &str) -> Result<()> {
+        let params = match &decl.primary {
+            Some(ps) if decl.type_params.is_empty() => ps,
+            _ => return Ok(()),
+        };
+        let name = &decl.name.name;
+        let mut to = String::new();
+        let mut from = String::new();
+        let mut args = Vec::new();
+        for (i, p) in params.iter().enumerate() {
+            let (Some(encoded), Some(decoded)) =
+                (json_encode(&p.ty, &format!("this.{}", p.name.name), json, 0), json_decode(&p.ty, &format!("j_.get(\"{}\")", p.name.name), json, 0))
+            else {
+                return Ok(());
+            };
+            to.push_str(&format!(".put(\"{}\", {})", p.name.name, encoded));
+            let required = if matches!(p.ty.kind, TypeKind::Nullable(_)) { "" } else { " ?: return null" };
+            from.push_str(&format!("        f{i}_ := {decoded}{required}\n"));
+            args.push(format!("f{i}_"));
+        }
+        let text = format!(
+            "type X {{\n\
+             fn toJson() -> {json}.Json = {json}.object(){to}\n\
+             static fn fromJson(source: {json}.Json?) -> {name}? {{\n        j_ := source ?: return null\n{from}        return {name}({})\n    }}\n\
+             static fn parseJson(text: String) -> {name}? = fromJson({json}.parse(text))\n}}",
+            args.join(", ")
+        );
+        let pin = decl.name.span;
+        let mut toks = lex(self.file, &text, 0)?;
+        for t in &mut toks {
+            t.span = pin;
+        }
+        let mut sub = Parser { file: self.file, src: &text, base: 0, toks, pos: 0, ignore_nl: false, no_brace: false, temps: 0, question_is_ternary: false };
+        for m in sub.type_decl()?.methods {
+            if !decl.methods.iter().any(|d| d.name.name == m.name.name) {
+                decl.methods.push(m);
+            }
+        }
+        Ok(())
+    }
+
     // ── statements ──────────────────────────────────────────────
 
     fn block(&mut self) -> Result<Vec<Stmt>> {
@@ -1446,7 +1557,7 @@ impl<'a> Parser<'a> {
             let negated_is = tok == Token::Bang
                 && self.peek_at(1) == Some(Token::Ident)
                 && self.text(self.toks[self.pos + 1]) == "is"
-                && self.toks[self.pos].span.end == self.toks[self.pos + 1].span.start;
+                && self.toks[self.pos].raw.end == self.toks[self.pos + 1].raw.start;
             if word == "is" || negated_is {
                 if 4 < min_prec {
                     break;
@@ -1584,7 +1695,7 @@ impl<'a> Parser<'a> {
                 Some(Token::Bang)
                     if !self.nl()
                         && self.peek_at(1) == Some(Token::Bang)
-                        && self.toks[self.pos].span.end == self.toks[self.pos + 1].span.start =>
+                        && self.toks[self.pos].raw.end == self.toks[self.pos + 1].raw.start =>
                 {
                     self.bump();
                     let end = self.bump().span;
@@ -1904,7 +2015,7 @@ impl<'a> Parser<'a> {
 
     /// `a, b: Int ->`, or just `->`.  `None` if this isn't a parameter list.
     /// The parameters, and the ones written as a pattern (`(k, v)`) with the name they were given.
-    fn lambda_params(&mut self) -> Option<(Vec<LambdaParam>, Vec<(String, Expr)>)> {
+    fn lambda_params(&mut self) -> Option<LambdaParams> {
         let mut params = Vec::new();
         let mut patterns = Vec::new();
         if self.eat(Token::Arrow) {
@@ -2175,7 +2286,7 @@ impl<'a> Parser<'a> {
         let triple = full.len() >= 6 && full.starts_with("\"\"\"");
         let quote = if triple { 3 } else { 1 };
         let raw = &full[quote..full.len() - quote];
-        let raw_off = tok.span.start as usize + quote;
+        let raw_off = tok.raw.start as usize + quote;
         let bytes = raw.as_bytes();
 
         let mut parts = Vec::new();
@@ -2500,6 +2611,23 @@ mod tests {
         // as plain names they are still names
         assert!(matches!(parse_expr("step").kind, ExprKind::Name(_)));
         assert!(matches!(parse_expr("f(step, downTo)").kind, ExprKind::Call { .. }));
+    }
+
+    #[test]
+    fn data_types_get_json_members_only_with_json_imported() {
+        let found = |src: &str| {
+            module(src).items.iter().find_map(|i| match i {
+                Item::Type(d) => Some(d.methods.iter().map(|m| m.name.name.clone()).filter(|n| n.ends_with("Json")).collect::<Vec<_>>()),
+                _ => None,
+            })
+        };
+        assert!(found("data type P(x: Int)").unwrap().is_empty());
+        assert_eq!(found("import json\ndata type P(x: Int)").unwrap(), ["toJson", "fromJson", "parseJson"]);
+        assert_eq!(found("import json as j\ndata type P(x: Int)").unwrap().len(), 3);
+        // a field JSON cannot hold, and a generic type, get nothing; a type's own `toJson` is kept
+        assert!(found("import json\ndata type P(c: Char)").unwrap().is_empty());
+        assert!(found("import json\ndata type P<T>(v: T)").unwrap().is_empty());
+        assert_eq!(found("import json\ndata type P(x: Int) {\n  fn toJson() = 1\n}").unwrap().len(), 3);
     }
 
     #[test]
