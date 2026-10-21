@@ -481,6 +481,28 @@ println(visited.size())                             // 2
 you write yourself is kept.  A data type cannot be `open` or extend another type.  Fields hold
 what they hold: a `List` field is compared by identity, a nested data type by value.
 
+### Computed properties
+
+A property with a `get()` is worked out each time it is read, like a field you cannot store into:
+
+```aion
+type Rect(w: Int, h: Int) {
+    area: Int get() = w * h
+    label: String get() {
+        return "${w}x$h"
+    }
+    fn describe() = "$label has area $area"        // inside the type, by bare name
+}
+
+r := Rect(3, 4)
+println(r.area, r.label)                            // 12 3x4
+r.w = 10
+println(r.describe())                               // 10x4 has area 40
+```
+
+It is read as `r.area` (no parentheses), works with `?.` and in generic types, and assigning to it
+(`r.area = 5`) is an error.  A property cannot be overridden by a subtype.
+
 ## Operators on your own types
 
 An operator on an object calls a method of the type, so any type can join in:
