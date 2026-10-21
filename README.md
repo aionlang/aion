@@ -114,12 +114,19 @@ can still change between versions (see the [changelog](CHANGELOG.MD)).
 |------|-------|
 | Language | functions, types, data types, generics, interfaces, inheritance, closures, nullable types, tuples, operators on your own types, `defer` / `try`, tasks, threads and channels, type synonyms |
 | Standard library | text, collections, lazy streams, files, time, random, regex, JSON, CSV, sockets, HTTP and TLS, SQLite, zlib, hashing |
-| Tooling | native builds with a build cache, project files and git dependencies, formatter (`aion fmt`), test runner (`aion test`), Docker image |
+| Tooling | native builds with a build cache, project files and git dependencies, formatter (`aion fmt`), test runner (`aion test`), [VS Code extension](https://github.com/aionlang/aion-vscode), Docker image |
 | Linux, macOS | build instructions in [docs/LOCAL-BUILDING.MD](docs/LOCAL-BUILDING.MD) |
 | Windows | the whole test suite passes cross-compiled and run under Wine; not yet run on real Windows ([details](docs/LOCAL-BUILDING.MD#windows)); needs a MinGW clang |
 
 The end-to-end suite (`cargo test`) compiles and runs every program in `tests/programs`, every example,
 and every code block in the documentation.
+
+## Editor support
+
+The **[Aion Support](https://github.com/aionlang/aion-vscode)** extension for VS Code (publisher
+`aionlanguage`, `aion-support`) adds syntax highlighting, snippets, go to definition, problems from
+`aion check`, run / build / test buttons and format-on-save through `aion fmt`. Install it from the
+Extensions view, or see its [README](https://github.com/aionlang/aion-vscode#readme).
 
 ## How it works
 
@@ -154,6 +161,7 @@ See **[docs/architecture.md](docs/architecture.md)** for the details.
 | | |
 |---|---|
 | [aionlang.github.io/documentation](https://aionlang.github.io/documentation) | online language reference, prelude methods and stdlib documentation |
+| [aion-vscode](https://github.com/aionlang/aion-vscode) | the VS Code extension: highlighting, go to definition, problems, run and format |
 | [docs/language.md](docs/language.md) | the language: syntax, types, lambdas, modules |
 | [docs/repl.md](docs/repl.md) | the interactive prompt, `aion repl`, and how it works |
 | [docs/projects.md](docs/projects.md) | scripts and projects, `aion add`, `// dep:` lines, dependencies, the build cache |
