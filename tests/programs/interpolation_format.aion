@@ -1,0 +1,27 @@
+// `${value:spec}` lays a value out: [[fill]align][+][0][width][,][.precision][type]
+price := 3.14159
+n := 42
+name := "Ann"
+
+println("pi is ${price:.2}, n=${n:05}, [${name:>6}] [${name:^7}] [${name:*<6}] [${n:x}] [${n:X}] [${n:b}]")
+println("[${price:10.3f}] [${price:<10.1f}] [${-price:+.1f}] [${n:+}] [${-7:06d}]")
+println("${1234567:,} ${1234567.891:,.1f} ${-1234:,} ${999:,}")
+
+// a colon of the conditional operator, of a named argument and of a string stay what they are
+big := n > 5
+m := {"k": 1}
+println("${if big { "big" } else { "small" }} ${big ? "yes" : "no"} ${big ? n : 0:4}|")
+println("${(n * 2):>6}|${':'}|${"a:b"}|${m["k"]:3}|")
+
+// anything else is shown as text (a value that may be null needs `?:` first)
+y: String? = null
+println("[${y ?: "none":>6}] [${true:>6}] [${[1, 2]:<8}]")
+
+// a table
+rows := [("apple", 1.5, 3), ("kiwi", 0.25, 12), ("watermelon", 12.0, 1)]
+for r in rows {
+    println("${r.first:<12}${r.second:>8.2f}${r.third:>4}")
+}
+
+// text longer than the width is not cut; a precision cuts text
+println("[${"overlong":3}] [${"overlong":.4}]")

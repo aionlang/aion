@@ -2280,6 +2280,17 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// `${value:spec}` is `__spec(value, "spec")`, which the prelude defines.
+    fn with_spec(&self, value: Expr, spec: &str) -> Expr {
+        let span = value.span;
+        let callee = Box::new(Expr { kind: ExprKind::Name("__spec".to_string()), span });
+        let spec = Expr { kind: ExprKind::Str(spec.to_string()), span };
+        Expr {
+            kind: ExprKind::Call { callee, type_args: Vec::new(), args: vec![Arg { name: None, value }, Arg { name: None, value: spec }] },
+            span,
+        }
+    }
+
     fn string_expr(&mut self, tok: Tok) -> Result<Expr> {
         let full = self.text(tok);
         // `"""…"""` holds quotes and line breaks; a line break right after the opening is not part of the text.
@@ -2337,11 +2348,34 @@ impl<'a> Parser<'a> {
                 b'$' if bytes.get(i + 1) == Some(&b'{') => {
                     let end = interpolation_end(bytes, i + 2).expect("lexer guarantees a closed ${}");
                     let inner = &raw[i + 2..end - 1];
-                    let mut sub = Parser::new(self.file, inner, raw_off + i + 2)?;
-                    let expr = sub.expr()?;
-                    if sub.pos < sub.toks.len() {
-                        return Err(sub.expected("`}`"));
+                    let base = raw_off + i + 2;
+                    let mut expr = None;
+                    // `${price:>8.2f}`: the text after the first colon that follows a whole expression is a format spec
+                    for colon in top_level_colons(inner) {
+                        if let Ok(mut sub) = Parser::new(self.file, &inner[..colon], base)
+                            && let Ok(value) = sub.expr()
+                            && sub.pos == sub.toks.len()
+                        {
+                            let spec = &inner[colon + 1..];
+                            if !is_format_spec(spec) {
+                                return Err(Diagnostic::new(format!("`{spec}` is not a format spec"), value.span)
+                                    .hint("a spec is `[[fill]align][+][0][width][,][.precision][type]`, e.g. `${x:>8.2f}`; see docs/language.md"));
+                            }
+                            expr = Some(self.with_spec(value, spec));
+                            break;
+                        }
                     }
+                    let expr = match expr {
+                        Some(e) => e,
+                        None => {
+                            let mut sub = Parser::new(self.file, inner, base)?;
+                            let e = sub.expr()?;
+                            if sub.pos < sub.toks.len() {
+                                return Err(sub.expected("`}`"));
+                            }
+                            e
+                        }
+                    };
                     if !lit.is_empty() {
                         parts.push(InterpPart::Lit(std::mem::take(&mut lit)));
                     }
@@ -2378,6 +2412,64 @@ impl<'a> Parser<'a> {
         };
         Ok(Expr { kind, span: tok.span })
     }
+}
+
+/// Where the `:`s of an interpolated expression are that stand outside brackets, strings and characters.
+fn top_level_colons(inner: &str) -> Vec<usize> {
+    let (mut found, mut depth) = (Vec::new(), 0usize);
+    let mut chars = inner.char_indices();
+    while let Some((at, c)) = chars.next() {
+        match c {
+            '(' | '[' | '{' => depth += 1,
+            ')' | ']' | '}' => depth = depth.saturating_sub(1),
+            '"' | '\'' => {
+                while let Some((_, q)) = chars.next() {
+                    if q == '\\' {
+                        chars.next();
+                    } else if q == c {
+                        break;
+                    }
+                }
+            }
+            // the `:` of the conditional or `?:` is part of the expression
+            ':' if depth == 0 && !inner[..at].ends_with('?') => found.push(at),
+            _ => {}
+        }
+    }
+    found
+}
+
+/// Whether `spec` is `[[fill]align][+][0][width][,][.precision][type]`, the layout `${value:spec}` asks for.
+fn is_format_spec(spec: &str) -> bool {
+    let cs: Vec<char> = spec.chars().collect();
+    let mut i = 0;
+    if cs.len() >= 2 && matches!(cs[1], '<' | '>' | '^') {
+        i = 2;
+    } else if !cs.is_empty() && matches!(cs[0], '<' | '>' | '^') {
+        i = 1;
+    }
+    let skip = |i: &mut usize, test: &dyn Fn(char) -> bool| {
+        while *i < cs.len() && test(cs[*i]) {
+            *i += 1;
+        }
+    };
+    for flag in ['+', '0'] {
+        if cs.get(i) == Some(&flag) {
+            i += 1;
+        }
+    }
+    skip(&mut i, &|c| c.is_ascii_digit());
+    if cs.get(i) == Some(&',') {
+        i += 1;
+    }
+    if cs.get(i) == Some(&'.') {
+        i += 1;
+        skip(&mut i, &|c| c.is_ascii_digit());
+    }
+    if cs.get(i).is_some_and(|c| "dfxXbosg".contains(*c)) {
+        i += 1;
+    }
+    i == cs.len()
 }
 
 /// Binary operator precedence table (higher binds tighter).
@@ -2628,6 +2720,31 @@ mod tests {
         assert!(found("import json\ndata type P(c: Char)").unwrap().is_empty());
         assert!(found("import json\ndata type P<T>(v: T)").unwrap().is_empty());
         assert_eq!(found("import json\ndata type P(x: Int) {\n  fn toJson() = 1\n}").unwrap().len(), 3);
+    }
+
+    #[test]
+    fn interpolation_takes_a_format_spec_after_the_colon() {
+        let spec_of = |src: &str| {
+            let m = module(src);
+            let Item::Stmt(Stmt { kind: StmtKind::Expr(e), .. }) = &m.items[0] else { panic!("an expression") };
+            let ExprKind::Interp(parts) = &e.kind else { panic!("an interpolation") };
+            match &parts[0] {
+                InterpPart::Expr(Expr { kind: ExprKind::Call { callee, args, .. }, .. }) if matches!(&callee.kind, ExprKind::Name(n) if n == "__spec") => {
+                    let ExprKind::Str(spec) = &args[1].value.kind else { panic!("a spec") };
+                    Some(spec.clone())
+                }
+                _ => None,
+            }
+        };
+        assert_eq!(spec_of("\"${x:>8.2f}\"").as_deref(), Some(">8.2f"));
+        assert_eq!(spec_of("\"${f(a: 1):,}\"").as_deref(), Some(","));
+        // the colons of a conditional, `?:`, a string or a character are not specs
+        assert_eq!(spec_of("\"${a ? b : c}\""), None);
+        assert_eq!(spec_of("\"${a ?: b}\""), None);
+        assert_eq!(spec_of("\"${\"a:b\"}\""), None);
+        assert_eq!(spec_of("\"${':'}\""), None);
+        assert_eq!(spec_of("\"${a ? b : c:5}\"").as_deref(), Some("5"));
+        assert!(Parser::new(0, "\"${x:5q}\"", 0).and_then(|mut p| p.module()).is_err());
     }
 
     #[test]

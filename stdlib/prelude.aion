@@ -2743,6 +2743,103 @@ fn __format_field(kind: Char, arg: Any, precision: Int, plus: Bool) -> String {
     return if plus { "+" + text } else { text }
 }
 
+// `"${price:>8.2f}"` calls this: `value` laid out by the spec after the colon, which is
+// `[[fill]align][+][0][width][,][.precision][type]`.  The align is `<` `>` or `^`; numbers default to the right
+// and everything else to the left.  `0` fills a number with zeros after its sign, `,` groups the digits in
+// threes.  The type is `d` integer, `f` float, `x` `X` `b` `o` another base, `s` text; without one a
+// `Float` with a precision is `f`, an `Int` is `d`, and the rest is shown as text.
+fn __spec(value: Any, spec: String) -> String {
+    cs := spec.chars()
+    n := cs.size()
+    i := 0
+    fill := ' '
+    align := ' '
+    if n >= 2 && (cs[1] == '<' || cs[1] == '>' || cs[1] == '^') {
+        fill = cs[0]
+        align = cs[1]
+        i = 2
+    } else if n >= 1 && (cs[0] == '<' || cs[0] == '>' || cs[0] == '^') {
+        align = cs[0]
+        i = 1
+    }
+    plus := false
+    if i < n && cs[i] == '+' {
+        plus = true
+        i += 1
+    }
+    zeros := false
+    if i < n && cs[i] == '0' {
+        zeros = true
+        i += 1
+    }
+    width := 0
+    while i < n && cs[i].isDigit() {
+        width = width * 10 + cs[i].digitValue()!!
+        i += 1
+    }
+    comma := false
+    if i < n && cs[i] == ',' {
+        comma = true
+        i += 1
+    }
+    precision := -1
+    if i < n && cs[i] == '.' {
+        i += 1
+        precision = 0
+        while i < n && cs[i].isDigit() {
+            precision = precision * 10 + cs[i].digitValue()!!
+            i += 1
+        }
+    }
+    kind := ' '
+    if i < n {
+        kind = cs[i]
+        i += 1
+    }
+    if i < n { error("bad format spec '$spec'") }
+
+    shown := value
+    if kind == ' ' {
+        kind = if shown is Float { if precision >= 0 { 'f' } else { 'g' } } else if shown is Int { 'd' } else { 's' }
+    }
+    numeric := kind != 's'
+    text := ""
+    if kind == 'g' {
+        text = "$shown"
+        if plus && !text.startsWith("-") { text = "+" + text }
+    } else if kind == 'X' {
+        text = __format_field('x', shown, precision, plus).upper()
+    } else {
+        text = __format_field(kind, shown, precision, plus)
+    }
+    if comma && numeric {
+        sign := if text.startsWith("-") || text.startsWith("+") { text.take(1) } else { "" }
+        digits := text.drop(sign.length())
+        dot := digits.indexOf(".")
+        whole := if dot < 0 { digits } else { digits.take(dot) }
+        rest := if dot < 0 { "" } else { digits.drop(dot) }
+        grouped := StringBuilder()
+        count := whole.charCount()
+        for k in 0..count {
+            if k > 0 && (count - k) % 3 == 0 { grouped.append(",") }
+            grouped.append(whole.substring(k, k + 1))
+        }
+        text = sign + grouped.toString() + rest
+    }
+    gap := width - text.charCount()
+    if gap <= 0 { return text }
+    if zeros && numeric && align == ' ' {
+        sign := if text.startsWith("-") || text.startsWith("+") { text.take(1) } else { "" }
+        return sign + "0".repeat(gap) + text.drop(sign.length())
+    }
+    if align == ' ' { align = if numeric { '>' } else { '<' } }
+    pad := fill.toString()
+    if align == '<' { return text + pad.repeat(gap) }
+    if align == '>' { return pad.repeat(gap) + text }
+    left := gap / 2
+    return pad.repeat(left) + text + pad.repeat(gap - left)
+}
+
 /** Fills the `%` fields of the text with `args`: `"%d items cost %.2f".format(3, 4.5)` is `"3 items cost 4.50"`. */
 fn String.format(vararg args: Any) -> String {
     out := StringBuilder()
