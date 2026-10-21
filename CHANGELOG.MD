@@ -3,6 +3,8 @@
 ## Unreleased
 
 ### Language
+- **Format specs in interpolation.** `"${price:.2}"`, `"${n:05}"`, `"${name:>8}"`, `"${x:,.1f}"`: width, alignment with a fill
+  character, sign, zero padding, thousands separators, precision and the types `d f x X b o s`.
 - **JSON for data types.** In a file that imports `json`, a `data type` gets `toJson()`, `static fromJson(value)` and
   `static parseJson(text)`, generated at compile time from its parameters (numbers, strings, booleans, lists, maps
   with string keys, nested data types and nullable fields); a document that does not fit gives `null`.

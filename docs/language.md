@@ -364,6 +364,38 @@ prints as the shortest text that reads back as the same number: `0.1`, `0.300000
 `12` for a whole number, `1e+20` for a huge one.  For fixed decimals use
 `x.format(2)` (`3.14159.format(2)` is `3.14`).
 
+### Formatting a value
+
+`${value:spec}` lays a value out in a field: `[[fill]align][+][0][width][,][.precision][type]`.
+
+```aion
+price := 3.14159
+n := 42
+name := "Ann"
+println("pi is ${price:.2}, n=${n:05}, [${name:>6}] [${name:^7}] [${name:*<6}]")
+// > pi is 3.14, n=00042, [   Ann] [  Ann  ] [Ann***]
+println("[${price:10.3f}] [${n:+}] [${n:x}] [${n:b}] [${1234567:,}] [${1234.5:,.2f}]")
+// > [     3.142] [+42] [2a] [101010] [1,234,567] [1,234.50]
+
+rows := [("apple", 1.5, 3), ("kiwi", 0.25, 12)]
+for r in rows { println("${r.first:<8}${r.second:>6.2f}${r.third:>4}") }
+// > apple     1.50   3
+// > kiwi      0.25  12
+```
+
+* The **align** is `<` (left), `>` (right) or `^` (centre), with an optional **fill** character in front of it
+  (`*<6`); numbers default to the right and anything else to the left.
+* `+` always shows the sign, `0` fills a number with zeros after the sign, and the **width** is the least
+  number of characters (a longer text is not cut).  `,` groups the digits of a number in threes.
+* The **precision** is the number of decimals of a float (`.2`), or the most characters of a text (`.4`).
+* The **type** is `d` integer, `f` float, `x` `X` hexadecimal, `b` binary, `o` octal or `s` text.  Without one an `Int`
+  is `d`, a `Float` with a precision is `f` (without, it prints as usual) and everything else is `s`.
+
+A `:` that belongs to the expression itself (`${ok ? "yes" : "no"}`, `${x ?: 0}`, a named argument or a
+string) stays what it is; the text after the first other colon is the spec.  A spec that cannot be one is an
+error when the program is compiled, and a value that does not fit the type (`${"text":d}`) stops the program.
+A value that may be null needs `?:` first.  For `printf`-style text there is also `"%5.2f".format(x)`.
+
 ## Types
 
 ```aion
