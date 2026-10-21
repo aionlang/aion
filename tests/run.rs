@@ -1231,6 +1231,31 @@ fn synonyms_work_across_modules() {
 }
 
 #[test]
+fn aion_doc_writes_markdown_from_doc_comments() {
+    let root = scratch("doc");
+    write(
+        &root.join("lib.aion"),
+        "/** Library. */\n\n/**\n * Doubles.\n * @param n the number\n * @return twice n\n */\nfn double(n: Int) -> Int = n * 2\n\nfn _hidden() = 1\n",
+    );
+    write(&root.join("tests/skipped.aion"), "/** Test. */\nfn t() = 1\n");
+    write(&root.join("aion.project"), "name = \"docs\"\n");
+    let out = aion_in(&root, &["doc"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.starts_with("# lib\n\nLibrary.\n\n## fn double\n"), "{text}");
+    assert!(text.contains("fn double(n: Int) -> Int\n```\n\nDoubles.\n\n**Parameters**\n\n- `n`: the number\n\n**Returns** twice n\n"), "{text}");
+    assert!(!text.contains("hidden") && !text.contains("skipped"), "{text}");
+
+    // a file named on the command line, and a file for the result
+    let file = aion_in(&root, &["doc", "lib.aion", "-o", "API.md"]);
+    assert!(file.status.success(), "{}", stderr(&file));
+    assert_eq!(std::fs::read_to_string(root.join("API.md")).unwrap(), text);
+
+    write(&root.join("broken.aion"), "fn (\n");
+    assert!(!aion_in(&root, &["doc", "broken.aion"]).status.success());
+}
+
+#[test]
 fn aion_check_aion_fmt_and_aion_test() {
     let root = scratch("tooling");
     write(&root.join("good.aion"), "println(\"hi\")\n");

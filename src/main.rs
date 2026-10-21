@@ -8,6 +8,7 @@ mod banner;
 mod cache;
 mod codegen;
 mod diag;
+mod doc;
 mod embedded;
 mod format;
 mod loader;
@@ -39,6 +40,7 @@ const USAGE: &str = concat!(
     "  aion help                           show this text\n",
     "  aion test [path…]                   run the programs in tests/ (each passes if it exits with status 0)\n",
     "  aion fmt [--check] [path…]          tidy whitespace in .aion files\n",
+    "  aion doc [path…] [-o <file>]        write the API reference (Markdown) from the /** */ comments\n",
     "  aion new <name>                     create a project directory\n",
     "  aion add <source> [--as NAME] [--tag T|--branch B|--rev R] [--script FILE] [--yes]\n",
     "                                      add a dependency (a git repo like github.com/me/http@v1, or a path)\n",
@@ -388,6 +390,7 @@ fn run() -> Result<ExitCode, Failure> {
         Some("warmup") => return Ok(warmup()),
         Some("test") => return Ok(testing::test(&args[1..])),
         Some("fmt") => return Ok(testing::fmt(&args[1..])),
+        Some("doc") => return Ok(doc::run(&args[1..])),
         _ => {}
     }
     if let Some(command) = args.first().map(String::as_str).filter(|c| ["add", "install", "remove", "update", "tree"].contains(c)) {

@@ -8,7 +8,7 @@ use crate::{format, project};
 
 /// Every `.aion` file under `path` (or `path` itself), sorted.  With `skip_helpers`, names starting
 /// with `_` are left out: they are shared code for the tests, not tests.
-fn aion_files(path: &Path, skip_helpers: bool, out: &mut Vec<PathBuf>) {
+pub fn aion_files(path: &Path, skip_helpers: bool, out: &mut Vec<PathBuf>) {
     if path.is_file() {
         out.push(path.to_path_buf());
         return;

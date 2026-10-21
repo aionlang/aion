@@ -236,6 +236,47 @@ impl Token {
     }
 }
 
+/// The `/** … */` comments of `src` as byte ranges, in order.  (A comment is trivia to the lexer, so
+/// they are found in the stretches between tokens, which hold nothing but white space and comments.)
+pub fn doc_comments(src: &str) -> Vec<(usize, usize)> {
+    let mut found = Vec::new();
+    let mut gap_start = 0;
+    let mut lexer = Token::lexer(src);
+    loop {
+        let next = lexer.next();
+        let gap_end = if next.is_some() { lexer.span().start } else { src.len() };
+        let (bytes, mut i) = (src.as_bytes(), gap_start);
+        while i < gap_end {
+            if bytes[i..gap_end].starts_with(b"//") {
+                i += bytes[i..gap_end].iter().position(|&b| b == b'\n').unwrap_or(gap_end - i);
+            } else if bytes[i..gap_end].starts_with(b"/*") {
+                let (mut depth, mut j) = (1, i + 2);
+                while j < gap_end && depth > 0 {
+                    if bytes[j..gap_end].starts_with(b"/*") {
+                        depth += 1;
+                        j += 2;
+                    } else if bytes[j..gap_end].starts_with(b"*/") {
+                        depth -= 1;
+                        j += 2;
+                    } else {
+                        j += 1;
+                    }
+                }
+                if depth == 0 && bytes[i..j].starts_with(b"/**") && j - i > 4 {
+                    found.push((i, j));
+                }
+                i = j;
+            } else {
+                i += 1;
+            }
+        }
+        if next.is_none() {
+            return found;
+        }
+        gap_start = lexer.span().end;
+    }
+}
+
 /// A block comment (slash-star ... star-slash) may span lines and nest, so a stretch of code that
 /// already holds comments can be commented out.  The doc form, with two stars, is a comment like
 /// any other to the compiler.  The callback runs after the opening slash-star.
