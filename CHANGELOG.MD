@@ -140,6 +140,8 @@ migration notes at the end of this section.
 - **Destructuring in `when` and lambdas.** `is P(x, y) ->` takes a value apart in a `when` arm (guards can use
   the parts), and lambda parameters can be groups: `{ (k, v) -> … }`, `{ acc, (a, b) -> … }`.
 - **Computed properties.** `area: Int get() = w * h` (or `get() { … }`) in a type: read as `r.area`, no storage.
+- **Fields are never null.** A field of an object or function type that nothing sets (no initialiser, no assignment in
+  `init` or the constructor, not a constructor parameter) is an error; write `next: Node?` for a field that may be missing.
 - **Packages and imports.** A folder is a package (`import shapes` loads `shapes/lib.aion`);
   `import @util` starts at the package root, `import .circle` / `import ..shared` at the importing file;
   names starting with `_` are private to their file; a local file that shadows a standard-library module warns.

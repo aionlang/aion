@@ -418,12 +418,13 @@ println(c.show())                            // hits=1
 * Instances are **references**: `b := a` makes both names refer to the same
   object, and a function receiving an object can modify it.
 * **Printing**: `println(u)` and `"$u"` use the type's own `toString()` method if
-  it has one, otherwise `Name(field=value, …)`.  Object fields that were never
-  set print as `null`.
-* A field holding an object starts out null; using it before assigning it stops
-  the program with a `null reference` panic.  Declare such a field `Type?` to say
-  it may be null (see [Nullability](#nullability)); a plain `Type` is still not
-  checked against being unset.
+  it has one, otherwise `Name(field=value, …)`.
+* A field of an object or function type must be given a value: an initialiser
+  (`items: List<Int> = []`), an assignment in `init` or the constructor, or a constructor
+  parameter.  A field that nothing sets is an error ("the field `next` is never given a
+  value"); declare it `Type?` if it may be missing (see [Nullability](#nullability)), as for
+  the `next` of a linked list.  (`Array<T>(n)` slots start out null, and a local declared as
+  `x: Type` and assigned later is not checked.)
 * A type can extend an `open` type; see [Inheritance](#inheritance).
 
 ### Static functions
@@ -1606,4 +1607,5 @@ A file with no `fn main()` and no top-level statements has nothing to run: `aion
 
 ## Not (yet) in the language
 
-Plain object types are not checked against being unset; use `T?` where a value may be missing.
+A local variable declared as `x: Type` with no value, and the slots of an `Array<T>(n)` of objects, start out null and are not
+checked; use `T?` where a value may be missing.
